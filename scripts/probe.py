@@ -85,13 +85,14 @@ def client_config(config, kind, port):
     elif kind == 'websocket':
         host = config['domain']
         stream = {'network': 'ws', 'security': 'tls',
-            'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False},
+            'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'useSystemCA': True},
             'wsSettings': {'path': config['ws_path'], 'headers': {'Host': config['domain']}}}
     if kind == 'hysteria2':
         outbound = {'protocol': 'hysteria', 'settings': {'version': 2, 'address': config['public_ip'],
             'port': config['hysteria2_port']}, 'streamSettings': {'network': 'hysteria', 'security': 'tls',
             'hysteriaSettings': {'version': 2, 'auth': config['uuid']},
-            'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'alpn': ['h3']},
+            'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False,
+                'useSystemCA': True, 'alpn': ['h3']},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
     elif kind in ('reality', 'websocket'):
         outbound = {'protocol': 'vless', 'settings': {'vnext': [
