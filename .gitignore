@@ -1,0 +1,14 @@
+private/
+__pycache__/
+*.pyc
+*.sqlite*
+.env
+build*/
+.pytest_cache/
+.DS_Store
+._*
+*.key
+*.xgb
+*.pem
+*.conf.private
+diagnostics/

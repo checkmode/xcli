@@ -1,0 +1,11 @@
+[Unit]
+Description=Xdistribute owned firewall rules
+Before=xray-gateway-core.service xray-gateway-panel.service
+After=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/xray-gateway/deploy/firewall.sh start
+ExecStop=/opt/xray-gateway/deploy/firewall.sh stop
+[Install]
+WantedBy=multi-user.target

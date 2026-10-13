@@ -1,0 +1,27 @@
+[Unit]
+Description=Xcli public entry health self-test
+After=network-online.target xray-gateway-panel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xgprobe
+Group=xgmonitor
+ExecStart=/usr/bin/python3 /opt/xray-gateway/scripts/probe.py --config /etc/xcli-monitor/monitor.json --scope server --output /var/lib/xray-gateway-monitor/report.json --interval 60
+Restart=on-failure
+RestartSec=10
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xray-gateway-monitor
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+RestrictSUIDSGID=true
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

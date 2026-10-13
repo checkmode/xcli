@@ -1,0 +1,9 @@
+{
+  "uuid": "GENERATE_A_DEDICATED_UUID_AND_REGISTER_IT_WITH_THE_CONTROLLER",
+  "public_ip": "203.0.113.2",
+  "domain": "gateway.example.com",
+  "reality_sni": "www.example.com",
+  "reality_public": "PUBLIC_REALITY_KEY",
+  "short_id": "REALITY_SHORT_ID",
+  "ws_path": "/your-websocket-path"
+}

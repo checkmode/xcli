@@ -1,0 +1,273 @@
+#include "gateway.hpp"
+#include <algorithm>
+#include <fcntl.h>
+#include <iostream>
+#include <limits>
+#include <regex>
+#include <set>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace xg {
+namespace {
+void fields(const Json& input,const std::set<std::string>& allowed,const std::set<std::string>& required) {
+  if(!input.is_object())throw HttpError(422,"请求必须是 JSON 对象");
+  for(auto it=input.begin();it!=input.end();++it)if(!allowed.contains(it.key()))throw HttpError(422,"包含不支持的字段");
+  for(const auto& name:required)if(!input.contains(name))throw HttpError(422,"缺少必要字段");
+}
+Int integer(const Json& value,Int maximum) {
+  if(!value.is_number_integer())throw HttpError(422,"请输入有效整数");
+  if(value.is_number_unsigned()&&value.get<std::uint64_t>()>static_cast<std::uint64_t>(maximum))throw HttpError(422,"数值超出允许范围");
+  Int number=value.get<Int>();if(number<0||number>maximum)throw HttpError(422,"数值超出允许范围");return number;
+}
+Int sum_checked(Int a,Int b) {
+  if(a<0||b<0||a>std::numeric_limits<Int>::max()-b)throw std::runtime_error("Traffic counter exceeds supported range");
+  return a+b;
+}
+}
+User User::from(const Json& row) {
+  User u;u.id=row.at("id");u.name=row.at("name");u.uuid=row.at("uuid");u.token=row.at("token");
+  u.enabled=row.at("enabled").get<Int>()!=0;u.deleted=row.at("deleted").get<Int>()!=0;
+  u.quota=row.at("quota");u.expires=row.at("expires");u.upload=row.at("upload");u.download=row.at("download");u.created=row.at("created");return u;
+}
+bool User::active(Int timestamp) const {return !deleted&&status(timestamp)=="active";}
+std::string User::status(Int timestamp) const {
+  if(!enabled)return "disabled";
+  if(expires&&expires<=timestamp)return "expired";
+  if(quota&&(upload>=quota||download>=quota-upload))return "exhausted";
+  return "active";
+}
+Json User::public_json() const {return {{"id",id},{"name",name},{"enabled",enabled?1:0},{"quota",quota},{"expires",expires},{"upload",upload},{"download",download},{"created",created},{"status",status()}};}
+std::string User::email(std::string_view tag) const {return id+"."+uuid.substr(0,8)+"@"+std::string(tag);}
+
+Backend::Backend(Options options,std::unique_ptr<Core> core) : options_(std::move(options)),settings_(Json::parse(read_file(options_.settings))),core_(std::move(core)) {
+  for(const auto& key:{"domain","public_ip","origin","reality_sni","reality_public","short_id","ws_path"})
+    if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
+  if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
+  {auto database=db();database.initialize();}
+  if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";
+  secret_key_=load_secret_key(options_.secret_key);
+  if(!options_.monitor_config.empty()) {
+    auto config=Json::parse(read_file(options_.monitor_config,16384));auto uuid=config.at("uuid").get<std::string>();
+    if(!std::regex_match(uuid,std::regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))throw std::runtime_error("Invalid monitor identity");
+    User probe;probe.id="health-probe";probe.name="Internal health probe";probe.uuid=uuid;probe_user_=probe;
+  }
+  if(::chmod((options_.state/"gateway.sqlite").c_str(),0600)<0)throw std::runtime_error("Cannot secure database permissions");
+  if(!core_&&!options_.offline)core_=make_core(options_);
+}
+Backend::~Backend() {stop_worker();}
+User Backend::get_user(Database& database,const std::string& id) {
+  auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{id});
+  if(!row)throw HttpError(404,"用户不存在");
+  return User::from(*row);
+}
+void Backend::audit(Database& database,const std::string& action,const std::string& detail) {
+  database.run("INSERT INTO events(ts,action,detail) VALUES(?,?,?)",{now(),action,detail});
+  database.run("DELETE FROM events WHERE id < (SELECT COALESCE(MAX(id),0)-2000 FROM events)");
+}
+Json Backend::validated_user(const Json& input) {
+  fields(input,{"name","enabled","quota","expires"},{"name"});
+  auto enabled=input.value("enabled",Json(true));
+  if(!enabled.is_boolean())throw HttpError(422,"enabled 必须为布尔值");
+  return {{"name",user_name(input.at("name"))},{"enabled",enabled.get<bool>()?1:0},
+    {"quota",integer(input.value("quota",Json(0)),10000000000000000LL)},
+    {"expires",integer(input.value("expires",Json(0)),4102444800LL)}};
+}
+Json Backend::login(const Json& input,const std::string& ip,std::string& cookie) {
+  fields(input,{"username","password","code"},{"username","password"});
+  auto username=checked_string(input.at("username"),0,64),password=checked_string(input.at("password"),0,256);
+  std::lock_guard guard(mutation_mutex_);auto stamp=std::chrono::steady_clock::now();
+  // Evict only expired buckets; a full table must not reset active lockouts.
+  for(auto it=rate_.begin();it!=rate_.end();) {
+    while(!it->second.empty()&&stamp-it->second.front()>std::chrono::minutes(15))it->second.pop_front();
+    if(it->second.empty())it=rate_.erase(it);else ++it;
+  }
+  if(!rate_.contains(ip)&&rate_.size()>=10000)throw HttpError(429,"尝试过于频繁，请稍后重试");
+  auto& attempts=rate_[ip];if(attempts.size()>=8)throw HttpError(429,"尝试过于频繁，请 15 分钟后重试");
+  auto database=db();Transaction transaction(database);
+  auto row=database.one("SELECT password FROM admin WHERE id=1");
+  bool match=row&&password_check(password,row->at("password").get<std::string>())&&username=="admin";
+  if(match)match=check_second_factor(database,checked_string(input.value("code",Json("")),0,128));
+  if(!match) {
+    attempts.push_back(stamp);audit(database,"login_failed",ip);transaction.commit();throw HttpError(401,"账号、密码或二次验证码错误");
+  }
+  attempts.clear();cookie=random_token();auto csrf=random_token();
+  database.run("DELETE FROM sessions WHERE expires<?",{now()});
+  database.run("INSERT INTO sessions VALUES(?,?,?)",{sha256(cookie),csrf,now()+8*3600});
+  database.run("DELETE FROM mfa_sessions WHERE hash NOT IN (SELECT hash FROM sessions)");
+  database.run("INSERT INTO mfa_sessions VALUES(?)",{sha256(cookie)});
+  audit(database,"login",ip);transaction.commit();return {{"csrf",csrf},{"username","admin"}};
+}
+Json Backend::session(const std::string& token,const std::string& csrf,bool write) {
+  if(token.size()!=43)throw HttpError(401,"请先登录");
+  auto database=db();auto row=database.one("SELECT * FROM sessions WHERE hash=? AND expires>?",{sha256(token),now()});
+  if(!row)throw HttpError(401,"请先登录");
+  if(database.one("SELECT enabled FROM mfa WHERE id=1")->at("enabled").get<Int>()&&!database.one("SELECT hash FROM mfa_sessions WHERE hash=?",{sha256(token)}))throw HttpError(401,"请重新完成二次验证登录");
+  if(write&&!secure_equal(csrf,row->at("csrf").get<std::string>()))throw HttpError(403,"请求校验失败，请刷新页面");
+  return {{"csrf",row->at("csrf")},{"username","admin"}};
+}
+void Backend::logout(const std::string& token,const std::string& csrf) {
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();
+  database.run("DELETE FROM sessions WHERE hash=?",{sha256(token)});
+}
+Json Backend::health() {std::lock_guard guard(health_mutex_);return health_;}
+Json Backend::overview(const std::string& token) {
+  session(token);auto database=db();database.exec("BEGIN");
+  Json users=Json::array();for(const auto& row:database.all("SELECT * FROM users WHERE deleted=0 ORDER BY created"))users.push_back(User::from(row).public_json());
+  auto totals=database.one("SELECT COALESCE(SUM(upload),0) AS upload,COALESCE(SUM(download),0) AS download FROM users");
+  auto samples=database.all("SELECT (ts/60)*60 AS ts,SUM(upload) AS upload,SUM(download) AS download FROM samples WHERE ts>? GROUP BY ts/60 ORDER BY ts/60",{now()-3600});
+  auto events=database.all("SELECT ts,action,detail FROM events ORDER BY id DESC LIMIT 30");database.exec("COMMIT");
+  return {{"health",health()},{"activity",activity_status(database)},{"monitor",monitor_status()},{"users",users},{"totals",*totals},{"samples",samples},{"events",events},
+    {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]}}}};
+}
+Json Backend::create_user(const std::string& token,const std::string& csrf,const Json& input) {
+  auto values=validated_user(input);std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
+  auto database=db();Transaction transaction(database);
+  if(database.one("SELECT COUNT(*) AS n FROM users WHERE deleted=0")->at("n").get<Int>()>=500)throw HttpError(409,"最多支持 500 位用户");
+  auto id=random_id();auto name=values["name"].get<std::string>();
+  database.run("INSERT INTO users(id,name,uuid,token,enabled,quota,expires,created) VALUES(?,?,?,?,?,?,?,?)",
+    {id,name,random_uuid(),random_token(),values["enabled"].get<Int>(),values["quota"].get<Int>(),values["expires"].get<Int>(),now()});
+  audit(database,"user_created",name);transaction.commit();return {{"id",id}};
+}
+void Backend::update_user(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  auto values=validated_user(input);std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
+  auto database=db();Transaction transaction(database);get_user(database,id);auto name=values["name"].get<std::string>();
+  database.run("UPDATE users SET name=?,enabled=?,quota=?,expires=? WHERE id=?",{name,values["enabled"].get<Int>(),values["quota"].get<Int>(),values["expires"].get<Int>(),id});
+  audit(database,"user_updated",name);transaction.commit();
+}
+void Backend::delete_user(const std::string& token,const std::string& csrf,const std::string& id) {
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);auto user=get_user(database,id);
+  database.run("UPDATE users SET deleted=1,enabled=0,token=? WHERE id=?",{random_token(),id});audit(database,"user_deleted",user.name);transaction.commit();
+}
+void Backend::rotate_user(const std::string& token,const std::string& csrf,const std::string& id) {
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);auto user=get_user(database,id);
+  database.run("UPDATE users SET uuid=?,token=? WHERE id=?",{random_uuid(),random_token(),id});audit(database,"credentials_rotated",user.name);transaction.commit();
+}
+void Backend::reset_traffic(const std::string& token,const std::string& csrf,const std::string& id) {
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
+  if(!core_)throw HttpError(503,"Xray 管理接口不可用");
+  auto database=db();auto user=get_user(database,id);
+  auto gen=core_->generation();auto counters=core_->counters();
+  if(core_->generation()!=gen)throw HttpError(503,"核心正在重启，请稍后重试");
+  Transaction transaction(database);apply_stats(database,gen,counters);
+  database.run("UPDATE users SET upload=0,download=0 WHERE id=?",{id});audit(database,"traffic_reset",user.name);transaction.commit();
+}
+Json Backend::links_for(const User& user) const {
+  auto s=[&](const char* key){return settings_.at(key).get<std::string>();};
+  std::string reality="vless://"+user.uuid+"@"+s("public_ip")+":443?encryption=none&fp=chrome&sni="+url_quote(s("reality_sni"),true)+"&pbk="+url_quote(s("reality_public"),true)+"&sid="+url_quote(s("short_id"),true)+"&type=tcp&security=reality&flow=xtls-rprx-vision#"+url_quote(user.name+" · REALITY",false,true);
+  std::string websocket="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(s("ws_path"),true)+"#"+url_quote(user.name+" · HTTPS",false,true);
+  return {{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
+}
+Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
+std::string Backend::qr(const std::string& token,const std::string& id,const std::string& kind) {
+  session(token);if(kind!="reality"&&kind!="websocket"&&kind!="subscription")throw HttpError(404,"Not Found");
+  auto database=db();return qr_png(links_for(get_user(database,id)).at(kind).get<std::string>());
+}
+void Backend::change_password(const std::string& token,const std::string& csrf,const Json& input) {
+  fields(input,{"current_password","new_password","code"},{"current_password","new_password"});
+  auto next=checked_string(input.at("new_password"),16,256);
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
+  confirm_admin(database,token,input);
+  database.run("UPDATE admin SET password=? WHERE id=1",{password_hash(next)});database.run("DELETE FROM sessions");audit(database,"password_changed");transaction.commit();
+}
+std::pair<std::string,std::string> Backend::subscription(const std::string& token) {
+  static const std::regex format("[A-Za-z0-9_-]{43}");if(!std::regex_match(token,format))throw HttpError(404,"Not Found");
+  auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});if(!row)throw HttpError(404,"Not Found");
+  auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");auto node=links_for(user);
+  return {base64(node["reality"].get<std::string>()+"\n"+node["websocket"].get<std::string>()+"\n"),
+    "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
+}
+std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& generation,const std::vector<Counter>& counters) {
+  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket)>>>traffic>>>(uplink|downlink))");
+  Int up=0,down=0;auto stamp=now();
+  auto previous_sample=database.one("SELECT value FROM metadata WHERE key='activity_sample'");
+  Int interval=previous_sample?std::clamp<Int>(stamp-std::stoll(previous_sample->at("value").get<std::string>()),1,300):options_.poll_seconds;
+  database.run("UPDATE device_activity SET upload_delta=0,download_delta=0,sampled=?,interval_seconds=?",{stamp,interval});
+  for(const auto& counter:counters) {
+    std::smatch match;if(counter.value<0||!std::regex_match(counter.name,match,format))continue;
+    auto previous=database.one("SELECT value,generation FROM counters WHERE name=?",{counter.name});
+    Int delta=counter.value;
+    if(previous&&previous->at("generation")==generation&&previous->at("value").get<Int>()<=counter.value)delta-=previous->at("value").get<Int>();
+    database.run("INSERT OR REPLACE INTO counters VALUES(?,?,?)",{counter.name,counter.value,generation});
+    std::string column=match[4]=="uplink"?"upload":"download";
+    auto existing=database.one("SELECT "+column+" AS value FROM users WHERE id=?",{match[1].str()});
+    if(existing) {
+      database.run("UPDATE users SET "+column+"=? WHERE id=?",{sum_checked(existing->at("value").get<Int>(),delta),match[1].str()});
+      // A first observation establishes a baseline; historical bytes are not current activity.
+      Int activity_delta=previous_sample&&previous?delta:0;
+      database.run("INSERT OR IGNORE INTO device_activity(user_id,transport,sampled,interval_seconds) VALUES(?,?,?,?)",{match[1].str(),match[3].str(),stamp,interval});
+      database.run("UPDATE device_activity SET "+column+"_delta="+column+"_delta+?,last_seen=CASE WHEN ?>0 THEN ? ELSE last_seen END WHERE user_id=? AND transport=?",{activity_delta,activity_delta,stamp,match[1].str(),match[3].str()});
+    }
+    if(column=="upload")up=sum_checked(up,delta);else down=sum_checked(down,delta);
+  }
+  database.run("INSERT OR REPLACE INTO metadata VALUES('activity_sample',?)",{std::to_string(stamp)});
+  database.run("INSERT INTO samples VALUES(?,?,?)",{now(),up,down});database.run("DELETE FROM samples WHERE ts<?",{now()-7*86400});return {up,down};
+}
+Json Backend::preflight() {
+  if(!core_)throw std::runtime_error("Preflight requires a live core");
+  std::lock_guard guard(mutation_mutex_);auto database=db();auto all=desired_users(database);auto gen=core_->generation();
+  Json result={{"generation",gen},{"active_users",0},{"pending_additions",0},{"pending_revocations",0},{"database_integrity",database.one("PRAGMA quick_check")->begin().value()}};
+  for(const auto& user:all)if(user.active()&&user.id!="health-probe")result["active_users"]=result["active_users"].get<int>()+1;
+  for(const std::string tag:{"reality","websocket"}) {
+    auto current=core_->users(tag);std::map<std::string,std::string> desired;
+    for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user.uuid);
+    for(const auto& [email,id]:current)if(!desired.contains(email)||desired[email]!=id)result["pending_revocations"]=result["pending_revocations"].get<int>()+1;
+    for(const auto& [email,id]:desired)if(!current.contains(email))result["pending_additions"]=result["pending_additions"].get<int>()+1;
+  }
+  result["counter_count"]=core_->counters().size();
+  if(core_->generation()!=gen)throw std::runtime_error("Core changed during preflight");
+  return result;
+}
+void Backend::poll_once() {
+  if(!core_)throw std::runtime_error("Xray API disabled");
+  // Serialize against reset/rotation so each generation is accounted for once.
+  std::lock_guard guard(mutation_mutex_);auto gen=core_->generation();auto counters=core_->counters();
+  std::map<std::string,std::map<std::string,std::string>> current;
+  for(const std::string tag:{"reality","websocket"})current[tag]=core_->users(tag);
+  if(core_->generation()!=gen)throw std::runtime_error("Core changed while sampling");
+  auto database=db();Transaction transaction(database);auto [up,down]=apply_stats(database,gen,counters);auto all=desired_users(database);
+  bool revoke=false;std::vector<std::pair<std::string,User>> additions;
+  for(const std::string tag:{"reality","websocket"}) {
+    std::map<std::string,User> desired;
+    for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user);
+    for(const auto& [email,id]:current[tag])if(!desired.contains(email)||desired.at(email).uuid!=id)revoke=true;
+    for(const auto& [email,user]:desired)if(!current[tag].contains(email))additions.emplace_back(tag,user);
+  }
+  // Commit sampled counters before any external mutation or restart.
+  transaction.commit();
+  if(revoke) {
+    core_->restart(gen);auto event_db=db();audit(event_db,"core_restart","凭据撤销、停用、到期或配额触发；现有连接将重新建立");
+  } else for(const auto& [tag,user]:additions)core_->add_user(tag,user);
+  std::lock_guard health_guard(health_mutex_);
+  health_={{"core",!revoke},{"updated",now()},{"error",revoke?"正在应用访问权限":""},{"version","26.3.27"},
+    {"upload_rate",static_cast<double>(up)/options_.poll_seconds},{"download_rate",static_cast<double>(down)/options_.poll_seconds}};
+}
+void Backend::start_worker() {
+  if(worker_.joinable())throw std::runtime_error("Controller already started");
+  lock_fd_=::open((options_.state/"controller.lock").c_str(),O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);
+  if(lock_fd_<0||::flock(lock_fd_,LOCK_EX|LOCK_NB)<0) {
+    if(lock_fd_>=0)::close(lock_fd_);
+    lock_fd_=-1;
+    throw std::runtime_error("Another controller owns this state directory");
+  }
+  stop_=false;
+  worker_=std::thread([this] {
+    while(true) {
+      try {if(!options_.offline)poll_once();}
+      catch(const std::exception& error) {
+        {std::lock_guard guard(health_mutex_);health_["core"]=false;health_["error"]="管理接口暂时不可用";}
+        std::cerr<<"Controller: "<<error.what()<<'\n';
+      }
+      try {scheduled_backup();}catch(const std::exception&){std::cerr<<"Automatic backup failed; will retry\n";}
+      std::unique_lock guard(worker_mutex_);
+      if(worker_cv_.wait_for(guard,std::chrono::seconds(options_.poll_seconds),[this]{return stop_;}))break;
+    }
+  });
+}
+void Backend::stop_worker() {
+  {std::lock_guard guard(worker_mutex_);stop_=true;}worker_cv_.notify_all();
+  if(worker_.joinable())worker_.join();
+  if(lock_fd_>=0){::close(lock_fd_);lock_fd_=-1;}
+}
+}

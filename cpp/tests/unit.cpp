@@ -1,0 +1,93 @@
+#include "gateway.hpp"
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <sys/stat.h>
+#include <unistd.h>
+
+using namespace xg;
+namespace {
+void check(bool condition,const char* message) {if(!condition)throw std::runtime_error(message);}
+template<class F> void status(int expected,F operation) {
+  try {operation();throw std::runtime_error("Expected HTTP failure");}
+  catch(const HttpError& error){check(error.status==expected,"Wrong HTTP status");}
+}
+class FakeCore final : public Core {
+ public:
+  std::string gen="42:12345";
+  std::vector<Counter> values;
+  std::map<std::string,std::map<std::string,std::string>> live;
+  int restarts=0;
+  bool fail_add=false,fail_query=false;
+  std::string generation() override{return gen;}
+  std::vector<Counter> counters() override{if(fail_query)throw std::runtime_error("unavailable");return values;}
+  std::map<std::string,std::string> users(const std::string& tag) override{return live[tag];}
+  void add_user(const std::string& tag,const User& user) override{if(fail_add)throw std::runtime_error("unavailable");live[tag][user.email(tag)]=user.uuid;}
+  void restart(const std::string& expected) override{check(expected==gen,"Generation mismatch");++restarts;gen="43:12346";live.clear();values.clear();}
+};
+struct Temp {
+  fs::path path;
+  Temp(){char value[]="/tmp/xg-cpp-unit-XXXXXX";auto p=::mkdtemp(value);if(!p)throw std::runtime_error("mkdtemp failed");path=p;}
+  ~Temp(){fs::remove_all(path);}
+};
+std::size_t fds(){return static_cast<std::size_t>(std::distance(fs::directory_iterator("/proc/self/fd"),fs::directory_iterator{}));}
+}
+int main() {
+  try {
+    Temp temp;Options opts;opts.state=temp.path/"state";opts.settings=temp.path/"settings.json";opts.offline=true;opts.backup_retention=2;
+    Json settings={{"origin","https://testserver"},{"domain","testserver"},{"public_ip","203.0.113.2"},{"reality_sni","example.com"},{"reality_public",std::string(43,'p')},{"short_id","aabbccdd"},{"ws_path","/connect/test"}};
+    std::ofstream(opts.settings)<<settings.dump();
+    auto fake=std::make_unique<FakeCore>();auto core=fake.get();Backend backend(opts,std::move(fake));
+    {Database db(opts.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+    check(sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","SHA256 mismatch");
+    const std::string vector_secret="GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    for(const auto& [timestamp,expected]:std::vector<std::pair<Int,std::string>>{{59,"94287082"},{1111111109,"07081804"},{1111111111,"14050471"},{1234567890,"89005924"},{2000000000,"69279037"},{20000000000LL,"65353130"}})
+      check(totp_code(vector_secret,timestamp,8)==expected,"RFC 6238 test vector");
+    auto key=load_secret_key(opts.state/"security.key"),sealed=seal("private payload",key,"test");
+    check(unseal(sealed,key,"test")=="private payload","AEAD roundtrip");
+    bool rejected=false;try{unseal(sealed,key,"wrong-context");}catch(...){rejected=true;}check(rejected,"AEAD context accepted");
+    check(unbase64(base64(std::string("a\0b",3)))==std::string("a\0b",3),"Binary base64 roundtrip");
+    auto encoded=password_hash("密码 password");check(password_check("密码 password",encoded),"Password round trip");check(!password_check("wrong",encoded),"Wrong password accepted");
+    check(!password_check("x","invalid"),"Invalid stored hash accepted");
+    check(random_token().size()==43&&random_uuid().size()==36&&random_id().size()==32,"Random token formats");
+    check(user_name("　测试用户　")=="测试用户","Unicode whitespace");status(422,[]{user_name(" \n\t");});
+    check(url_quote("名 / +",true)=="%E5%90%8D+%2F+%2B","URL query encoding");
+    std::string token;auto logged=backend.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",token);auto csrf=logged["csrf"].get<std::string>();
+    status(401,[&]{backend.session("bad");});status(403,[&]{backend.create_user(token,"bad",{{"name","test"}});});
+    auto id=backend.create_user(token,csrf,{{"name","测试 / A"}})["id"].get<std::string>();
+    User user;{Database db(opts.state/"gateway.sqlite");user=User::from(*db.one("SELECT * FROM users WHERE id=?",{id}));}
+    auto links=backend.links(token,id);check(links["subscription"]=="https://testserver/s/"+user.token,"Subscription address");
+    auto [body,info]=backend.subscription(user.token);check(body==base64(links["reality"].get<std::string>()+"\n"+links["websocket"].get<std::string>()+"\n"),"Subscription content");
+    check(backend.qr(token,id,"reality").substr(0,8)==std::string("\x89PNG\r\n\x1a\n",8),"QR PNG");
+    backend.poll_once();check(core->live["reality"].contains(user.email("reality")),"RPC user add");check(core->restarts==0,"Initial reconcile restarted core");
+    const auto name="user>>>"+user.email("reality")+">>>traffic>>>uplink";
+    core->values={{name,100}};backend.poll_once();backend.poll_once();core->values={{name,180}};backend.poll_once();
+    {Database db(opts.state/"gateway.sqlite");auto activity=backend.activity_status(db);check(activity[id]["reality"]["last_seen"].get<Int>()>0,"Activity last seen missing");check(activity[id]["reality"]["upload_delta"]==80,"Activity delta invalid");}
+    core->gen="42:98765";core->values={{name,250}};backend.poll_once();
+    {Database db(opts.state/"gateway.sqlite");check(db.one("SELECT upload FROM users WHERE id=?",{id})->at("upload")==430,"Counter deduplication/generation");}
+    backend.reset_traffic(token,csrf,id);backend.poll_once();
+    {Database db(opts.state/"gateway.sqlite");check(db.one("SELECT upload FROM users WHERE id=?",{id})->at("upload")==0,"Reset re-counted traffic");}
+    core->values={{name,280}};backend.poll_once();
+    {Database db(opts.state/"gateway.sqlite");check(db.one("SELECT upload FROM users WHERE id=?",{id})->at("upload")==30,"Post-reset delta");}
+    backend.update_user(token,csrf,id,{{"name","test"},{"quota",30}});backend.poll_once();check(core->restarts==1,"Quota did not revoke live connection");status(403,[&]{backend.subscription(user.token);});
+    backend.update_user(token,csrf,id,{{"name","test"}});backend.poll_once();
+    backend.rotate_user(token,csrf,id);status(404,[&]{backend.subscription(user.token);});backend.poll_once();check(core->restarts==2,"Rotation did not revoke live connection");backend.poll_once();
+    auto second=backend.create_user(token,csrf,{{"name","second"}})["id"].get<std::string>();
+    core->fail_add=true;try{backend.poll_once();}catch(const std::exception&){}core->fail_add=false;backend.poll_once();
+    check(core->live["reality"].size()==2,"Failed add did not recover");
+    backend.delete_user(token,csrf,second);backend.poll_once();check(core->restarts==3,"Delete did not revoke live connection");
+    status(404,[&]{backend.links(token,second);});
+    {Database db(opts.state/"gateway.sqlite");try{Transaction tx(db);db.run("INSERT INTO metadata VALUES('rollback','x')");throw 1;}catch(int){}check(!db.one("SELECT * FROM metadata WHERE key='rollback'"),"Transaction rollback");db.backup(temp.path/"backup.sqlite");}
+    {Database copy(temp.path/"backup.sqlite");check(copy.one("PRAGMA quick_check")->begin().value()=="ok","Backup integrity");}
+    backend.create_backup(token,csrf);backend.create_backup(token,csrf);backend.create_backup(token,csrf);
+    check(backend.backup_status(token)["backups"].size()==2,"Backup retention failed");
+    {Database db(opts.state/"gateway.sqlite");db.run("UPDATE metadata SET value='0' WHERE key='last_backup'");}
+    backend.scheduled_backup();check(backend.backup_status(token)["backups"][0]["reason"]=="automatic","Due automatic backup failed");
+    auto before=fds();for(int i=0;i<2000;++i){Database db(opts.state/"gateway.sqlite");db.one("SELECT 1");}check(fds()<=before+1,"Database descriptor leak");
+    for(int i=0;i<8;++i)status(401,[&]{std::string ignored;backend.login({{"username","admin"},{"password","wrong"}},"192.0.2.1",ignored);});
+    status(429,[&]{std::string ignored;backend.login({{"username","admin"},{"password","correct-password-for-tests"}},"192.0.2.1",ignored);});
+    backend.change_password(token,csrf,{{"current_password","correct-password-for-tests"},{"new_password","replacement-password"}});status(401,[&]{backend.session(token);});
+    std::cout<<"PASS: crypto, Unicode, authentication, CSRF, subscriptions, QR, accounting, reset, RPC reconciliation, quota, rotation, deletion, retry, rollback, backup, 2000 DB lifetimes, login throttling, session revocation\n";
+    return 0;
+  }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}
+}
