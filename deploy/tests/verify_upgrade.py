@@ -76,6 +76,20 @@ def main():
             assert settings == {**state['settings'], 'hysteria2_port': 443, 'xray_version': '26.10.10'}
             newest = create('created-after-upgrade')
             state['users'].append(newest)
+            # Creation is asynchronous: revocation only requires a core restart
+            # once this account has actually reached all three live inbounds.
+            deadline = time.monotonic() + 20
+            while True:
+                loaded = True
+                for tag in ('reality', 'websocket', 'hysteria2'):
+                    result = subprocess.run(['/usr/local/lib/xray-gateway/xray', 'api', 'inbounduser',
+                        '--server=127.0.0.1:10085', '--timeout=2', '-tag=' + tag], capture_output=True)
+                    users = json.loads(result.stdout).get('users', []) if result.returncode == 0 else []
+                    loaded = loaded and any(user.get('email', '').startswith(newest['id'] + '.') for user in users)
+                if loaded:
+                    break
+                assert time.monotonic() < deadline, 'New account was not loaded into all three inbounds'
+                time.sleep(.5)
             before_pid = subprocess.check_output(['systemctl', 'show', 'xray-gateway-core', '-p', 'MainPID', '--value'])
             api('/api/users/' + newest['id'], 'PUT', {'name': 'created-after-upgrade', 'enabled': False})
             deadline = time.monotonic() + 20
