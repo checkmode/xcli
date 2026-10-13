@@ -17,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Unit checks
         run: |
           bash -n install.sh
@@ -36,6 +36,7 @@ jobs:
           printf '%s panel.install.example\n' "$public_ip" | sudo tee -a /etc/hosts >/dev/null
           sudo ip addr add "$public_ip/32" dev lo
           openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -subj /CN=Xcli-Install-Test-CA \
+            -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
             -keyout "$fixture/ca.key" -out "$fixture/ca.crt"
           openssl req -newkey rsa:2048 -nodes -sha256 -subj /CN=panel.install.example \
             -keyout "$fixture/server.key" -out "$fixture/server.csr"

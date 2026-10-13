@@ -40,6 +40,15 @@ def main():
         assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == digest
     subprocess.run(['python3', '/opt/xray-gateway/scripts/gatewayctl.py', 'status'], check=True)
     print('Initial administrator login, HTTPS cookie, database, disabled-by-default features, recovery tool and repeat-install refusal passed.')
+    rollback = sorted(pathlib.Path('/root').glob('xcli-install-*/rollback.sh'))[-1]
+    subprocess.run(['sh', str(rollback)], check=True)
+    for service in ('xray-gateway-panel', 'xray-gateway-core', 'xray-gateway-monitor', 'xray-gateway-firewall', 'nginx'):
+        assert subprocess.run(['systemctl', 'is-active', '--quiet', service]).returncode != 0
+    for chain in ('XG_IN', 'XG_OUT'):
+        assert subprocess.run(['iptables', '-w', '-S', chain], capture_output=True).returncode != 0
+    for name, digest in before.items():
+        assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == digest
+    print('Rollback stopped only the new services, removed owned firewall chains and retained credentials and settings.')
 
 
 if __name__ == '__main__':

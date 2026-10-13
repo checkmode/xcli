@@ -1,4 +1,5 @@
 #include "gateway.hpp"
+#include "http_queue.hpp"
 #include <arpa/inet.h>
 #include <array>
 #include <charconv>
@@ -46,7 +47,7 @@ HttpServer::Handler HttpServer::wrap(Handler handler) {
   };
 }
 HttpServer::HttpServer(Backend& backend) : backend_(backend) {
-  server_.new_task_queue=[] {return new httplib::ThreadPool(8,128);};
+  server_.new_task_queue=[] {return make_http_queue();};
   server_.set_payload_max_length(16384);
   server_.set_read_timeout(10,0);server_.set_write_timeout(10,0);
   server_.set_keep_alive_timeout(5);server_.set_keep_alive_max_count(100);

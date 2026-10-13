@@ -151,13 +151,19 @@ def prepare_input(args):
         args.private_key = args.private_key.resolve(strict=True)
         if not args.certificate.is_file() or not args.private_key.is_file():
             raise ValueError('证书和私钥必须是普通文件')
-    elif not args.check:
-        args.email = args.email or (ask("Let's Encrypt 账户邮箱") if not args.yes else '')
-        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
-            raise ValueError('请提供有效的证书账户邮箱')
-        if not args.agree_tos:
-            if args.yes or ask('同意 https://letsencrypt.org/repository/ 中的服务条款？输入 yes') != 'yes':
-                raise ValueError('申请证书需同意服务条款；无人值守使用 --agree-tos')
+    else:
+        for path in (Path('/etc/letsencrypt/live') / args.domain,
+                     Path('/etc/letsencrypt/renewal') / (args.domain + '.conf'),
+                     Path('/etc/letsencrypt/renewal-hooks/deploy/xcli-nginx')):
+            if path.exists() or path.is_symlink():
+                raise ValueError('已有证书配置，拒绝覆盖：' + str(path))
+        if not args.check:
+            args.email = args.email or (ask("Let's Encrypt 账户邮箱") if not args.yes else '')
+            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
+                raise ValueError('请提供有效的证书账户邮箱')
+            if not args.agree_tos:
+                if args.yes or ask('同意 https://letsencrypt.org/repository/ 中的服务条款？输入 yes') != 'yes':
+                    raise ValueError('申请证书需同意服务条款；无人值守使用 --agree-tos')
     dns = []
     for line in Path('/etc/resolv.conf').read_text().splitlines():
         fields = line.split()
@@ -365,7 +371,8 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         else:
             raise RuntimeError('管理服务未完成探测账号同步')
         self.run(['systemctl', 'enable', '--now', 'xray-gateway-monitor'])
-        self.run(['systemctl', 'is-active', '--quiet', *SERVICES, 'nginx'])
+        for service in (*SERVICES, 'nginx'):
+            self.run(['systemctl', 'is-active', '--quiet', service])
         probe = Path('/var/lib/xray-gateway-monitor/report.json')
         for attempt in range(100):
             if probe.is_file():
