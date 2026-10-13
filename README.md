@@ -4,7 +4,7 @@
 
 自托管的 Xray 节点管理面板。C++20 后端负责用户、订阅、用量、二次验证和加密备份；官方 Xray-core 负责代理协议与数据转发。前端使用原生 HTML、CSS 和 JavaScript，不加载第三方资源。
 
-当前版本为 1.1.0，已在 Ubuntu 26.04 ARM64、Xray-core v26.3.27 上验证。提供 REALITY / XTLS Vision 和 WebSocket / TLS 两个 VLESS 入口。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
+当前版本为 1.2.0，已在 Ubuntu 26.04 ARM64、Xray-core v26.3.27 上验证。提供 REALITY / XTLS Vision 和 WebSocket / TLS 两个 VLESS 入口。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
 
 ## 功能
 
@@ -12,6 +12,8 @@
 | --- | --- |
 | 用户与订阅 | 每位用户独立 UUID、订阅令牌、二维码、配额和到期时间；支持停用、删除、流量清零和凭据轮换 |
 | 健康监测 | 每分钟通过两个真实公网入口验证 HTTPS 出口 IP 和 SOCKS5 UDP DNS；失败、未知及过期结果分别显示 |
+| 历史趋势 | 保留最近 30 天的流量、探测成功率和 HTTPS / UDP 延迟，支持 1 小时、24 小时、7 天和 30 天范围 |
+| 故障通知 | 通用 HTTPS JSON Webhook，覆盖入口探测、探测结果中断、核心管理接口及本地自动备份；支持恢复通知、重试、Bearer Token 和消息签名 |
 | 设备活动 | 按用户及入口展示最近产生流量的时间与上传、下载速率；60 秒内有流量标记为近期活跃 |
 | 二次验证 | 验证器 TOTP、动态码重放拒绝、10 条一次性恢复码、失败限速、会话撤销 |
 | 自动备份 | 默认每 6 小时生成 AES-256-GCM 加密的 SQLite 一致性快照，保留最近 28 份；支持手动备份、下载和恢复 |
@@ -26,6 +28,42 @@
 登录后在“用户管理”中创建用户，再点击“连接”获取订阅地址或二维码。配额使用十进制 GB，0 表示不限；到期时间留空表示不过期。订阅返回 Base64 编码的 VLESS URI 列表，并附带 `subscription-userinfo` 用量信息。
 
 重命名或调整配额不会更改凭据。“重置凭据”同时替换 UUID 和订阅令牌，使旧节点与旧订阅失效。订阅地址、二维码和探测配置均包含访问凭据，应保存在私密位置。
+
+### 历史趋势
+
+打开“历史趋势”选择时间范围。1 小时、24 小时、7 天和 30 天视图分别按 1 分钟、5 分钟、30 分钟和 2 小时汇总；流量显示每档累计字节数，延迟显示该档内有结果的探测平均值。当前时间档可能尚未结束。
+
+成功率为成功次数除以已知探测次数，失败计入分母，未知单独显示。缺少采样的时段留空，不补成零流量或成功。只发生过一次成功且其后都是未知时，已知探测成功率仍是 100%，应结合未知次数和最近结果判断当前状态。
+
+升级时导入数据库中仍保留的旧流量采样；旧版本通常只保留 7 天，因此不会立即拥有完整的 30 天流量。探测历史从升级后开始积累。采样由服务器执行，不能据此推断其他地区或客户端的可用性。
+
+### 配置故障通知
+
+1. 准备一个能接收 JSON 的公网 HTTPS 接口，证书须受系统信任。企业微信、钉钉等机器人有各自的消息格式，通常需要接收服务转换。
+2. 打开“故障通知”，填写 Webhook 地址和接收服务需要的 Bearer Token 或 HMAC 签名密钥，输入当前管理密码；已启用二次验证时同时填写动态码或恢复码，然后保存。
+3. 点击“发送测试”，查看投递记录，并在接收服务确认实际收到消息。“已投递”只表示接收端返回了 HTTP 2xx；平台是否最终展示消息需在接收端确认。
+4. 勾选“启用故障与恢复通知”并保存。未勾选时仍可测试已保存的地址。升级不会预设地址或自动启用通知。
+
+入口默认连续 3 个独立探测结果失败时通知，连续 2 个成功结果后通知恢复；重复读取同一份报告不会累计失败。探测结果中断和核心管理接口按分钟判断。未知结果不会把已有入口故障标记为恢复。本地自动备份出现错误或超过应执行时间 15 分钟时通知，恢复后再通知一次。整机断电、网络完全中断或面板停止时，这个面板无法主动通知，需要另外部署外部监控。
+
+通知队列写入数据库，重启后继续投递。首次投递失败后分别等待 30、120、600、1800、3600 秒重试，总共最多尝试 6 次。接收端应按事件编号去重，以处理“接收成功但响应丢失”等情况。同一故障不会按检查频率重复排队；发生恢复时取消尚未发送的旧故障通知。修改通知配置会取消旧配置下排队的消息，启用后的当前故障会重新排队；正在发送的请求可能完成。
+
+地址、Token 和签名密钥使用服务器恢复密钥加密保存，读取配置只返回目标主机名和是否已配置凭据。输入框留空表示保留原值，清除操作使用相应复选框。请求不使用代理、不跟随重定向，并在 DNS 解析后拒绝内网、回环、链路本地和其他保留地址。
+
+接收端使用以下约定：
+
+| 字段或请求头 | 含义 |
+| --- | --- |
+| `schema`、`id` | 消息格式版本（当前为 1）及事件编号；重试使用同一编号和正文 |
+| `site`、`service` | 站点域名及服务标识：`reality`、`websocket`、`probe`、`core`、`backup` 或 `test` |
+| `event` | `fault`、`recovery` 或 `test` |
+| `title`、`message` | 可供展示的中文说明，不包含用户凭据或代理访问记录 |
+| `time`、`started`、`duration_seconds` | Unix 秒时间、故障起始时间及持续秒数 |
+| `X-Xcli-Event-Id` | 与正文 `id` 相同 |
+| `X-Xcli-Timestamp` | 本次发送的 Unix 秒时间，每次重试重新生成 |
+| `X-Xcli-Signature` | 可选，`sha256=` 加上 HMAC-SHA256 十六进制摘要；签名内容为时间戳、英文句点和原始正文的连接，密钥为配置的签名密钥 |
+
+接收端应对原始请求正文验签，使用恒定时间比较，检查发送时间容差并按事件编号去重。接口为 `GET /api/history?range=1h|24h|7d|30d`、`GET/PUT /api/notifications` 和 `POST /api/notifications/test`；均要求登录，修改及测试要求 Origin 和 CSRF 校验，修改配置还要求重新验证管理员身份。
 
 ### 绑定二次验证
 
@@ -43,6 +81,8 @@
 启动后首次生成自动备份，此后默认每 6 小时执行。失败会保留错误状态，5 分钟后重试。备份文件权限为 600，目录权限为 700，默认路径为 `/var/lib/xray-gateway/backups/`。
 
 加密文件包含数据库与应用的服务器配置。恢复密钥位于 `/etc/xray-gateway/security.key`，应与备份文件分开妥善保管，并保留离机副本。备份不包含操作系统、Nginx 配置或 TLS 证书；它们需要单独保存。只保存在同一服务器的自动备份不能应对整机丢失。
+
+本版本未提供自动异地备份。备份中的数据库包含加密的通知配置；在线“恢复用户配置”保留当前通知配置和历史记录，离线整库提取则包含快照时的全部数据。
 
 面板恢复前会展示备份信息，要求输入备份编号、当前密码和已启用的二次验证码，并先生成恢复前快照。在线恢复只允许服务器配置匹配的备份，恢复用户、配额和订阅凭据，保留：
 
@@ -69,7 +109,7 @@ sudo /usr/local/lib/xray-gateway/panel-current \
 
 ```sh
 sudo apt-get install g++ cmake ninja-build pkg-config libcpp-httplib-dev \
-  nlohmann-json3-dev libsqlite3-dev libssl-dev libqrencode-dev libpng-dev \
+  nlohmann-json3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev \
   libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc
 bash deploy/build-cpp.sh build
 ```
@@ -81,7 +121,7 @@ HTTP 兼容性测试还需要 Python 的 pytest、FastAPI、Pydantic 和二维�
 ```sh
 XG_LEGACY_APP="$PWD/app.py" \
 XG_TEST_BINARY="$PWD/build/xray-gateway-panel" \
-  python3 -m pytest -q cpp/tests/test_http.py cpp/tests/test_features.py \
+  python3 -m pytest -q cpp/tests/test_http.py cpp/tests/test_features.py cpp/tests/test_operations.py \
   cpp/tests/test_core_integration.py
 
 cmake -S cpp -B build-asan -G Ninja -DXG_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
@@ -92,7 +132,28 @@ ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
 
 测试使用独立临时数据库及回环端口。覆盖旧凭据兼容、CSRF、配额和权限撤销、真实核心连接、RFC 6238 向量、动态码重放、恢复码复用、备份篡改、在线恢复和离线提取。`--offline` 只用于隔离测试，不应作为生产启动参数。
 
+通知测试还覆盖独立采样计数、未知结果、故障恢复、持久队列、重试上限、敏感字段加密、历史保留和空缺区间。真实 HTTPS 投递测试需要 Linux 的网络及挂载命名空间、`iproute2` 和 OpenSSL 命令工具；测试在独立命名空间中运行，使用临时证书与接收服务，验证签名、认证、失败重试、拒绝重定向、DNS 回环目标和证书主机名不匹配：
+
+```sh
+sudo bash cpp/tests/run-webhook-tests.sh "$PWD" "$PWD/build/xray-gateway-panel"
+```
+
 ## 升级已有部署
+
+已运行 1.1.0、完成探测服务和二次验证支持配置的主机，使用 `deploy/upgrade-operations.sh` 升级到 1.2.0。先构建并通过测试，再选择未使用的版本目录和 root 备份目录：
+
+```sh
+sudo install -d -m755 /usr/local/lib/xray-gateway/releases/1.2.0
+sudo install -m755 build/xray-gateway-panel \
+  /usr/local/lib/xray-gateway/releases/1.2.0/xray-gateway-panel
+sudo bash deploy/upgrade-operations.sh "$PWD" \
+  /usr/local/lib/xray-gateway/releases/1.2.0/xray-gateway-panel \
+  /root/xcli-operations-upgrade-new
+```
+
+脚本先保存一致性数据库快照、配置、恢复密钥与服务覆盖配置，检查现有核心身份无需增删，然后只切换管理面板二进制和静态页面。用户凭据、订阅、管理会话、二次验证和累计流量均进行前后校验，核心、探测进程和 Nginx 不重启。管理页面在面板重启时短暂不可用。脚本失败后自动回退；也可执行备份目录内的 `rollback.sh` 恢复前一个兼容版本。回退保留当前数据库，避免丢失升级后的用户变化和流量。回退到 1.1 后停止新增通知和历史采集。
+
+尚未完成 1.1 功能配置的旧部署，先按以下流程准备探测服务和恢复密钥：
 
 `deploy/upgrade-features.sh` 用于已有 `/etc/xray-gateway`、`/var/lib/xray-gateway` 和 C++ 管理服务的主机。先在普通用户目录构建并测试，然后将候选二进制安装到新的只读版本目录：
 

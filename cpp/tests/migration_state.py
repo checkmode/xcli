@@ -18,7 +18,11 @@ def snapshot(database, settings):
         users = [dict(row) for row in db.execute('SELECT * FROM users ORDER BY id')]
         identity = [{key: value for key, value in row.items() if key not in ('upload', 'download')} for row in users]
         sessions = {row['hash']: digest(dict(row)) for row in db.execute('SELECT * FROM sessions')}
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        security = {name: digest([dict(row) for row in db.execute('SELECT * FROM ' + name + ' ORDER BY rowid')])
+                    for name in ('mfa', 'recovery_codes') if name in tables}
         return {'identity_digest': digest(identity), 'admin_digest': digest([dict(row) for row in db.execute('SELECT * FROM admin')]),
+            'security': security,
             'sessions': sessions, 'settings_digest': hashlib.sha256(settings.read_bytes()).hexdigest(),
             'traffic': {row['id']: [row['upload'], row['download']] for row in users},
             'users': len(users), 'integrity': db.execute('PRAGMA quick_check').fetchone()[0]}
@@ -42,11 +46,12 @@ def main():
     previous = json.loads(args.snapshot.read_text())
     for key in ('identity_digest', 'admin_digest', 'settings_digest'):
         assert current[key] == previous[key], key + ' changed'
+    assert all(current['security'].get(key) == value for key, value in previous.get('security', {}).items()), 'MFA configuration changed'
     assert all(current['sessions'].get(key) == value for key, value in previous['sessions'].items()), 'Existing sessions changed'
     for uid, traffic in previous['traffic'].items():
         assert all(a >= b for a, b in zip(current['traffic'][uid], traffic)), 'Traffic counters went backwards'
     print(json.dumps({'identity_preserved': True, 'password_preserved': True, 'settings_preserved': True,
-        'existing_sessions_preserved': True, 'traffic_monotonic': True, 'users': current['users'], 'integrity': 'ok'}))
+        'existing_sessions_preserved': True, 'mfa_preserved': True, 'traffic_monotonic': True, 'users': current['users'], 'integrity': 'ok'}))
 
 
 if __name__ == '__main__':

@@ -41,7 +41,7 @@ std::string User::status(Int timestamp) const {
 Json User::public_json() const {return {{"id",id},{"name",name},{"enabled",enabled?1:0},{"quota",quota},{"expires",expires},{"upload",upload},{"download",download},{"created",created},{"status",status()}};}
 std::string User::email(std::string_view tag) const {return id+"."+uuid.substr(0,8)+"@"+std::string(tag);}
 
-Backend::Backend(Options options,std::unique_ptr<Core> core) : options_(std::move(options)),settings_(Json::parse(read_file(options_.settings))),core_(std::move(core)) {
+Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender) : options_(std::move(options)),settings_(Json::parse(read_file(options_.settings))),core_(std::move(core)),webhook_sender_(std::move(sender)) {
   for(const auto& key:{"domain","public_ip","origin","reality_sni","reality_public","short_id","ws_path"})
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
@@ -202,6 +202,7 @@ std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& ge
     if(column=="upload")up=sum_checked(up,delta);else down=sum_checked(down,delta);
   }
   database.run("INSERT OR REPLACE INTO metadata VALUES('activity_sample',?)",{std::to_string(stamp)});
+  database.run("INSERT INTO traffic_history VALUES(?,?,?) ON CONFLICT(ts) DO UPDATE SET upload=upload+excluded.upload,download=download+excluded.download",{stamp/60*60,up,down});
   database.run("INSERT INTO samples VALUES(?,?,?)",{now(),up,down});database.run("DELETE FROM samples WHERE ts<?",{now()-7*86400});return {up,down};
 }
 Json Backend::preflight() {
@@ -264,10 +265,19 @@ void Backend::start_worker() {
       if(worker_cv_.wait_for(guard,std::chrono::seconds(options_.poll_seconds),[this]{return stop_;}))break;
     }
   });
+  operations_worker_=std::thread([this] {
+    while(true) {
+      try {collect_operations();}catch(const std::exception&){std::cerr<<"Operations sampling failed; will retry\n";}
+      try {deliver_notifications();}catch(const std::exception&){std::cerr<<"Notification delivery failed; will retry\n";}
+      std::unique_lock guard(worker_mutex_);
+      if(worker_cv_.wait_for(guard,std::chrono::seconds(options_.poll_seconds),[this]{return stop_;}))break;
+    }
+  });
 }
 void Backend::stop_worker() {
   {std::lock_guard guard(worker_mutex_);stop_=true;}worker_cv_.notify_all();
   if(worker_.joinable())worker_.join();
+  if(operations_worker_.joinable())operations_worker_.join();
   if(lock_fd_>=0){::close(lock_fd_);lock_fd_=-1;}
 }
 }

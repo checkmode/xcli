@@ -97,7 +97,29 @@ void Database::initialize() {
       last_seen INTEGER NOT NULL DEFAULT 0,sampled INTEGER NOT NULL DEFAULT 0,
       upload_delta INTEGER NOT NULL DEFAULT 0,download_delta INTEGER NOT NULL DEFAULT 0,
       interval_seconds INTEGER NOT NULL DEFAULT 5,PRIMARY KEY(user_id,transport));
+    CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts);
+    CREATE TABLE IF NOT EXISTS traffic_history(ts INTEGER PRIMARY KEY,upload INTEGER NOT NULL,download INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS probe_history(ts INTEGER NOT NULL,transport TEXT NOT NULL,status TEXT NOT NULL,
+      https_ms REAL,udp_ms REAL,PRIMARY KEY(ts,transport));
+    CREATE TABLE IF NOT EXISTS notification_config(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,
+      url TEXT NOT NULL DEFAULT '',bearer TEXT NOT NULL DEFAULT '',signing TEXT NOT NULL DEFAULT '',
+      generation TEXT NOT NULL DEFAULT '',failures INTEGER NOT NULL DEFAULT 3,recoveries INTEGER NOT NULL DEFAULT 2);
+    INSERT OR IGNORE INTO notification_config(id) VALUES(1);
+    CREATE TABLE IF NOT EXISTS alarm_state(service TEXT PRIMARY KEY,bad INTEGER NOT NULL DEFAULT 0,
+      good INTEGER NOT NULL DEFAULT 0,firing INTEGER NOT NULL DEFAULT 0,since INTEGER NOT NULL DEFAULT 0,
+      last_sample INTEGER NOT NULL DEFAULT 0,last_seen INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,created INTEGER NOT NULL,service TEXT NOT NULL,
+      kind TEXT NOT NULL,payload TEXT NOT NULL,generation TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,
+      delivered INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',http_status INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS notification_pending ON notifications(status,next_attempt);
   )SQL");
+  Transaction migration(*this);
+  if(!one("SELECT value FROM metadata WHERE key='operations_history_imported'")) {
+    run("INSERT OR IGNORE INTO traffic_history SELECT (ts/60)*60,SUM(upload),SUM(download) FROM samples WHERE ts>=? GROUP BY ts/60",{now()-30*86400});
+    run("INSERT INTO metadata VALUES('operations_history_imported','1')");
+  }
+  migration.commit();
 }
 void Database::backup(const fs::path& destination) {
   int fd = ::open(destination.c_str(),O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);

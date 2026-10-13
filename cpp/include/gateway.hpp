@@ -115,6 +115,12 @@ struct User {
 };
 struct Counter { std::string name; Int value; };
 
+struct WebhookResult { int status = 0; std::string error; };
+using WebhookSender = std::function<WebhookResult(const Json&, const Json&)>;
+std::string validate_webhook_url(const std::string& url);
+bool public_webhook_address(const std::string& address);
+WebhookResult post_webhook(const Json& configuration, const Json& payload);
+
 class Core {
  public:
   virtual ~Core() = default;
@@ -128,7 +134,7 @@ std::unique_ptr<Core> make_core(const Options& options);
 
 class Backend {
  public:
-  explicit Backend(Options options, std::unique_ptr<Core> core = nullptr);
+  explicit Backend(Options options, std::unique_ptr<Core> core = nullptr, WebhookSender sender = post_webhook);
   ~Backend();
   Backend(const Backend&) = delete;
   Backend& operator=(const Backend&) = delete;
@@ -165,23 +171,31 @@ class Backend {
   std::string download_backup(const std::string& token, const std::string& id);
   void restore_backup(const std::string& token, const std::string& csrf, const Json& input);
   void scheduled_backup();
-  Json monitor_status();
+  Json monitor_status(Int timestamp = now());
   Json activity_status(Database& database);
+  Json history(const std::string& token, const std::string& range);
+  Json notification_status(const std::string& token);
+  void configure_notifications(const std::string& token, const std::string& csrf, const Json& input);
+  Json test_notification(const std::string& token, const std::string& csrf);
+  void collect_operations(Int timestamp = now());
+  void deliver_notifications(Int timestamp = now());
  private:
   Options options_;
   Json settings_;
   std::string secret_key_;
   std::optional<User> probe_user_;
   std::unique_ptr<Core> core_;
+  WebhookSender webhook_sender_;
   std::recursive_mutex mutation_mutex_;
   std::mutex health_mutex_, worker_mutex_;
   Json health_ = {{"core",false},{"updated",0},{"error","等待连接"},{"version","26.3.27"}};
   std::map<std::string, std::deque<std::chrono::steady_clock::time_point>> rate_;
   std::condition_variable worker_cv_;
-  std::thread worker_;
+  std::thread worker_, operations_worker_;
   bool stop_ = false;
   int lock_fd_ = -1;
   Int backup_retry_after_ = 0;
+  Int operations_started_ = now();
   Database db() const { return Database(options_.state / "gateway.sqlite"); }
   User get_user(Database& db, const std::string& id);
   void audit(Database& db, const std::string& action, const std::string& detail = "");
@@ -194,6 +208,11 @@ class Backend {
   Json list_backups();
   fs::path backup_path(const std::string& id) const;
   std::vector<User> desired_users(Database& database);
+  Json webhook_configuration(Database& database);
+  std::string queue_notification(Database& database, const std::string& service,
+    const std::string& kind, Int timestamp, Int started);
+  void observe_alarm(Database& database, const std::string& service, bool failed,
+    Int sample, Int timestamp, int failure_threshold, int recovery_threshold);
 };
 
 class HttpServer {

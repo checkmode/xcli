@@ -31,13 +31,13 @@ Json Backend::activity_status(Database& database) {
   }
   return result;
 }
-Json Backend::monitor_status() {
+Json Backend::monitor_status(Int timestamp) {
   Json unknown={{"scope","server"},{"status","unknown"},{"message","尚未收到服务器自检结果"},{"updated",0}};
   try {
     auto report=Json::parse(read_file(options_.monitor_report,32768));
     if(!report.is_object()||report.value("schema",0)!=1||!report.contains("updated")||!report.at("updated").is_number_integer())return unknown;
     Json result={{"scope",report.value("scope",std::string("server"))},{"updated",report.at("updated")},{"status",report.value("status",std::string("unknown"))},{"checks",Json::array()}};
-    auto age=now()-report.at("updated").get<Int>();
+    auto age=timestamp-report.at("updated").get<Int>();
     if(age>180||age< -60){result["status"]="stale";result["message"]="自检结果已过期，请检查探测服务";}
     for(const auto& check:report.value("checks",Json::array())) {
       if(result["checks"].size()>=8)break;
