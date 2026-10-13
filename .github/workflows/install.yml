@@ -53,6 +53,7 @@ jobs:
         run: |
           sudo systemctl --no-pager --full status nginx xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
           sudo journalctl --no-pager -n 60 -u xray-gateway-core -u xray-gateway-panel -u xray-gateway-monitor || true
+          sudo cat /var/lib/xray-gateway-monitor/report.json || true
           sudo sh -c 'for file in /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'
   upgrade:
     runs-on: ubuntu-26.04-arm
@@ -90,5 +91,6 @@ jobs:
         run: |
           sudo systemctl --no-pager --full status nginx xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
           sudo journalctl --no-pager -n 60 -u xray-gateway-core -u xray-gateway-panel -u xray-gateway-monitor || true
+          sudo cat /var/lib/xray-gateway-monitor/report.json || true
           sudo sh -c 'test ! -f /root/xcli-upgrade-ci/upgrade.log || tail -n 100 /root/xcli-upgrade-ci/upgrade.log'
           sudo sh -c 'for file in /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 60 "$file"; done'
