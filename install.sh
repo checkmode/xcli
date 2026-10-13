@@ -24,6 +24,8 @@ xcli 一键安装（无需 git clone）
   --yes                 确认安装；无人值守时还需提供全部必填参数
   --certificate FILE    使用已有受信任的证书链（与 --private-key 配对）
   --private-key FILE    已有证书的私钥；文件须可供 root 读取
+  --tune-network        可选 BBR / fq 与 UDP 缓冲调优，保存原值以便回退
+  --no-tune-network     保留现有网络参数（无人值守时默认）
   --check               只检查环境、端口和 DNS，不安装软件或改配置
   --ref COMMIT          安装指定的 40 位 Git 提交，默认解析 main
   --help                显示帮助

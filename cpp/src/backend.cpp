@@ -44,6 +44,8 @@ std::string User::email(std::string_view tag) const {return id+"."+uuid.substr(0
 Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender) : options_(std::move(options)),settings_(Json::parse(read_file(options_.settings))),core_(std::move(core)),webhook_sender_(std::move(sender)) {
   for(const auto& key:{"domain","public_ip","origin","reality_sni","reality_public","short_id","ws_path"})
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
+  auto hy2=settings_.value("hysteria2_port",Json(0));
+  if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
   {auto database=db();database.initialize();}
   if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";
@@ -57,6 +59,11 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
   if(!core_&&!options_.offline)core_=make_core(options_);
 }
 Backend::~Backend() {stop_worker();}
+std::vector<std::string> Backend::transports() const {
+  std::vector<std::string> result={"reality","websocket"};
+  if(settings_.value("hysteria2_port",0)>0)result.push_back("hysteria2");
+  return result;
+}
 User Backend::get_user(Database& database,const std::string& id) {
   auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{id});
   if(!row)throw HttpError(404,"用户不存在");
@@ -119,7 +126,7 @@ Json Backend::overview(const std::string& token) {
   auto samples=database.all("SELECT (ts/60)*60 AS ts,SUM(upload) AS upload,SUM(download) AS download FROM samples WHERE ts>? GROUP BY ts/60 ORDER BY ts/60",{now()-3600});
   auto events=database.all("SELECT ts,action,detail FROM events ORDER BY id DESC LIMIT 30");database.exec("COMMIT");
   return {{"health",health()},{"activity",activity_status(database)},{"monitor",monitor_status()},{"users",users},{"totals",*totals},{"samples",samples},{"events",events},
-    {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]}}}};
+    {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]},{"transports",transports()},{"hysteria2_port",settings_.value("hysteria2_port",0)}}}};
 }
 Json Backend::create_user(const std::string& token,const std::string& csrf,const Json& input) {
   auto values=validated_user(input);std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
@@ -157,12 +164,16 @@ Json Backend::links_for(const User& user) const {
   auto s=[&](const char* key){return settings_.at(key).get<std::string>();};
   std::string reality="vless://"+user.uuid+"@"+s("public_ip")+":443?encryption=none&fp=chrome&sni="+url_quote(s("reality_sni"),true)+"&pbk="+url_quote(s("reality_public"),true)+"&sid="+url_quote(s("short_id"),true)+"&type=tcp&security=reality&flow=xtls-rprx-vision#"+url_quote(user.name+" · REALITY",false,true);
   std::string websocket="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(s("ws_path"),true)+"#"+url_quote(user.name+" · HTTPS",false,true);
-  return {{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
+  Json result={{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
+  if(auto port=settings_.value("hysteria2_port",0);port>0)
+    result["hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+s("domain")+":"+std::to_string(port)+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · Hysteria 2",false,true);
+  return result;
 }
 Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
 std::string Backend::qr(const std::string& token,const std::string& id,const std::string& kind) {
-  session(token);if(kind!="reality"&&kind!="websocket"&&kind!="subscription")throw HttpError(404,"Not Found");
-  auto database=db();return qr_png(links_for(get_user(database,id)).at(kind).get<std::string>());
+  session(token);auto database=db();auto node=links_for(get_user(database,id));
+  if(!node.contains(kind))throw HttpError(404,"Not Found");
+  return qr_png(node.at(kind).get<std::string>());
 }
 void Backend::change_password(const std::string& token,const std::string& csrf,const Json& input) {
   fields(input,{"current_password","new_password","code"},{"current_password","new_password"});
@@ -175,11 +186,12 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
   static const std::regex format("[A-Za-z0-9_-]{43}");if(!std::regex_match(token,format))throw HttpError(404,"Not Found");
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");auto node=links_for(user);
-  return {base64(node["reality"].get<std::string>()+"\n"+node["websocket"].get<std::string>()+"\n"),
+  std::string body;for(const auto& kind:transports())body+=node.at(kind).get<std::string>()+"\n";
+  return {base64(body),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& generation,const std::vector<Counter>& counters) {
-  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket)>>>traffic>>>(uplink|downlink))");
+  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2)>>>traffic>>>(uplink|downlink))");
   Int up=0,down=0;auto stamp=now();
   auto previous_sample=database.one("SELECT value FROM metadata WHERE key='activity_sample'");
   Int interval=previous_sample?std::clamp<Int>(stamp-std::stoll(previous_sample->at("value").get<std::string>()),1,300):options_.poll_seconds;
@@ -210,7 +222,7 @@ Json Backend::preflight() {
   std::lock_guard guard(mutation_mutex_);auto database=db();auto all=desired_users(database);auto gen=core_->generation();
   Json result={{"generation",gen},{"active_users",0},{"pending_additions",0},{"pending_revocations",0},{"database_integrity",database.one("PRAGMA quick_check")->begin().value()}};
   for(const auto& user:all)if(user.active()&&user.id!="health-probe")result["active_users"]=result["active_users"].get<int>()+1;
-  for(const std::string tag:{"reality","websocket"}) {
+  for(const auto& tag:transports()) {
     auto current=core_->users(tag);std::map<std::string,std::string> desired;
     for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user.uuid);
     for(const auto& [email,id]:current)if(!desired.contains(email)||desired[email]!=id)result["pending_revocations"]=result["pending_revocations"].get<int>()+1;
@@ -225,11 +237,11 @@ void Backend::poll_once() {
   // Serialize against reset/rotation so each generation is accounted for once.
   std::lock_guard guard(mutation_mutex_);auto gen=core_->generation();auto counters=core_->counters();
   std::map<std::string,std::map<std::string,std::string>> current;
-  for(const std::string tag:{"reality","websocket"})current[tag]=core_->users(tag);
+  for(const auto& tag:transports())current[tag]=core_->users(tag);
   if(core_->generation()!=gen)throw std::runtime_error("Core changed while sampling");
   auto database=db();Transaction transaction(database);auto [up,down]=apply_stats(database,gen,counters);auto all=desired_users(database);
   bool revoke=false;std::vector<std::pair<std::string,User>> additions;
-  for(const std::string tag:{"reality","websocket"}) {
+  for(const auto& tag:transports()) {
     std::map<std::string,User> desired;
     for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user);
     for(const auto& [email,id]:current[tag])if(!desired.contains(email)||desired.at(email).uuid!=id)revoke=true;
@@ -241,7 +253,7 @@ void Backend::poll_once() {
     core_->restart(gen);auto event_db=db();audit(event_db,"core_restart","凭据撤销、停用、到期或配额触发；现有连接将重新建立");
   } else for(const auto& [tag,user]:additions)core_->add_user(tag,user);
   std::lock_guard health_guard(health_mutex_);
-  health_={{"core",!revoke},{"updated",now()},{"error",revoke?"正在应用访问权限":""},{"version","26.3.27"},
+  health_={{"core",!revoke},{"updated",now()},{"error",revoke?"正在应用访问权限":""},{"version",settings_.value("xray_version","26.3.27")},
     {"upload_rate",static_cast<double>(up)/options_.poll_seconds},{"download_rate",static_cast<double>(down)/options_.poll_seconds}};
 }
 void Backend::start_worker() {

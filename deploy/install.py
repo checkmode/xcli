@@ -21,17 +21,20 @@ import zipfile
 from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
                        initialize_admin, monitor_config, private_file, public_ipv4,
                        render_firewall, render_nginx, settings_for, write_json)
+from certificate import install_tls
 
 Path = pathlib.Path
 SERVICES = ('xray-gateway-firewall', 'xray-gateway-core', 'xray-gateway-panel', 'xray-gateway-monitor')
 OWNED_PATHS = ('/etc/xray-gateway', '/etc/xcli-monitor', '/var/lib/xray-gateway',
                '/var/lib/xray-gateway-monitor', '/usr/local/lib/xray-gateway',
-               '/opt/xray-gateway', '/root/xray-gateway-admin.txt', '/etc/nginx')
+               '/opt/xray-gateway', '/root/xray-gateway-admin.txt', '/etc/nginx',
+               '/etc/sysctl.d/91-xray-gateway-network.conf', '/etc/modules-load.d/xray-gateway-network.conf',
+               '/etc/systemd/system/xray-gateway-network.service')
 PORTS = (80, 443, 8080, 8443, 10080, 10085, 10443)
 PACKAGES = ('g++ cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-dev '
             'libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev '
             'libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc '
-            'nginx libnginx-mod-stream certbot ca-certificates curl iptables '
+            'nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod '
             'python3-fastapi python3-qrcode python3-pil').split()
 
 
@@ -48,6 +51,8 @@ def arguments(argv=None):
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--certificate', type=Path)
     parser.add_argument('--private-key', type=Path)
+    parser.add_argument('--tune-network', action=argparse.BooleanOptionalAction, default=None,
+                        help='可选 BBR / fq 和至少 16 MiB UDP 缓冲上限；保存原值以便回退')
     return parser.parse_args(argv)
 
 
@@ -83,6 +88,14 @@ def check_ports(ports=PORTS):
                 connection.bind(('0.0.0.0', port))
             except OSError as error:
                 raise ValueError(f'TCP {port} 已被占用或无法绑定，请先处理端口冲突') from error
+
+
+def check_udp_port(port=443):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+        try:
+            connection.bind(('0.0.0.0', port))
+        except OSError as error:
+            raise ValueError(f'UDP {port} 已被占用或无法绑定，请先处理端口冲突') from error
 
 
 def existing_paths(root=Path('/')):
@@ -122,6 +135,7 @@ def preflight(args):
             if subprocess.run(['iptables', '-w', '-S', chain], capture_output=True, timeout=15).returncode == 0:
                 raise ValueError(f'防火墙链 {chain} 已存在，拒绝覆盖')
     check_ports()
+    check_udp_port()
     if bool(args.certificate) != bool(args.private_key):
         raise ValueError('--certificate 和 --private-key 必须一起提供')
     if args.commit != 'local' and not re.fullmatch('[0-9a-f]{40}', args.commit):
@@ -174,6 +188,9 @@ def prepare_input(args):
                 pass
     if not dns:
         raise ValueError('需要至少一个可用的 IPv4 系统 DNS 服务器')
+    if args.tune_network is None:
+        args.tune_network = False if args.yes or args.check else ask(
+            '启用可回退网络调优（BBR、fq、至少 16 MiB UDP 缓冲上限）？yes/no', 'no') == 'yes'
     return dns
 
 
@@ -225,6 +242,9 @@ systemctl disable --now xray-gateway-monitor xray-gateway-panel xray-gateway-cor
 systemctl disable --now xray-gateway-firewall 2>/dev/null || true
 if [ -x /opt/xray-gateway/deploy/firewall.sh ]; then /opt/xray-gateway/deploy/firewall.sh stop; fi
 systemctl disable --now nginx 2>/dev/null || true
+if [ -f /etc/xray-gateway/network-before.json ]; then
+    python3 /opt/xray-gateway/deploy/network.py restore || echo '网络参数自动恢复失败，请检查保留的快照。'
+fi
 backup=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$backup/nginx.conf.before" ]; then cp "$backup/nginx.conf.before" /etc/nginx/nginx.conf; fi
 echo '新安装的服务已停止；账号、数据库、证书和日志保留，未卸载系统软件包。'
@@ -275,6 +295,8 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             self.directory(app / directory)
         for name in ('probe.py', 'gatewayctl.py'):
             self.copy(self.args.source / 'scripts' / name, app / 'scripts' / name)
+        self.copy(self.args.source / 'deploy/certificate.py', app / 'deploy/certificate.py')
+        self.copy(self.args.source / 'deploy/network.py', app / 'deploy/network.py')
         config = self.directory('/etc/xray-gateway', 0o750, group='xgateway')
         state = self.directory('/var/lib/xray-gateway', 0o700, 'xgateway', 'xgateway')
         monitor = self.directory('/etc/xcli-monitor', 0o750, group='xgmonitor')
@@ -296,7 +318,6 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         private_file(app / 'deploy/firewall.sh', render_firewall(self.args.public_ip, self.resolvers), 0o755)
         for tool, name in (('iptables-save', 'iptables.v4.before'), ('ip6tables-save', 'iptables.v6.before')):
             private_file(self.backup / name, self.run([tool], capture=True))
-        self.run(['runuser', '-u', 'xgateway', '--', base / 'xray', 'run', '-test', '-config', config / 'core.json'])
         for service in SERVICES:
             self.copy(self.args.source / 'deploy' / (service + '.service'),
                       Path('/etc/systemd/system') / (service + '.service'))
@@ -341,8 +362,12 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             live = Path('/etc/letsencrypt/live') / self.args.domain
             cert, key = live / 'fullchain.pem', live / 'privkey.pem'
             hook = self.directory('/etc/letsencrypt/renewal-hooks/deploy') / 'xcli-nginx'
-            private_file(hook, '#!/bin/sh\nset -eu\n/usr/sbin/nginx -t\n/usr/bin/systemctl reload nginx\n', 0o755)
+            private_file(hook, '#!/bin/sh\nset -eu\n/usr/bin/python3 /opt/xray-gateway/deploy/certificate.py\n'
+                '/usr/sbin/nginx -t\n/usr/bin/systemctl reload nginx\n', 0o755)
             self.run(['systemctl', 'enable', '--now', 'certbot.timer'])
+        install_tls(self.args.domain, cert, key, Path('/etc/xray-gateway/hysteria-tls'), 'xgateway')
+        self.run(['runuser', '-u', 'xgateway', '--', '/usr/local/lib/xray-gateway/xray', 'run', '-test',
+                  '-config', '/etc/xray-gateway/core.json'])
         self.nginx_config(cert, key)
 
     def start_and_verify(self):
@@ -378,7 +403,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             if probe.is_file():
                 report = json.loads(probe.read_text())
                 if report.get('status') == 'healthy':
-                    print('HTTPS、核心管理接口及两个入口的 HTTPS / UDP 自检均通过。', flush=True)
+                    print('HTTPS、核心管理接口及三个入口的 HTTPS / UDP 自检均通过。', flush=True)
                     return True
             time.sleep(1)
         print('管理服务和 HTTPS 已就绪，但节点自检尚未全部通过；请登录查看健康监测和入口可达性。', flush=True)
@@ -389,6 +414,9 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             self.packages_and_build()
             self.install_files()
             self.certificate()
+            if self.args.tune_network:
+                self.step('应用可回退网络调优')
+                self.run(['python3', '/opt/xray-gateway/deploy/network.py', 'apply'])
             healthy = self.start_and_verify()
         except (Exception, KeyboardInterrupt):
             if self.packages_started:
@@ -412,8 +440,9 @@ def main(argv=None):
     print(f'检查通过：Ubuntu {platform.freedesktop_os_release()["VERSION_ID"]} / {arch}\n'
           f'面板：https://{args.domain}  公网 IPv4：{args.public_ip}\n'
           f'REALITY 目标：{args.reality_sni}\n'
+          f'网络调优：{"启用并保存原值" if args.tune_network else "保留现有参数"}\n'
           '将安装依赖、Xray、C++ 面板、Nginx、专用账号、探测服务及专属防火墙规则。\n'
-          '请确保云安全组和上游网络允许 TCP 80 / 443 入站。', flush=True)
+          '请确保云安全组和上游网络允许 TCP 80 / 443 及 UDP 443 入站。', flush=True)
     if args.check:
         print('只检查模式结束；未安装软件或修改系统配置。')
         return 0

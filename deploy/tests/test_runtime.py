@@ -26,7 +26,13 @@ class RuntimeTests(unittest.TestCase):
 
     def test_xray_accepts_generated_core_config(self):
         config = self.root / 'core.json'
-        provision.write_json(config, provision.core_config(self.settings))
+        cert, key = self.root / 'cert.pem', self.root / 'key.pem'
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+                        '-subj', '/CN=panel.example.com', '-keyout', str(key), '-out', str(cert)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        generated = provision.core_config(self.settings)
+        generated['inbounds'][-1] = provision.hysteria_inbound(44443, cert, key)
+        provision.write_json(config, generated)
         subprocess.run([os.environ['XG_TEST_XRAY'], 'run', '-test', '-config', str(config)],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 

@@ -4,13 +4,15 @@
 
 自托管的 Xray 节点管理面板。C++20 后端负责用户、订阅、用量、二次验证和加密备份；官方 Xray-core 负责代理协议与数据转发。前端使用原生 HTML、CSS 和 JavaScript，不加载第三方资源。
 
-当前版本为 1.2.0，已在 Ubuntu 26.04 ARM64、Xray-core v26.3.27 上验证。提供 REALITY / XTLS Vision 和 WebSocket / TLS 两个 VLESS 入口。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
+当前版本为 1.3.0，提供 REALITY / XTLS Vision、WebSocket / TLS 两个 VLESS 入口，以及 Hysteria 2 / QUIC 入口。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
+
+安装器固定使用官方 Xray-core **v26.10.10（上游预发布版本）**并校验文件 SHA-256。旧版 v26.3.27 在本项目的真实核心测试中出现 Hysteria 2 UDP 大报文损坏，新版通过了 64～4096 字节随机报文逐字节校验，以及三个入口、计费和权限撤销测试。升级脚本保留旧核心供回退。上游版本状态见 [v26.10.10 发布页](https://github.com/XTLS/Xray-core/releases/tag/v26.10.10)。
 
 ## 一键安装
 
 准备一台**全新的 Ubuntu 24.04 或 26.04 服务器**，支持 AMD64 / ARM64。需要 root 或 sudo 权限、systemd、公网 IPv4，以及能访问 Ubuntu 软件源、GitHub 和 Let's Encrypt 的网络。建议至少 2 GB 内存并预留 4 GB 磁盘空间用于编译。
 
-先把域名的 A 记录指向这台服务器的公网 IPv4；只保留该地址，移除 AAAA 记录，并关闭 CDN 代理。云安全组和上游防火墙须放行 TCP 80、443。随后在服务器终端执行：
+先把域名的 A 记录指向这台服务器的公网 IPv4；只保留该地址，移除 AAAA 记录，并关闭 CDN 代理。云安全组和上游防火墙须放行 TCP 80、443 及 UDP 443。Hysteria 2 使用 UDP 443，可以与 HTTPS 的 TCP 443 同时运行。随后在服务器终端执行：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash
@@ -24,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 sudo cat /root/xray-gateway-admin.txt
 ```
 
-登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx。
+登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx，同时更新 Hysteria 2 专用证书副本；Xray 在证书重载周期内（最长约 1 小时）读取新文件。
 
 ### 无人值守与预检查
 
@@ -43,13 +45,21 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
   --domain panel.example.com --public-ip 203.0.113.10 --check --yes
 ```
 
-`--reality-sni` 可指定 REALITY 目标域名，默认 `www.bing.com`，不能与面板域名相同。需要使用已有证书时，传入 `--certificate /path/to/fullchain.pem --private-key /path/to/privkey.pem`，此时无需邮箱和服务条款参数。已有证书必须与域名匹配、私钥未加密且证书链受系统信任；安装器会复制到 `/etc/xray-gateway/tls/`，**不会自动续期这类证书**，更新后需检查并重载 Nginx。查看全部选项可在命令末尾加 `-s -- --help`。
+`--reality-sni` 可指定 REALITY 目标域名，默认 `www.bing.com`，不能与面板域名相同。需要使用已有证书时，传入 `--certificate /path/to/fullchain.pem --private-key /path/to/privkey.pem`，此时无需邮箱和服务条款参数。已有证书必须与域名匹配、私钥未加密且证书链受系统信任；安装器会复制到 `/etc/xray-gateway/tls/`，**不会自动续期这类证书**。更新该目录内的证书后，执行以下命令同步 Hysteria 2 证书并重载 Nginx：
+
+```sh
+sudo python3 /opt/xray-gateway/deploy/certificate.py \
+  --certificate /etc/xray-gateway/tls/fullchain.pem --private-key /etc/xray-gateway/tls/privkey.pem
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`--tune-network` 启用下文的可回退网络调优，`--no-tune-network` 保留已有参数。交互安装会询问，默认不启用；无人值守安装也默认不启用。查看全部选项可在命令末尾加 `-s -- --help`。
 
 ### 安装保护与失败处理
 
 安装器专用于全新服务器。发现已有 xcli 数据、Nginx 配置、同名服务账号或占用端口时会停止，不覆盖现有部署。已有用户请按后面的“升级已有部署”操作，不要重新运行安装器。
 
-安装结束会验证管理服务、受信任的 HTTPS、核心账号同步，以及两个入口的 HTTPS / UDP 自检。若管理服务正常但节点自检尚未通过，保留已安装服务并返回退出码 `2`，请登录查看健康监测；这不表示完整节点验证成功。
+安装结束会验证管理服务、受信任的 HTTPS、核心账号同步，以及三个入口的 HTTPS / UDP 自检。若管理服务正常但节点自检尚未通过，保留已安装服务并返回退出码 `2`，请登录查看健康监测；这不表示完整节点验证成功。
 
 安装日志位于 `/root/xcli-install-时间/install.log`。中途失败会停用本次新增服务、撤销本次专属防火墙规则，保留凭据、数据库、证书和日志；已安装的系统软件包也会保留。该目录内的 `rollback.sh` 可手动停用本次安装。失败后先检查日志，不要删除配置后盲目重试；再次运行会拒绝覆盖保留的数据。
 
@@ -60,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 | 功能 | 行为 |
 | --- | --- |
 | 用户与订阅 | 每位用户独立 UUID、订阅令牌、二维码、配额和到期时间；支持停用、删除、流量清零和凭据轮换 |
-| 健康监测 | 每分钟通过两个真实公网入口验证 HTTPS 出口 IP 和 SOCKS5 UDP DNS；失败、未知及过期结果分别显示 |
+| 健康监测 | 每分钟通过三个真实公网入口验证 HTTPS 出口 IP 和 SOCKS5 UDP DNS；失败、未知及过期结果分别显示 |
 | 历史趋势 | 保留最近 30 天的流量、探测成功率和 HTTPS / UDP 延迟，支持 1 小时、24 小时、7 天和 30 天范围 |
 | 故障通知 | 通用 HTTPS JSON Webhook，覆盖入口探测、探测结果中断、核心管理接口及本地自动备份；支持恢复通知、重试、Bearer Token 和消息签名 |
 | 设备活动 | 按用户及入口展示最近产生流量的时间与上传、下载速率；60 秒内有流量标记为近期活跃 |
@@ -74,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 
 ## 使用面板
 
-登录后在“用户管理”中创建用户，再点击“连接”获取订阅地址或二维码。配额使用十进制 GB，0 表示不限；到期时间留空表示不过期。订阅返回 Base64 编码的 VLESS URI 列表，并附带 `subscription-userinfo` 用量信息。
+登录后在“用户管理”中创建用户，再点击“连接”获取订阅地址或二维码。配额使用十进制 GB，0 表示不限；到期时间留空表示不过期。订阅返回 Base64 编码的两个 VLESS URI 和一个 `hysteria2://` URI，并附带 `subscription-userinfo` 用量信息。三个入口共享同一用户的配额和到期限制；Hysteria 2 使用该用户 UUID 作为认证密码，轮换凭据时一并替换。旧的双入口配置仍可使用，只有启用 Hysteria 2 后才增加第三个节点。
 
 重命名或调整配额不会更改凭据。“重置凭据”同时替换 UUID 和订阅令牌，使旧节点与旧订阅失效。订阅地址、二维码和探测配置均包含访问凭据，应保存在私密位置。
 
@@ -104,7 +114,7 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 | 字段或请求头 | 含义 |
 | --- | --- |
 | `schema`、`id` | 消息格式版本（当前为 1）及事件编号；重试使用同一编号和正文 |
-| `site`、`service` | 站点域名及服务标识：`reality`、`websocket`、`probe`、`core`、`backup` 或 `test` |
+| `site`、`service` | 站点域名及服务标识：`reality`、`websocket`、`hysteria2`、`probe`、`core`、`backup` 或 `test` |
 | `event` | `fault`、`recovery` 或 `test` |
 | `title`、`message` | 可供展示的中文说明，不包含用户凭据或代理访问记录 |
 | `time`、`started`、`duration_seconds` | Unix 秒时间、故障起始时间及持续秒数 |
@@ -163,7 +173,7 @@ sudo apt-get install g++ cmake ninja-build pkg-config libcpp-httplib-dev \
 bash deploy/build-cpp.sh build
 ```
 
-Xray gRPC 协议文件固定为 v26.3.27，许可证和上游 SHA-256 清单位于 `cpp/proto/`。构建不下载源代码或执行远程安装脚本。
+Xray gRPC 协议文件以 v26.3.27 为基线，所用用户管理、统计及 Hysteria 2 账号消息已在 v26.10.10 上验证兼容；许可证和上游 SHA-256 清单位于 `cpp/proto/`。构建不下载源代码或执行远程安装脚本。
 
 HTTP 兼容性测试还需要 Python 的 pytest、FastAPI、Pydantic 和二维码依赖，以及 `zbarimg`。可在发行版环境中安装 `python3-pytest python3-fastapi python3-qrcode python3-pil zbar-tools`。核心集成测试需要已安装的官方 Xray 二进制。
 
@@ -188,6 +198,23 @@ sudo bash cpp/tests/run-webhook-tests.sh "$PWD" "$PWD/build/xray-gateway-panel"
 ```
 
 ## 升级已有部署
+
+### 1.2.0 升级到 1.3.0
+
+先放行目标服务器的 UDP 443，并按“构建与测试”准备已验证的 1.3.0 二进制。以下命令在已有 1.2.0 部署上执行；备份目录必须不存在：
+
+```sh
+sudo python3 deploy/upgrade-hysteria.py upgrade --source "$PWD" \
+  --candidate "$PWD/build/xray-gateway-panel" --backup /root/xcli-hysteria-upgrade-new
+```
+
+脚本校验并安装固定版本核心，添加 Hysteria 2 入口，更新订阅、探测服务和本机专属防火墙规则。它保留现有用户、订阅令牌、REALITY 密钥、WebSocket 路径、二次验证及累计流量，并重启核心、面板和探测服务，已有连接会短暂重连。Nginx 无需重启。使用自备证书的部署需同时传入 `--certificate` 和 `--private-key`；此类证书继续由原有流程更新。
+
+脚本先保存配置、旧核心和数据库一致性快照，切换失败会自动回退。也可执行 `/root/xcli-hysteria-upgrade-new/rollback.sh` 回退到 1.2.0；回退保留当前数据库，包括升级后新增用户和累计流量，第三个入口停止提供服务。升级成功后仍需检查三个入口的服务端和外部探测；脚本不会修改云安全组。客户端更新原订阅即可获取 Hysteria 2，客户端须支持该协议和所在网络的 UDP 443 通信。
+
+### 较早版本的升级路径
+
+以下历史脚本分别要求对应版本的源码及二进制。先完成 1.1、1.2 升级，再使用当前版本的 Hysteria 2 升级脚本。
 
 已运行 1.1.0、完成探测服务和二次验证支持配置的主机，使用 `deploy/upgrade-operations.sh` 升级到 1.2.0。先构建并通过测试，再选择未使用的版本目录和 root 备份目录：
 
@@ -234,7 +261,21 @@ python3 scripts/probe.py \
   --xray /path/to/xray --scope external --once
 ```
 
-成功时返回 `status: healthy` 和两个入口的 HTTPS、UDP 延迟，退出码为 0；失败为非零退出码。去掉 `--once` 可持续探测，通过 `--output /existing/private/directory/report.json` 写入结果。输出不包含节点凭据或访问内容。
+成功时返回 `status: healthy` 和所有已启用入口的 HTTPS、UDP 延迟，退出码为 0；失败为非零退出码。探测配置包含 `hysteria2_port: 443` 时检查三个入口，旧配置仍检查两个。去掉 `--once` 可持续探测，通过 `--output /existing/private/directory/report.json` 写入结果。输出不包含节点凭据或访问内容。
+
+## 可回退网络调优
+
+TCP 使用 Linux 内核 BBR，Hysteria 2 使用 Xray 的 QUIC 用户态 BBR；`net.ipv4.tcp_congestion_control` 只控制 TCP。可选调优会把新建队列默认值设置为 `fq`，将 UDP 收发缓冲上限提高至至少 16 MiB，并为可完整恢复的简单 `pfifo_fast` / `fq_codel` 实际网卡队列切换为 `fq`。已有更大的缓冲上限和复杂队列结构保留；不修改 MTU 或 TCP 自动调节范围，也不替换内核。
+
+已有部署可先查看当前设置，再带自动恢复计时器应用。确认 SSH 和三个节点正常后，在 120 秒内执行 `confirm`；超时会恢复原值：
+
+```sh
+sudo python3 /opt/xray-gateway/deploy/network.py status
+sudo python3 /opt/xray-gateway/deploy/network.py apply --rollback-after 120
+sudo python3 /opt/xray-gateway/deploy/network.py confirm
+```
+
+原参数和实际队列快照保存在 `/etc/xray-gateway/network-before.json`，重启后由专用 systemd 服务重新应用。随时可以运行 `sudo python3 /opt/xray-gateway/deploy/network.py restore` 恢复；工具会保留快照，并拒绝覆盖后来被外部修改的托管文件或复杂队列。若还要回退 1.3.0 升级，应先恢复网络参数，再执行升级回退脚本。调优改善的是拥塞控制与缓冲条件，实际速度仍需按客户端网络测量。
 
 ## 运行边界与维护
 

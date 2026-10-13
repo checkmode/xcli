@@ -61,7 +61,12 @@ class ConfigurationTests(unittest.TestCase):
     def test_core_private_destinations_and_api_binding(self):
         config = provision.core_config(self.settings)
         self.assertEqual(config['api']['listen'], '127.0.0.1:10085')
-        self.assertTrue(all(item['listen'] == '127.0.0.1' for item in config['inbounds']))
+        self.assertTrue(all(item['listen'] == '127.0.0.1' for item in config['inbounds'] if item['tag'] != 'hysteria2'))
+        hy2 = next(item for item in config['inbounds'] if item['tag'] == 'hysteria2')
+        self.assertEqual(hy2['listen'], '0.0.0.0')
+        self.assertEqual(hy2['settings']['clients'], [])
+        self.assertEqual(hy2['streamSettings']['network'], 'hysteria')
+        self.assertEqual(hy2['streamSettings']['finalmask']['quicParams']['congestion'], 'bbr')
         blocked = [ipaddress.ip_network(value) for value in config['routing']['rules'][0]['ip']]
         for value in ('8.8.4.4', '169.254.169.254', '10.1.2.3', '192.168.1.1', 'fd00::1', '::1'):
             self.assertTrue(any(ipaddress.ip_address(value) in net for net in blocked))
@@ -74,6 +79,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertTrue(all('--dport 53' in line for line in matching))
         self.assertIn('--dst-type LOCAL -j REJECT', result)
         self.assertIn('8.8.4.4/32', result)
+        self.assertIn('-p udp --dport 443 -j ACCEPT', result)
         subprocess.run(['sh', '-n'], input=result.encode(), check=True)
         with self.assertRaises(ipaddress.AddressValueError):
             provision.render_firewall('8.8.4.4', ['127.0.0.53;evil'])
@@ -119,6 +125,12 @@ class PreflightTests(unittest.TestCase):
             listener.listen()
             with self.assertRaises(ValueError):
                 install.check_ports([listener.getsockname()[1]])
+
+    def test_occupied_udp_port_is_detected(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+            listener.bind(('127.0.0.1', 0))
+            with self.assertRaises(ValueError):
+                install.check_udp_port(listener.getsockname()[1])
 
     def test_dns_rejects_multi_address_and_ipv6(self):
         def records(four, six):

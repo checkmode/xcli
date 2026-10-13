@@ -140,6 +140,7 @@ class Backend {
   Backend& operator=(const Backend&) = delete;
   const Options& options() const { return options_; }
   const Json& settings() const { return settings_; }
+  std::vector<std::string> transports() const;
   void start_worker();
   void stop_worker();
   void poll_once();

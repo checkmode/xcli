@@ -28,6 +28,15 @@ def main():
         assert response.status == 200 and login.get('csrf')
     with client.open('https://' + domain + '/api/overview', timeout=15) as response:
         assert response.status == 200
+        overview = json.load(response)
+        assert overview['server']['transports'] == ['reality', 'websocket', 'hysteria2']
+        assert overview['monitor']['status'] == 'healthy'
+        assert {check['transport'] for check in overview['monitor']['checks']} == {'reality', 'websocket', 'hysteria2'}
+    for name in ('fullchain.pem', 'privkey.pem'):
+        assert (pathlib.Path('/etc/xray-gateway/hysteria-tls') / name).stat().st_mode & 0o777 == 0o640
+    network = json.loads(pathlib.Path('/etc/xray-gateway/network-before.json').read_text())
+    for name, value in network['plan']['values'].items():
+        assert subprocess.check_output(['sysctl', '-n', name], text=True).strip() == value
     assert any(item.secure for item in cookie)
     with contextlib.closing(sqlite3.connect('/var/lib/xray-gateway/gateway.sqlite')) as db:
         assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
@@ -48,6 +57,10 @@ def main():
         assert subprocess.run(['iptables', '-w', '-S', chain], capture_output=True).returncode != 0
     for name, digest in before.items():
         assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == digest
+    for name, value in network['before']['sysctl'].items():
+        assert subprocess.check_output(['sysctl', '-n', name], text=True).strip() == value
+    assert not pathlib.Path('/etc/xray-gateway/network-before.json').exists()
+    assert not pathlib.Path('/etc/sysctl.d/91-xray-gateway-network.conf').exists()
     print('Rollback stopped only the new services, removed owned firewall chains and retained credentials and settings.')
 
 

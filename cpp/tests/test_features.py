@@ -150,7 +150,8 @@ def test_monitor_fresh_stale_corrupt_and_no_credentials(fixture):
     report = fixture['tmp'] / 'report.json'
     assert c.json('/api/overview')['monitor']['status'] == 'unknown'
     payload = {'schema': 1, 'scope': 'server', 'updated': int(time.time()), 'status': 'healthy', 'secret': 'do-not-expose',
-               'checks': [{'transport': 'reality', 'status': 'healthy', 'https_ms': 100, 'udp_ms': 50, 'uuid': 'do-not-expose'}]}
+               'checks': [{'transport': kind, 'status': 'healthy', 'https_ms': 100, 'udp_ms': 50, 'uuid': 'do-not-expose'}
+                          for kind in ('reality', 'websocket')]}
     report.write_text(json.dumps(payload))
     value = c.json('/api/overview')['monitor']
     assert value['status'] == 'healthy' and 'do-not-expose' not in json.dumps(value)

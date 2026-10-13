@@ -1,6 +1,6 @@
 'use strict';
 let historyData=null, historyRequest=0, notificationBusy=false;
-const serviceNames={reality:'REALITY 入口',websocket:'WebSocket / TLS 入口',probe:'探测结果采集',core:'Xray 管理接口',backup:'本地自动加密备份',test:'通知通道测试'};
+const serviceNames={reality:'REALITY 入口',websocket:'WebSocket / TLS 入口',hysteria2:'Hysteria 2 入口',probe:'探测结果采集',core:'Xray 管理接口',backup:'本地自动加密备份',test:'通知通道测试'};
 const deliveryNames={pending:'等待投递',delivered:'已投递',failed:'投递失败',cancelled:'已取消',superseded:'已被新状态替代'};
 const presentDate=stamp=>stamp?date(stamp):'—';
 const milliseconds=n=>n===null||n===undefined?'—':Number(n).toFixed(0)+' ms';
@@ -15,8 +15,8 @@ async function loadHistory(){
 }
 function renderHistory(){
   if(!historyData)return;
-  const h=historyData,totals=h.traffic.reduce((sum,p)=>({up:sum.up+p.upload,down:sum.down+p.download}),{up:0,down:0});
-  $('#history-summary').innerHTML=['reality','websocket'].map(kind=>{
+  const h=historyData,kinds=h.transports||enabledTransports(),totals=h.traffic.reduce((sum,p)=>({up:sum.up+p.upload,down:sum.down+p.download}),{up:0,down:0});
+  $('#history-summary').innerHTML=kinds.map(kind=>{
     const s=h.summary.find(row=>row.transport===kind),known=s?(s.healthy+s.failed):0;
     return `<article><span>${esc(serviceNames[kind])} 探测成功率</span><strong>${known?s.success_percent.toFixed(2)+'%':'—'}</strong><small>${known?'成功 '+s.healthy+' / 已知 '+known:'暂无有效探测'}${s?.unknown?' · 未知 '+s.unknown:''}</small></article>`;
   }).join('')+`<article><span>所选范围下载</span><strong>${h.traffic.length?bytes(totals.down):'—'}</strong><small>已采集流量合计</small></article><article><span>所选范围上传</span><strong>${h.traffic.length?bytes(totals.up):'—'}</strong><small>缺测时段不计入</small></article>`;
@@ -25,7 +25,7 @@ function renderHistory(){
   const grouped=new Map();for(const row of h.probes){if(!grouped.has(row.ts))grouped.set(row.ts,{});grouped.get(row.ts)[row.transport]=row}
   const rows=[...grouped.entries()].sort((a,b)=>b[0]-a[0]).slice(0,12);
   function cell(row){return row?`${row.healthy} 成功 / ${row.failed} 失败${row.unknown?' / '+row.unknown+' 未知':''}<br><small class="muted">HTTPS ${milliseconds(row.https_ms)} · UDP ${milliseconds(row.udp_ms)}</small>`:'<span class="muted">无采样</span>'}
-  $('#history-table').innerHTML=rows.length?'<table><thead><tr><th>时间档起点</th><th>REALITY</th><th>WebSocket / TLS</th></tr></thead><tbody>'+rows.map(([ts,row])=>`<tr><td>${date(ts)}</td><td>${cell(row.reality)}</td><td>${cell(row.websocket)}</td></tr>`).join('')+'</tbody></table>':'<div class="empty">此范围内还没有探测记录。</div>';
+  $('#history-table').innerHTML=rows.length?'<table><thead><tr><th>时间档起点</th>'+kinds.map(kind=>`<th>${esc(transportNames[kind])}</th>`).join('')+'</tr></thead><tbody>'+rows.map(([ts,row])=>`<tr><td>${date(ts)}</td>${kinds.map(kind=>`<td>${cell(row[kind])}</td>`).join('')}</tr>`).join('')+'</tbody></table>':'<div class="empty">此范围内还没有探测记录。</div>';
   drawHistoryCharts();
 }
 function drawHistoryCharts(){
@@ -33,7 +33,7 @@ function drawHistoryCharts(){
   const h=historyData;
   const traffic=[['download','#169d88'],['upload','#7095be']].map(([key,color])=>({color,points:new Map(h.traffic.map(p=>[p.ts,p[key]]))}));
   plotHistory($('#history-traffic'),traffic,bytes);
-  const latency=[['reality','https_ms','#169d88'],['websocket','https_ms','#7095be'],['reality','udp_ms','#a275bf'],['websocket','udp_ms','#d49a51']].map(([transport,key,color])=>({color,points:new Map(h.probes.filter(p=>p.transport===transport).map(p=>[p.ts,p[key]]))}));
+  const latency=[['reality','https_ms','#169d88'],['websocket','https_ms','#7095be'],['reality','udp_ms','#a275bf'],['websocket','udp_ms','#d49a51'],['hysteria2','https_ms','#b55e85'],['hysteria2','udp_ms','#68823c']].map(([transport,key,color])=>({color,points:new Map(h.probes.filter(p=>p.transport===transport).map(p=>[p.ts,p[key]]))}));
   plotHistory($('#history-latency'),latency,n=>Math.round(n)+' ms');
 }
 function plotHistory(canvas,series,format){

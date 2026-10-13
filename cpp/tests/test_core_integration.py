@@ -7,6 +7,7 @@ import os
 import pathlib
 import socket
 import sqlite3
+import struct
 import subprocess
 import threading
 import time
@@ -28,9 +29,32 @@ def eventually(check, seconds=15):
     raise AssertionError('Isolated test condition did not become true')
 
 
+def udp_roundtrip(proxy, target, payload):
+    def read(sock, size):
+        result = b''
+        while len(result) < size:
+            part = sock.recv(size - len(result))
+            assert part, 'SOCKS control connection closed'
+            result += part
+        return result
+    with socket.create_connection(('127.0.0.1', int(proxy.rsplit(':', 1)[1])), timeout=3) as control:
+        control.settimeout(3)
+        control.sendall(b'\x05\x01\x00')
+        assert read(control, 2) == b'\x05\x00'
+        control.sendall(b'\x05\x03\x00\x01' + b'\x00' * 6)
+        assert read(control, 4) == b'\x05\x00\x00\x01'
+        address, port = socket.inet_ntoa(read(control, 4)), struct.unpack('!H', read(control, 2))[0]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            udp.settimeout(5)
+            udp.connect((address if address != '0.0.0.0' else '127.0.0.1', port))
+            head = b'\x00\x00\x00\x01' + socket.inet_aton(target[0]) + struct.pack('!H', target[1])
+            udp.send(head + payload)
+            assert udp.recv(65535) == head + payload[::-1], 'Native UDP payload changed'
+
+
 def test_real_grpc_accounting_and_live_revocation(tmp_path):
     state = tmp_path / 'state'
-    api_port, reality_port, ws_port, panel_port = [available_port() for _ in range(4)]
+    api_port, reality_port, ws_port, hy2_port, panel_port = [available_port() for _ in range(5)]
     core_pid_file = tmp_path / 'core.pid'
     keys = subprocess.check_output([str(XRAY), 'x25519'], text=True)
     keys = dict(line.split(':', 1) for line in keys.splitlines() if ':' in line)
@@ -48,12 +72,26 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
                  'realitySettings': {'target': 'www.bing.com:443', 'serverNames': ['www.bing.com'], 'privateKey': private, 'shortIds': [short_id]}}},
             {'tag': 'websocket', 'listen': '127.0.0.1', 'port': ws_port, 'protocol': 'vless',
              'settings': {'clients': [], 'decryption': 'none'}, 'streamSettings': {'network': 'ws', 'wsSettings': {'path': '/isolated-test'}}}],
-        'outbounds': [{'protocol': 'freedom'}]}
+        # The origin and UDP echo server exist only in this isolated fixture.
+        # New Xray cores block private destinations unless explicitly allowed.
+        'outbounds': [{'protocol': 'freedom', 'settings': {'finalRules': [
+            {'action': 'allow', 'ip': ['127.0.0.1/32']}]}}]}
+    # A local trust anchor keeps certificate verification enabled in the QUIC client.
+    cert, key = tmp_path / 'hy2.crt', tmp_path / 'hy2.key'
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+        '-subj', '/CN=testserver', '-addext', 'subjectAltName=DNS:testserver',
+        '-addext', 'basicConstraints=critical,CA:TRUE', '-keyout', str(key), '-out', str(cert)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    config['inbounds'].append({'tag': 'hysteria2', 'listen': '127.0.0.1', 'port': hy2_port,
+        'protocol': 'hysteria', 'settings': {'version': 2, 'clients': []},
+        'streamSettings': {'network': 'hysteria', 'security': 'tls', 'hysteriaSettings': {'version': 2},
+            'tlsSettings': {'alpn': ['h3'], 'certificates': [{'certificateFile': str(cert), 'keyFile': str(key)}]},
+            'finalmask': {'quicParams': {'congestion': 'bbr'}}}})
     core_config = tmp_path / 'core.json'
     core_config.write_text(json.dumps(config));core_config.chmod(0o600)
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'origin': ORIGIN, 'domain': 'testserver', 'public_ip': '127.0.0.1',
-        'reality_sni': 'www.bing.com', 'reality_public': public, 'short_id': short_id, 'ws_path': '/isolated-test'}))
+        'reality_sni': 'www.bing.com', 'reality_public': public, 'short_id': short_id, 'ws_path': '/isolated-test', 'hysteria2_port': hy2_port}))
     settings.chmod(0o600)
     spec = importlib.util.spec_from_file_location('legacy_core_test', LEGACY)
     legacy = importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
@@ -97,6 +135,18 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     origin.daemon_threads = True
     serving = threading.Thread(target=origin.serve_forever);serving.start()
     base = 'http://127.0.0.1:' + str(origin.server_port)
+    echo = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    echo.bind(('127.0.0.1', 0));echo.settimeout(.2)
+    def echo_loop():
+        while not stop.is_set():
+            try:
+                data, peer = echo.recvfrom(65535)
+                echo.sendto(data[::-1], peer)
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+    echo_thread = threading.Thread(target=echo_loop);echo_thread.start()
 
     def start_panel():
         proc = subprocess.Popen([str(BINARY), '--state', str(state), '--settings', str(settings),
@@ -122,9 +172,16 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
                       {'serverName': 'www.bing.com', 'fingerprint': 'chrome', 'publicKey': public, 'shortId': short_id}}
         else:
             stream = {'network': 'ws', 'security': 'none', 'wsSettings': {'path': '/isolated-test'}}
-        cfg = {'log': {'loglevel': 'warning'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port, 'protocol': 'socks', 'settings': {'auth': 'noauth'}}],
+        cfg = {'log': {'loglevel': 'warning'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port, 'protocol': 'socks', 'settings': {'auth': 'noauth', 'udp': True}}],
             'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': '127.0.0.1',
                 'port': reality_port if kind == 'reality' else ws_port, 'users': [account]}]}, 'streamSettings': stream}]}
+        if kind == 'hysteria2':
+            cfg['outbounds'] = [{'protocol': 'hysteria', 'settings': {'version': 2, 'address': '127.0.0.1', 'port': hy2_port},
+                'streamSettings': {'network': 'hysteria', 'security': 'tls',
+                    'hysteriaSettings': {'version': 2, 'auth': user['uuid']},
+                    'tlsSettings': {'serverName': 'testserver', 'allowInsecure': False, 'alpn': ['h3'],
+                        'disableSystemRoot': True, 'certificates': [{'certificateFile': str(cert), 'usage': 'verify'}]},
+                    'finalmask': {'quicParams': {'congestion': 'bbr'}}}}]
         path = tmp_path / ('client-' + str(port) + '.json')
         path.write_text(json.dumps(cfg));path.chmod(0o600)
         process = subprocess.Popen([str(XRAY), 'run', '-config', str(path)], stdout=core_log, stderr=core_log)
@@ -146,13 +203,19 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         client.login()
         uid = client.json('/api/users', 'POST', {'name': 'integration-one'})['id']
         uid2 = client.json('/api/users', 'POST', {'name': 'integration-two'})['id']
-        eventually(lambda: live_count('reality') == 2 and live_count('websocket') == 2)
+        eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2')))
         user = db_user(uid)
-        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket')}
+        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2')}
         for proxy in proxies.values():
             reply = fetch(proxy)
             assert reply.returncode == 0 and reply.stdout == payload, reply.stderr.decode()[:100]
-        eventually(lambda: db_user(uid)['download'] >= len(payload) * 2)
+        sizes = (64, 1200, 1400, 2000, 4096)
+        for size in sizes:
+            udp_roundtrip(proxies['hysteria2'], echo.getsockname(), os.urandom(size))
+        eventually(lambda: db_user(uid)['download'] >= len(payload) * 3)
+        with legacy.db() as db:
+            hy2_count = db.execute("SELECT value FROM counters WHERE name LIKE ?", ('user>>>' + uid + '.%@hysteria2>>>traffic>>>downlink',)).fetchone()
+            assert hy2_count and hy2_count[0] >= len(payload) + sum(sizes), 'Hy2 TCP and native UDP were not both counted'
         core_pid = core_pid_file.read_text()
         before = db_user(uid)['download']
         panel.terminate();panel.wait(timeout=15)
@@ -168,41 +231,50 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         assert db_user(uid)['download'] == 0
 
         partial = tmp_path / 'inflight.bin'
-        stream = subprocess.Popen(['curl', '--noproxy', '', '--proxy', proxies['reality'], '-fsS', '--max-time', '30',
+        stream = subprocess.Popen(['curl', '--noproxy', '', '--proxy', proxies['hysteria2'], '-fsS', '--max-time', '20',
             '-o', str(partial), base + '/slow'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         processes.append(stream)
         eventually(lambda: partial.exists() and partial.stat().st_size > 32768)
         client.json('/api/users/' + uid, 'PUT', {'name': 'disabled', 'enabled': False})
         eventually(lambda: core_pid_file.read_text() != core_pid)
-        assert stream.wait(timeout=10) != 0, 'Existing connection survived revocation'
-        eventually(lambda: live_count('reality') == 1 and live_count('websocket') == 1)
-        assert fetch(proxies['reality'], timeout=3).returncode != 0, 'Disabled credentials still connected'
-        other = start_client(db_user(uid2), 'websocket')
+        # QUIC peers can wait for their own idle timeout after the server exits.
+        # Verify cessation of traffic independently of the client's error timing.
+        time.sleep(1)
+        stopped_at = partial.stat().st_size
+        time.sleep(1)
+        assert partial.stat().st_size == stopped_at < len(payload) * 128, 'Revoked QUIC stream continued receiving'
+        eventually(lambda: all(live_count(kind) == 1 for kind in ('reality', 'websocket', 'hysteria2')))
+        disabled_proxy = start_client(user, 'hysteria2')
+        assert fetch(disabled_proxy, timeout=3).returncode != 0, 'Disabled credentials still connected'
+        other = start_client(db_user(uid2), 'hysteria2')
         assert fetch(other).stdout == payload, 'Other user did not recover after revocation'
+        assert stream.wait(timeout=20) != 0, 'Revoked transfer reported success'
 
         client.json('/api/users/' + uid, 'PUT', {'name': 'active'})
-        eventually(lambda: live_count('reality') == 2)
-        assert fetch(proxies['reality']).stdout == payload
+        eventually(lambda: live_count('hysteria2') == 2)
+        renewed_proxy = start_client(db_user(uid), 'hysteria2')
+        assert fetch(renewed_proxy).stdout == payload
         old_links = client.json('/api/users/' + uid + '/links')
         old_pid = core_pid_file.read_text()
         client.json('/api/users/' + uid + '/rotate', 'POST', {})
-        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('reality') == 2)
-        assert fetch(proxies['reality'], timeout=3).returncode != 0
-        new_proxy = start_client(db_user(uid), 'reality')
+        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 2)
+        assert fetch(proxies['hysteria2'], timeout=3).returncode != 0
+        new_proxy = start_client(db_user(uid), 'hysteria2')
         assert fetch(new_proxy).stdout == payload
         assert client.call(old_links['subscription'].replace(ORIGIN, ''))[0] == 404
 
         old_pid = core_pid_file.read_text()
         client.json('/api/users/' + uid, 'PUT', {'name': 'quota', 'quota': 1})
-        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('reality') == 1)
+        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 1)
         assert next(u for u in client.json('/api/overview')['users'] if u['id'] == uid)['status'] == 'exhausted'
         client.json('/api/users/' + uid + '/reset-traffic', 'POST', {})
-        eventually(lambda: live_count('reality') == 2)
+        eventually(lambda: live_count('hysteria2') == 2)
         assert next(u for u in client.json('/api/overview')['users'] if u['id'] == uid)['status'] == 'active'
 
         old_pid = core_pid_file.read_text()
         client.json('/api/users/' + uid, 'PUT', {'name': 'expired', 'expires': int(time.time()) - 1})
-        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('reality') == 1)
+        eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 1)
+        assert fetch(new_proxy, timeout=3).returncode != 0, 'Expired Hy2 credentials still connected'
         assert not core_error
     finally:
         for process in reversed(processes):
@@ -213,5 +285,6 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
                 except subprocess.TimeoutExpired:
                     process.kill();process.wait()
         stop.set();supervisor.join(timeout=10)
+        echo.close();echo_thread.join(timeout=5)
         origin.shutdown();origin.server_close();serving.join(timeout=5)
         core_log.close();panel_log.close()

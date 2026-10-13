@@ -45,6 +45,10 @@ Json Backend::monitor_status(Int timestamp) {
         {"https_ms",check.value("https_ms",Json(nullptr))},{"udp_ms",check.value("udp_ms",Json(nullptr))},
         {"last_success",check.value("last_success",Int(0))},{"error",check.value("error",std::string(""))}});
     }
+    if(result["status"]!="stale")for(const auto& kind:transports()) {
+      bool found=false;for(const auto& check:result["checks"])if(check["transport"]==kind)found=true;
+      if(!found){result["status"]="unknown";result["message"]="等待全部入口的自检结果";}
+    }
     return result;
   }catch(...){return unknown;}
 }

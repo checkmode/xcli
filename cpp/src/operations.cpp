@@ -7,6 +7,7 @@ namespace xg {
 namespace {
 constexpr Int retention = 30*86400;
 const std::map<std::string,std::string> service_names={{"reality","REALITY 入口"},{"websocket","WebSocket / TLS 入口"},
+  {"hysteria2","Hysteria 2 入口"},
   {"probe","探测结果采集"},{"core","Xray 管理接口"},{"backup","本地自动加密备份"},{"test","通知通道测试"}};
 Int numeric(const Json& input,const std::string& key,Int fallback,Int low,Int high) {
   auto value=input.value(key,Json(fallback));
@@ -42,7 +43,7 @@ Json Backend::history(const std::string& token,const std::string& range) {
   auto first=database.one("SELECT MIN(ts) AS ts FROM probe_history");
   database.exec("COMMIT");
   for(auto& row:summary){auto known=row.at("healthy").get<Int>()+row.at("failed").get<Int>();row["success_percent"]=known?Json(100.0*row.at("healthy").get<double>()/static_cast<double>(known)):Json(nullptr);}
-  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
+  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"transports",transports()},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
 }
 Json Backend::webhook_configuration(Database& database) {
   auto value=*database.one("SELECT * FROM notification_config WHERE id=1");
@@ -125,15 +126,16 @@ void Backend::collect_operations(Int timestamp) {
   std::lock_guard guard(mutation_mutex_);auto database=db();Transaction transaction(database);
   auto cfg=*database.one("SELECT failures,recoveries FROM notification_config WHERE id=1");int failures=cfg.at("failures"),recoveries=cfg.at("recoveries");
   auto status=monitor.value("status",std::string("unknown"));bool fresh=status=="healthy"||status=="failed";
+  auto enabled=transports();
   Json checks=Json::object();
   if(fresh)for(const auto& check:monitor.value("checks",Json::array())) {
     auto transport=check.value("transport",std::string());auto state=check.value("status",std::string());
-    if((transport=="reality"||transport=="websocket")&&(state=="healthy"||state=="failed"))checks[transport]=check;
+    if(std::find(enabled.begin(),enabled.end(),transport)!=enabled.end()&&(state=="healthy"||state=="failed"))checks[transport]=check;
   }
-  bool complete=fresh&&checks.size()==2;
+  bool complete=fresh&&checks.size()==enabled.size();
   // Sensor health uses minute ticks. Node health uses distinct probe timestamps, never repeated reads of one report.
   observe_alarm(database,"probe",!complete,timestamp/60,timestamp,failures,recoveries);
-  for(const std::string transport:{"reality","websocket"}) {
+  for(const auto& transport:enabled) {
     bool known=fresh&&checks.contains(transport);Int sampled=known?monitor.at("updated").get<Int>():timestamp/60*60;
     std::string state=known?checks[transport].at("status").get<std::string>():"unknown";
     Value https=known?latency(checks[transport],"https_ms"):Value(std::string());

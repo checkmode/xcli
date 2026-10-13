@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe both real public VLESS entries; Python standard library + Xray + curl.
+"""Probe enabled public VLESS and Hysteria 2 entries; standard library + Xray + curl.
 
 The server self-test verifies the local host -> public entry -> Internet path.
 Run this same tool on an external machine to test its actual access network.
@@ -82,15 +82,25 @@ def client_config(config, kind, port):
         stream = {'network': 'tcp', 'security': 'reality', 'realitySettings': {
             'serverName': config['reality_sni'], 'fingerprint': 'chrome',
             'publicKey': config['reality_public'], 'shortId': config['short_id']}}
-    else:
+    elif kind == 'websocket':
         host = config['domain']
         stream = {'network': 'ws', 'security': 'tls',
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False},
             'wsSettings': {'path': config['ws_path'], 'headers': {'Host': config['domain']}}}
+    if kind == 'hysteria2':
+        outbound = {'protocol': 'hysteria', 'settings': {'version': 2, 'address': config['public_ip'],
+            'port': config['hysteria2_port']}, 'streamSettings': {'network': 'hysteria', 'security': 'tls',
+            'hysteriaSettings': {'version': 2, 'auth': config['uuid']},
+            'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'alpn': ['h3']},
+            'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
+    elif kind in ('reality', 'websocket'):
+        outbound = {'protocol': 'vless', 'settings': {'vnext': [
+            {'address': host, 'port': 443, 'users': [user]}]}, 'streamSettings': stream}
+    else:
+        raise ValueError('Unsupported transport')
     return {'log': {'loglevel': 'none'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port,
         'protocol': 'socks', 'settings': {'auth': 'noauth', 'udp': True}}],
-        'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [
-            {'address': host, 'port': 443, 'users': [user]}]}, 'streamSettings': stream}]}
+        'outbounds': [outbound]}
 
 
 def check(config, kind, port):
@@ -149,6 +159,7 @@ def main():
     if not 30 <= args.interval <= 3600:
         parser.error('interval must be 30..3600 seconds')
     config = json.loads(args.config.read_text())
+    kinds = ['reality', 'websocket'] + (['hysteria2'] if config.get('hysteria2_port', 0) else [])
     if args.config.stat().st_mode & 0o007:
         parser.error('configuration must not be world-readable')
     stopped = False
@@ -167,7 +178,7 @@ def main():
         try:
             while not stopped:
                 started = time.monotonic()
-                for kind in ('reality', 'websocket'):
+                for kind in kinds:
                     if kind in clients and clients[kind][0].poll() is None:
                         continue
                     port = available_port()
@@ -185,7 +196,7 @@ def main():
                             if process.poll() is not None:
                                 break
                             time.sleep(.05)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(kinds)) as pool:
                     futures = [pool.submit(check, config, kind, port) for kind, (_, port) in clients.items()]
                     checks = [future.result() for future in futures]
                 for result in checks:

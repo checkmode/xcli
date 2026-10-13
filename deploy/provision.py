@@ -10,10 +10,10 @@ import secrets
 import sqlite3
 import uuid
 
-XRAY_VERSION = '26.3.27'
+XRAY_VERSION = '26.10.10'
 XRAY_ASSETS = {
-    'x86_64': ('Xray-linux-64.zip', '23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae'),
-    'aarch64': ('Xray-linux-arm64-v8a.zip', '4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c'),
+    'x86_64': ('Xray-linux-64.zip', '72a5fde819713a103c6fc26a87aa025c1518c918a34eba4bc38d64dc0728e5d9'),
+    'aarch64': ('Xray-linux-arm64-v8a.zip', '58e339e67827220175b3a1c6f66f48ccd086b79209f30ba1c0bcb47885d4c22a'),
 }
 BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
               '172.16.0.0/12', '192.168.0.0/16', '192.0.0.0/24', '192.0.2.0/24', '198.18.0.0/15',
@@ -48,12 +48,12 @@ def settings_for(domain, address, sni, key_output):
         raise ValueError('Xray 未返回预期的 X25519 密钥')
     return {'domain': domain, 'origin': 'https://' + domain, 'public_ip': address, 'reality_sni': sni,
             'reality_private': private, 'reality_public': public, 'short_id': secrets.token_hex(8),
-            'ws_path': '/connect/' + secrets.token_hex(12)}
+            'ws_path': '/connect/' + secrets.token_hex(12), 'hysteria2_port': 443, 'xray_version': XRAY_VERSION}
 
 
 def core_config(settings):
     s = settings
-    return {'log': {'loglevel': 'warning', 'access': 'none'},
+    result = {'log': {'loglevel': 'warning', 'access': 'none'},
         'api': {'tag': 'api', 'listen': '127.0.0.1:10085', 'services': ['HandlerService', 'StatsService']},
         'stats': {}, 'policy': {'levels': {'0': {'statsUserUplink': True, 'statsUserDownlink': True, 'handshake': 8, 'connIdle': 300}}},
         'inbounds': [
@@ -69,11 +69,30 @@ def core_config(settings):
                       {'tag': 'blocked', 'protocol': 'blackhole'}],
         'routing': {'domainStrategy': 'IPOnDemand', 'rules': [{'type': 'field', 'outboundTag': 'blocked',
             'ip': BLOCKED_V4 + [s['public_ip'] + '/32', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8']}]}}
+    if s.get('hysteria2_port', 0):
+        result['inbounds'].append(hysteria_inbound(s['hysteria2_port']))
+    return result
+
+
+def hysteria_inbound(port=443, certificate='/etc/xray-gateway/hysteria-tls/fullchain.pem',
+                     private_key='/etc/xray-gateway/hysteria-tls/privkey.pem'):
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('Hysteria 2 端口必须为 1..65535')
+    return {'tag': 'hysteria2', 'listen': '0.0.0.0', 'port': port, 'protocol': 'hysteria',
+        # Empty persisted users; the controller adds accounts through HandlerService.
+        'settings': {'version': 2, 'clients': []},
+        'streamSettings': {'network': 'hysteria', 'security': 'tls',
+            'hysteriaSettings': {'version': 2},
+            'tlsSettings': {'alpn': ['h3'], 'certificates': [
+                {'certificateFile': str(certificate), 'keyFile': str(private_key), 'oneTimeLoading': False}]},
+            'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
 
 
 def monitor_config(settings):
     result = {key: settings[key] for key in ('domain', 'public_ip', 'reality_sni', 'reality_public', 'short_id', 'ws_path')}
     result['uuid'] = str(uuid.uuid4())
+    if settings.get('hysteria2_port', 0):
+        result['hysteria2_port'] = settings['hysteria2_port']
     return result
 
 
@@ -108,6 +127,7 @@ start)
     iptables -w -N XG_IN 2>/dev/null || true
     iptables -w -F XG_IN
     iptables -w -A XG_IN -p tcp -m multiport --dports 80,443 -j ACCEPT
+    iptables -w -A XG_IN -p udp --dport 443 -j ACCEPT
     iptables -w -C INPUT -j XG_IN 2>/dev/null || iptables -w -I INPUT 1 -j XG_IN
     iptables -w -N XG_OUT 2>/dev/null || true
     iptables -w -F XG_OUT

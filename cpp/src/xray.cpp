@@ -2,6 +2,7 @@
 #include "app/proxyman/command/command.grpc.pb.h"
 #include "app/stats/command/command.grpc.pb.h"
 #include "proxy/vless/account.pb.h"
+#include "proxy/hysteria/account/config.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <csignal>
 #include <sstream>
@@ -56,6 +57,13 @@ class XrayCore final : public Core {
     require(handler_->GetInboundUsers(&context,request,&response),"GetInboundUsers");
     std::map<std::string,std::string> result;
     for(const auto& user:response.users()) {
+      if(tag=="hysteria2") {
+        xray::proxy::hysteria::account::Account account;
+        if(user.account().type()!=account.GetDescriptor()->full_name()||!account.ParseFromString(user.account().value()))
+          throw std::runtime_error("Unexpected Xray Hysteria account type");
+        result.emplace(user.email(),account.auth());
+        continue;
+      }
       xray::proxy::vless::Account account;
       if(user.account().type()!=account.GetDescriptor()->full_name()||!account.ParseFromString(user.account().value()))
         throw std::runtime_error("Unexpected Xray account type");
@@ -64,12 +72,18 @@ class XrayCore final : public Core {
     return result;
   }
   void add_user(const std::string& tag,const User& user) override {
-    xray::proxy::vless::Account account;account.set_id(user.uuid);
-    if(tag=="reality")account.set_flow("xtls-rprx-vision");
     handler::AddUserOperation operation;
     auto target=operation.mutable_user();target->set_level(0);target->set_email(user.email(tag));
-    target->mutable_account()->set_type(account.GetDescriptor()->full_name());
-    target->mutable_account()->set_value(account.SerializeAsString());
+    if(tag=="hysteria2") {
+      xray::proxy::hysteria::account::Account account;account.set_auth(user.uuid);
+      target->mutable_account()->set_type(account.GetDescriptor()->full_name());
+      target->mutable_account()->set_value(account.SerializeAsString());
+    } else {
+      xray::proxy::vless::Account account;account.set_id(user.uuid);
+      if(tag=="reality")account.set_flow("xtls-rprx-vision");
+      target->mutable_account()->set_type(account.GetDescriptor()->full_name());
+      target->mutable_account()->set_value(account.SerializeAsString());
+    }
     handler::AlterInboundRequest request;request.set_tag(tag);
     request.mutable_operation()->set_type(operation.GetDescriptor()->full_name());
     request.mutable_operation()->set_value(operation.SerializeAsString());

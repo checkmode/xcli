@@ -87,6 +87,28 @@ int main() {
     for(int i=0;i<8;++i)status(401,[&]{std::string ignored;backend.login({{"username","admin"},{"password","wrong"}},"192.0.2.1",ignored);});
     status(429,[&]{std::string ignored;backend.login({{"username","admin"},{"password","correct-password-for-tests"}},"192.0.2.1",ignored);});
     backend.change_password(token,csrf,{{"current_password","correct-password-for-tests"},{"new_password","replacement-password"}});status(401,[&]{backend.session(token);});
+    {
+      Temp hy2;Options config;config.state=hy2.path/"state";config.settings=hy2.path/"settings.json";config.offline=true;
+      settings["hysteria2_port"]=443;std::ofstream(config.settings)<<settings.dump();
+      auto adapter=std::make_unique<FakeCore>();auto live=adapter.get();Backend panel(config,std::move(adapter));
+      {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+      std::string session;auto auth=panel.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",session);
+      auto guard=auth.at("csrf").get<std::string>();auto id3=panel.create_user(session,guard,{{"name","Hy2 测试"},{"quota",1000}}).at("id").get<std::string>();
+      User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{id3}));}
+      auto node=panel.links(session,id3);check(node.at("hysteria2").get<std::string>().starts_with("hysteria2://"+u.uuid+"@testserver:443/?sni=testserver#"),"Hy2 link invalid");
+      auto data=unbase64(panel.subscription(u.token).first);check(data.find(node.at("hysteria2").get<std::string>()+"\n")!=std::string::npos,"Hy2 missing from subscription");
+      check(panel.qr(session,id3,"hysteria2").starts_with("\x89PNG"),"Hy2 QR missing");
+      panel.poll_once();check(live->live.size()==3&&live->live["hysteria2"].at(u.email("hysteria2"))==u.uuid,"Hy2 account missing");
+      check(panel.preflight().at("pending_additions")==0,"Hy2 preflight pending");
+      live->values={{"user>>>"+u.email("reality")+">>>traffic>>>downlink",350},{"user>>>"+u.email("hysteria2")+">>>traffic>>>downlink",650}};
+      panel.poll_once();check(live->restarts==1,"Shared VLESS / Hy2 quota did not revoke");
+      {Database db(config.state/"gateway.sqlite");check(db.one("SELECT download FROM users WHERE id=?",{id3})->at("download")==1000,"Hy2 accounting missing");}
+      status(403,[&]{panel.subscription(u.token);});
+      config.monitor_report=hy2.path/"report.json";
+      std::ofstream(config.monitor_report)<<Json({{"schema",1},{"scope","server"},{"updated",now()},{"status","healthy"},
+        {"checks",Json::array({Json{{"transport","reality"},{"status","healthy"}},Json{{"transport","websocket"},{"status","healthy"}}})}}).dump();
+      Backend missing(config);check(missing.monitor_status().at("status")=="unknown","Missing Hy2 probe claimed healthy");
+    }
     std::cout<<"PASS: crypto, Unicode, authentication, CSRF, subscriptions, QR, accounting, reset, RPC reconciliation, quota, rotation, deletion, retry, rollback, backup, 2000 DB lifetimes, login throttling, session revocation\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}

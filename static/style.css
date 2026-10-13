@@ -12,3 +12,5 @@
 .webhook-help{margin-top:24px}.webhook-help summary{cursor:pointer;color:#476476}.webhook-help p{line-height:1.8;overflow-wrap:anywhere}
 #page-notifications .security-grid{align-items:start}#notification-form .small{line-height:1.65}
 @media(max-width:760px){#page-history .page-heading{align-items:flex-start;gap:15px}.range-label{min-width:120px}.latency-legend{justify-content:flex-start}.latency-legend span{font-size:10px}#page-history .chart-panel .panel-heading{flex-wrap:wrap;gap:12px}}
+
+.node-grid,.monitor-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}#history-summary{grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}.rose{color:#b55e85}.olive{color:#68823c}.latency-legend{flex-wrap:wrap}.tabs{flex-wrap:wrap}

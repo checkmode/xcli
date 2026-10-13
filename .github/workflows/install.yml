@@ -23,28 +23,7 @@ jobs:
           bash -n install.sh
           python3 -m unittest discover -s deploy/tests -v
       - name: Prepare disposable machine and trusted test certificate
-        run: |
-          # Only the disposable GitHub runner is modified by this test fixture.
-          sudo systemctl disable --now nginx 2>/dev/null || true
-          if dpkg-query -W nginx >/dev/null 2>&1; then sudo apt-get purge -y nginx nginx-common; fi
-          sudo rm -rf /etc/nginx
-          fixture=$(mktemp -d /var/tmp/xcli-cert.XXXXXXXX)
-          chmod 755 "$fixture"
-          printf 'FIXTURE=%s\n' "$fixture" >> "$GITHUB_ENV"
-          public_ip=$(curl -q -4 -fsS --retry 3 --max-time 20 https://api.ipify.org)
-          printf 'PUBLIC_IP=%s\n' "$public_ip" >> "$GITHUB_ENV"
-          printf '%s panel.install.example\n' "$public_ip" | sudo tee -a /etc/hosts >/dev/null
-          sudo ip addr add "$public_ip/32" dev lo
-          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3 -subj /CN=Xcli-Install-Test-CA \
-            -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
-            -keyout "$fixture/ca.key" -out "$fixture/ca.crt"
-          openssl req -newkey rsa:2048 -nodes -sha256 -subj /CN=panel.install.example \
-            -keyout "$fixture/server.key" -out "$fixture/server.csr"
-          printf 'subjectAltName=DNS:panel.install.example\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' > "$fixture/extensions"
-          openssl x509 -req -in "$fixture/server.csr" -CA "$fixture/ca.crt" -CAkey "$fixture/ca.key" \
-            -CAcreateserial -days 3 -sha256 -extfile "$fixture/extensions" -out "$fixture/server.crt"
-          sudo cp "$fixture/ca.crt" /usr/local/share/ca-certificates/xcli-install-test.crt
-          sudo update-ca-certificates
+        run: bash deploy/tests/prepare-machine.sh
       - name: Read-only preflight and full source installation
         run: |
           sudo python3 deploy/install.py --check --yes --domain panel.install.example --public-ip "$PUBLIC_IP"
@@ -52,15 +31,21 @@ jobs:
           # Push builds exercise the public download entry point and immutable archive.
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             sudo bash install.sh --ref "$GITHUB_SHA" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
-              --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
+              --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key" --tune-network
           else
             work=$(mktemp -d /var/tmp/xcli-source.XXXXXXXX)
             chmod 755 "$work"
             mkdir "$work/source"
             git archive HEAD | tar -x -C "$work/source"
             sudo python3 "$work/source/deploy/install.py" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
-              --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
+              --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key" --tune-network
           fi
+      - name: Real accounting and Hysteria 2 revocation in isolated test instances
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-pytest
+          XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
+            python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
+              cpp/tests/test_features.py cpp/tests/test_operations.py
       - name: Verify login and safe repeat refusal
         run: sudo python3 deploy/tests/verify_install.py
       - name: Installation diagnostics on failure
@@ -69,3 +54,36 @@ jobs:
           sudo systemctl --no-pager --full status nginx xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
           sudo journalctl --no-pager -n 60 -u xray-gateway-core -u xray-gateway-panel -u xray-gateway-monitor || true
           sudo sh -c 'for file in /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'
+  upgrade:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: 41780d33b6df874aa89bdcc421ece2448abfc072
+          path: legacy
+      - name: Prepare disposable machine and trusted test certificate
+        run: bash deploy/tests/prepare-machine.sh
+      - name: Install the previous release and create persistent users
+        run: |
+          sudo python3 legacy/deploy/install.py --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
+            --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
+          sudo python3 deploy/tests/verify_upgrade.py seed
+      - name: Build and upgrade to three entries
+        run: |
+          bash deploy/build-cpp.sh build
+          sudo python3 deploy/upgrade-hysteria.py upgrade --source "$PWD" --candidate "$PWD/build/xray-gateway-panel" \
+            --backup /root/xcli-upgrade-ci --certificate /etc/xray-gateway/tls/fullchain.pem \
+            --private-key /etc/xray-gateway/tls/privkey.pem
+          sudo python3 deploy/tests/verify_upgrade.py upgraded
+      - name: Roll back while retaining users created after the upgrade
+        run: |
+          sudo /root/xcli-upgrade-ci/rollback.sh
+          sudo python3 deploy/tests/verify_upgrade.py rolled-back
+      - name: Upgrade diagnostics on failure
+        if: failure()
+        run: |
+          sudo systemctl --no-pager --full status nginx xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
+          sudo journalctl --no-pager -n 60 -u xray-gateway-core -u xray-gateway-panel -u xray-gateway-monitor || true
+          sudo sh -c 'test ! -f /root/xcli-upgrade-ci/upgrade.log || tail -n 100 /root/xcli-upgrade-ci/upgrade.log'
