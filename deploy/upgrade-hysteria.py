@@ -112,6 +112,15 @@ def verify_accounts(candidate):
     raise RuntimeError('Core account synchronization did not finish')
 
 
+def start_services():
+    run('systemctl', 'start', 'xray-gateway-core', 'xray-gateway-panel', timeout=90)
+    wait_panel()
+    verify_accounts(BASE / 'panel-current')
+    # Probe clients must not establish cached connections before their dynamic
+    # credentials have reached every inbound of the newly started core.
+    run('systemctl', 'start', 'xray-gateway-monitor', timeout=90)
+
+
 def rollback(backup):
     saved = json.loads((backup / 'manifest.json').read_text())
     run('systemctl', 'stop', *SERVICES, timeout=90)
@@ -137,9 +146,7 @@ def rollback(backup):
             except OSError:
                 pass
     run('systemctl', 'daemon-reload')
-    run('systemctl', 'start', *reversed(SERVICES), timeout=90)
-    wait_panel()
-    verify_accounts(BASE / 'panel-current')
+    start_services()
     atomic(backup / 'rolled-back', str(int(time.time())) + '\n', 0o600)
     print('Previous core, panel and configuration restored; current users, MFA and traffic retained.')
 
@@ -253,9 +260,7 @@ def upgrade(args):
         select_panel(release / 'xray-gateway-panel')
         run('runuser', '-u', 'xgateway', '--', BASE / 'xray', 'run', '-test', '-config', CONFIG / 'core.json')
         run('systemctl', 'daemon-reload')
-        run('systemctl', 'start', *reversed(SERVICES), timeout=90)
-        wait_panel()
-        verify_accounts(BASE / 'panel-current')
+        start_services()
         run(sys.executable, backup / 'migration_state.py', 'verify', backup / 'state.json',
             '--settings', backup / 'settings-before.json')
         expected = json.loads((backup / 'settings-before.json').read_text())
