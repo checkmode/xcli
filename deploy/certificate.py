@@ -15,7 +15,10 @@ def openssl(*args):
 
 def install_tls(domain, certificate, private_key, destination, group=None):
     certificate, private_key, destination = Path(certificate), Path(private_key), Path(destination)
-    openssl('x509', '-in', certificate, '-noout', '-checkhost', domain)
+    # OpenSSL 3.0 can exit zero even when -checkhost reports a mismatch.
+    checked = openssl('x509', '-in', certificate, '-noout', '-checkhost', domain)
+    if checked.strip() != ('Hostname ' + domain + ' does match certificate').encode():
+        raise ValueError('证书与域名不匹配')
     openssl('x509', '-in', certificate, '-noout', '-checkend', '86400')
     if openssl('x509', '-in', certificate, '-pubkey', '-noout').strip() != openssl(
             'pkey', '-in', private_key, '-pubout', '-passin', 'pass:').strip():

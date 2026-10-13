@@ -65,7 +65,7 @@ def core_config(settings):
             {'tag': 'websocket', 'listen': '127.0.0.1', 'port': 10080, 'protocol': 'vless',
              'settings': {'clients': [], 'decryption': 'none'},
              'streamSettings': {'network': 'ws', 'wsSettings': {'path': s['ws_path']}}}],
-        'outbounds': [{'tag': 'direct', 'protocol': 'freedom', 'settings': {'domainStrategy': 'UseIPv4'}},
+        'outbounds': [{'tag': 'direct', 'protocol': 'freedom', 'streamSettings': {'sockopt': {'domainStrategy': 'UseIPv4'}}},
                       {'tag': 'blocked', 'protocol': 'blackhole'}],
         'routing': {'domainStrategy': 'IPOnDemand', 'rules': [{'type': 'field', 'outboundTag': 'blocked',
             'ip': BLOCKED_V4 + [s['public_ip'] + '/32', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8']}]}}

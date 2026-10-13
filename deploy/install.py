@@ -386,9 +386,13 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         self.run(['curl', '-q', '-fsS', '--noproxy', '*', '--max-time', '15', '--resolve',
                   self.args.domain + ':443:127.0.0.1', 'https://' + self.args.domain + '/healthz'], timeout=20)
         for attempt in range(15):
-            report = json.loads(self.run(['runuser', '-u', 'xgateway', '-g', 'xgateway', '-G', 'xgmonitor', '--',
+            output = self.run(['runuser', '-u', 'xgateway', '-g', 'xgateway', '-G', 'xgmonitor', '--',
                 '/usr/local/lib/xray-gateway/panel-current', '--secret-key', '/etc/xray-gateway/security.key',
-                '--monitor-config', '/etc/xcli-monitor/monitor.json', '--preflight'], capture=True))
+                '--monitor-config', '/etc/xcli-monitor/monitor.json', '--preflight'], capture=True, check=False)
+            try:
+                report = json.loads(output)
+            except (ValueError, UnicodeError):
+                report = {}
             if (report.get('pending_additions') == 0 and report.get('pending_revocations') == 0
                     and report.get('database_integrity') == 'ok'):
                 break

@@ -101,7 +101,10 @@ def panel_preflight(candidate):
 
 def verify_accounts(candidate):
     for _ in range(20):
-        value = panel_preflight(candidate)
+        try:
+            value = panel_preflight(candidate)
+        except (RuntimeError, ValueError):
+            value = {}
         if (value.get('database_integrity') == 'ok' and value.get('pending_additions') == 0
                 and value.get('pending_revocations') == 0):
             return

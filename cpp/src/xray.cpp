@@ -32,7 +32,24 @@ class XrayCore final : public Core {
       auto proc=fs::path("/proc")/std::to_string(pid);
       std::error_code error;
       auto executable=fs::canonical(proc/"exe",error);
-      if(error||executable!=fs::canonical(options_.core_binary))continue;
+      auto expected=fs::canonical(options_.core_binary);
+      if(error) {
+        // The core's CAP_NET_BIND_SERVICE makes /proc/PID/exe unreadable to
+        // the capability-free panel. Only the fixed, root-managed service
+        // cgroup may use this fallback; arbitrary test PID files still require
+        // an exact executable match. Do not grant the panel extra capabilities.
+        if(error!=std::errc::permission_denied||options_.core_pid_file!=
+            "/sys/fs/cgroup/system.slice/xray-gateway-core.service/cgroup.procs")continue;
+        if(read_file(proc/"cgroup",8192)!="0::/system.slice/xray-gateway-core.service\n")continue;
+        auto command=read_file(proc/"cmdline",65536);
+        if(command.substr(0,command.find('\0'))!=expected.string())continue;
+        std::istringstream status(read_file(proc/"status",16384));std::string line;bool same_uid=false;
+        while(std::getline(status,line))if(line.starts_with("Uid:")) {
+          std::istringstream users(line.substr(4));unsigned real=0,effective=0,saved=0,filesystem=0;
+          same_uid=bool(users>>real>>effective>>saved>>filesystem)&&real==getuid()&&effective==getuid()&&saved==getuid()&&filesystem==getuid();break;
+        }
+        if(!same_uid)continue;
+      } else if(executable!=expected)continue;
       auto stat=read_file(proc/"stat",8192);auto end=stat.rfind(')');
       if(end==std::string::npos)throw std::runtime_error("Invalid core process identity");
       std::istringstream fields(stat.substr(end+2));std::string field;

@@ -74,7 +74,15 @@ def main():
                 assert subscription[2] == links['hysteria2']
         if phase == 'upgraded':
             assert settings == {**state['settings'], 'hysteria2_port': 443, 'xray_version': '26.10.10'}
-            state['users'].append(create('created-after-upgrade'))
+            newest = create('created-after-upgrade')
+            state['users'].append(newest)
+            before_pid = subprocess.check_output(['systemctl', 'show', 'xray-gateway-core', '-p', 'MainPID', '--value'])
+            api('/api/users/' + newest['id'], 'PUT', {'name': 'created-after-upgrade', 'enabled': False})
+            deadline = time.monotonic() + 20
+            while subprocess.check_output(['systemctl', 'show', 'xray-gateway-core', '-p', 'MainPID', '--value']) == before_pid:
+                assert time.monotonic() < deadline, 'Controller could not revoke the capability-bearing core'
+                time.sleep(.5)
+            api('/api/users/' + newest['id'], 'PUT', {'name': 'created-after-upgrade', 'enabled': True})
             # The source credential and existing firewall restrictions stay in place.
             assert Path('/etc/xray-gateway/hysteria-tls/privkey.pem').stat().st_mode & 0o777 == 0o640
         else:
