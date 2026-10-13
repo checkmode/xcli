@@ -6,6 +6,55 @@
 
 当前版本为 1.2.0，已在 Ubuntu 26.04 ARM64、Xray-core v26.3.27 上验证。提供 REALITY / XTLS Vision 和 WebSocket / TLS 两个 VLESS 入口。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
 
+## 一键安装
+
+准备一台**全新的 Ubuntu 24.04 或 26.04 服务器**，支持 AMD64 / ARM64。需要 root 或 sudo 权限、systemd、公网 IPv4，以及能访问 Ubuntu 软件源、GitHub 和 Let's Encrypt 的网络。建议至少 2 GB 内存并预留 4 GB 磁盘空间用于编译。
+
+先把域名的 A 记录指向这台服务器的公网 IPv4；只保留该地址，移除 AAAA 记录，并关闭 CDN 代理。云安全组和上游防火墙须放行 TCP 80、443。随后在服务器终端执行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash
+```
+
+按提示填写面板域名、证书邮箱、公网 IPv4 并确认安装。**无需手动下载或克隆代码仓库**：脚本自动解析固定提交、下载源码包、安装依赖并编译 C++ 面板，再安装经过 SHA-256 校验的官方 Xray、Nginx、HTTPS 证书和探测服务。首次构建需要数分钟，耗时取决于服务器和网络。
+
+安装完成后访问输出的 HTTPS 地址。管理员用户名为 `admin`；随机初始密码仅保存在服务器的 root 私有文件中，使用下面的命令查看：
+
+```sh
+sudo cat /root/xray-gateway-admin.txt
+```
+
+登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx。
+
+### 无人值守与预检查
+
+将下例中的域名、邮箱和公网 IPv4 替换为自己的值；`--agree-tos` 表示同意 [Let's Encrypt 服务条款](https://letsencrypt.org/repository/)：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- \
+  --domain panel.example.com --email admin@example.com --public-ip 203.0.113.10 \
+  --agree-tos --yes
+```
+
+`203.0.113.10` 仅用于文档示例，安装器会拒绝示例地址和内网地址。可先只检查环境、端口和 DNS；此模式不安装软件、不修改系统配置：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- \
+  --domain panel.example.com --public-ip 203.0.113.10 --check --yes
+```
+
+`--reality-sni` 可指定 REALITY 目标域名，默认 `www.bing.com`，不能与面板域名相同。需要使用已有证书时，传入 `--certificate /path/to/fullchain.pem --private-key /path/to/privkey.pem`，此时无需邮箱和服务条款参数。已有证书必须与域名匹配、私钥未加密且证书链受系统信任；安装器会复制到 `/etc/xray-gateway/tls/`，**不会自动续期这类证书**，更新后需检查并重载 Nginx。查看全部选项可在命令末尾加 `-s -- --help`。
+
+### 安装保护与失败处理
+
+安装器专用于全新服务器。发现已有 xcli 数据、Nginx 配置、同名服务账号或占用端口时会停止，不覆盖现有部署。已有用户请按后面的“升级已有部署”操作，不要重新运行安装器。
+
+安装结束会验证管理服务、受信任的 HTTPS、核心账号同步，以及两个入口的 HTTPS / UDP 自检。若管理服务正常但节点自检尚未通过，保留已安装服务并返回退出码 `2`，请登录查看健康监测；这不表示完整节点验证成功。
+
+安装日志位于 `/root/xcli-install-时间/install.log`。中途失败会停用本次新增服务、撤销本次专属防火墙规则，保留凭据、数据库、证书和日志；已安装的系统软件包也会保留。该目录内的 `rollback.sh` 可手动停用本次安装。失败后先检查日志，不要删除配置后盲目重试；再次运行会拒绝覆盖保留的数据。
+
+安装测试覆盖 Ubuntu 24.04 / 26.04 与 AMD64 / ARM64 的临时机器，使用受测试系统信任的临时证书；公网 Let's Encrypt 签发仍取决于实际域名解析、80 端口可达性及签发方限制。
+
 ## 功能
 
 | 功能 | 行为 |
