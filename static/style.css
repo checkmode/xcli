@@ -25,3 +25,5 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 #page-diagnostics .page-heading>.secondary{white-space:nowrap;flex-shrink:0}
 
 #webshare-plan{display:block;width:100%;font:inherit;padding:12px;border:1px solid #dce5e8;border-radius:6px;background:#fff;color:var(--ink);margin-top:8px}#webshare-plan:focus{outline:2px solid #4ca695;outline-offset:2px}#page-webshare .form-actions{flex-wrap:wrap}#webshare-pools{margin-top:20px}
+
+.country-section{margin-top:26px}.country-section>h2{margin-bottom:16px}.country-section .panel h3{font-size:18px;margin:0}.country-section .panel p{overflow-wrap:anywhere}.country-search{display:block;max-width:560px;margin:10px 0 14px}.country-search input{width:100%}

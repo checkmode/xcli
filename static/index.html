@@ -16,15 +16,15 @@
 <div id="runtime-nodes" class="node-grid"></div>
 <article class="panel guide"><h2>连接客户端</h2><p>在用户管理中选择用户获取节点订阅或小火箭导入指南。若 Wi-Fi 下检测到本地运营商 DNS，请关闭小火箭兼容模式并重连，再重新测试。</p><button class="secondary" data-page="users">选择用户并获取节点 →</button></article></section>
 <section class="page" id="page-webshare" hidden>
-<div class="page-heading"><div><p class="eyebrow">WEBSHARE</p><h1>动态住宅池</h1><p class="muted">订阅只显示美国、日本、新加坡和全球四个入口，后台维护各地区的可用会话。</p></div><span class="badge" id="webshare-badge">正在读取</span></div>
+<div class="page-heading"><div><p class="eyebrow">WEBSHARE</p><h1>动态住宅池</h1><p class="muted">按国家/地区选择入口，同国家备用出口自动接替；原有入口名称保持不变。</p></div><span class="badge" id="webshare-badge">正在读取</span></div>
 <p id="webshare-error" class="error" role="alert"></p><p id="webshare-message" class="muted" aria-live="polite"></p>
 <div class="security-grid"><article class="panel"><h2>连接 Webshare</h2>
 <form id="webshare-key-form"><label>API Key<input name="api_key" type="password" autocomplete="off" maxlength="256" placeholder="粘贴 Webshare API Key" required></label><p class="small muted">密钥加密保存在服务器，保存后不会回显。已有连接继续使用，直到新密钥验证通过。</p><div class="form-actions"><button class="primary" type="submit">保存并读取套餐</button><a class="text-button" href="https://dashboard.webshare.io/userapi/keys" target="_blank" rel="noopener noreferrer">获取 API Key ↗</a></div></form>
 <p id="webshare-key-status" class="small muted"></p>
-<form id="webshare-plan-form"><label>动态住宅套餐<select name="plan_id" id="webshare-plan"><option value="0">请先读取套餐</option></select></label><label class="check-label"><input type="checkbox" name="enabled">启用四个动态入口</label><p class="small muted">启用后更新客户端订阅。停用将关闭动态住宅连接，固定住宅节点不受影响。</p><button class="primary" type="submit">保存套餐与启用状态</button></form>
+<form id="webshare-plan-form"><label>动态住宅套餐<select name="plan_id" id="webshare-plan"><option value="0">请先读取套餐</option></select></label><label class="check-label"><input type="checkbox" name="enabled">启用动态住宅入口</label><p class="small muted">启用后更新客户端订阅。停用将关闭动态住宅连接，固定住宅节点不受影响。</p><button class="primary" type="submit">保存套餐与启用状态</button></form>
 <div class="form-actions"><button class="secondary" id="webshare-sync" type="button">立即同步</button><button class="secondary danger" id="webshare-clear" type="button">移除密钥并停用</button></div>
-</article><article class="panel"><h2>同步与用量</h2><dl id="webshare-summary"></dl><p class="small muted">用量为 Webshare 最近 24 小时的统计，供应商按小时汇总，可能延迟；本面板的用户配额仍独立累计。</p><p class="small muted">出口通过 HTTPS 和 DoH 检查后进入可用池。每个地区最多保留 3 个备用会话，连续 3 次探测失败后切换。新连接使用新出口，已有连接保持到关闭。出口 IP 由供应商分配，也可能提前变化。住宅出口仅支持 TCP。</p></article></div>
-<div id="webshare-pools" class="node-grid"></div><article class="panel"><h2>最近会话切换</h2><div id="webshare-events"></div></article>
+</article><article class="panel"><h2>同步与用量</h2><dl id="webshare-summary"></dl><p class="small muted">用量为 Webshare 最近 24 小时的统计，供应商按小时汇总，可能延迟；本面板的用户配额仍独立累计。</p><p class="small muted">出口通过 HTTPS 和 DoH 检查后进入可用池。每个国家/地区最多保留 3 个备用会话。建立连接失败时自动尝试同国家备用，后台也会持续探测并替换失效会话。已经建立的连接无法迁移，需要客户端重连。出口 IP 由供应商分配，也可能提前变化。住宅出口仅支持 TCP。</p></article></div>
+<label class="country-search">筛选国家/地区<input id="webshare-country-filter" type="search" placeholder="国家名称、代码或大洲，例如 日本 / JP / 亚洲"></label><p class="small muted">探测点为服务器至 Webshare 出口。探测会消耗供应商套餐流量；空闲时降频，使用中加快。地区无可用出口时明确失败，不跨国家回退。</p><div id="webshare-pools"></div><article class="panel"><h2>最近会话切换</h2><div id="webshare-events"></div></article>
 </section>
 <section class="page" id="page-diagnostics" hidden><div class="page-heading"><div><p class="eyebrow">RUNTIME DIAGNOSTICS</p><h1>运行诊断</h1><p class="muted">区分进程、管理接口、访问权限同步和公网入口探测。</p></div><button id="refresh-diagnostics" class="secondary" type="button">刷新诊断</button></div>
 <p id="diagnostics-error" class="error" role="alert"></p>

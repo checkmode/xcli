@@ -1,4 +1,5 @@
 #pragma once
+#include "webshare_regions.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>

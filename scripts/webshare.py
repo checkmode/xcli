@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded Webshare control plane and four loopback-only, TCP-only SOCKS gateways."""
+"""Bounded Webshare control plane and country-specific TCP-only SOCKS gateways."""
 import argparse
 import asyncio
 import base64
@@ -20,12 +20,33 @@ import urllib.request
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-REGIONS = {'US': '美国', 'JP': '日本', 'SG': '新加坡', 'ZZ': '全球'}
-PORTS = dict(zip(REGIONS, range(10120, 10124)))
+REGISTRY = [
+    ('US', '美国', '北美', 'residential-11', 10110, 10120),
+    ('JP', '日本', '亚洲', 'residential-12', 10111, 10121),
+    ('SG', '新加坡', '亚洲', 'residential-13', 10112, 10122),
+    ('ZZ', '全球', '全球', 'residential-14', 10113, 10123),
+    ('HK', '香港', '亚洲', 'residential-15', 10200, 10300),
+    ('TW', '台湾', '亚洲', 'residential-16', 10201, 10301),
+    ('KR', '韩国', '亚洲', 'residential-17', 10202, 10302),
+    ('TH', '泰国', '亚洲', 'residential-18', 10203, 10303),
+    ('MY', '马来西亚', '亚洲', 'residential-19', 10204, 10304),
+    ('IN', '印度', '亚洲', 'residential-20', 10205, 10305),
+    ('CA', '加拿大', '北美', 'residential-21', 10206, 10306),
+    ('GB', '英国', '欧洲', 'residential-22', 10207, 10307),
+    ('DE', '德国', '欧洲', 'residential-23', 10208, 10308),
+    ('FR', '法国', '欧洲', 'residential-24', 10209, 10309),
+    ('NL', '荷兰', '欧洲', 'residential-25', 10210, 10310),
+    ('AU', '澳大利亚', '大洋洲', 'residential-26', 10211, 10311),
+]
+REGIONS = {row[0]: row[1] for row in REGISTRY}
+PORTS = {row[0]: row[5] for row in REGISTRY}
 CONFIG_CONTEXT = b'xcli:webshare:config:v1'
 ACTIVE_CONTEXT = b'xcli:webshare:active:v1'
 SESSION_AGE = 1800
 PROBE_AGE = 120
+IDLE_PROBE_AGE = 900
+BACKUP_PROBE_AGE = 900
+SESSION_FRESHNESS = 1200
 STANDBY_COUNT = 3
 
 
@@ -165,30 +186,33 @@ async def probe(user, password, country):
 
 
 class Manager:
-    def __init__(self, directory, key, fetch=api_get, check=probe):
+    def __init__(self, directory, key, fetch=api_get, check=probe, regions=None):
         self.directory, self.key, self.fetch, self.check = directory, key, fetch, check
+        self.regions = dict(REGIONS if regions is None else regions)
         self.active = {'enabled': False, 'plan_id': 0}
         self.desired = {}
-        self.pools = {country: [] for country in REGIONS}
+        self.pools = {country: [] for country in self.regions}
         self.events, self.plans, self.usage = [], [], {}
         self.sync_error = self.usage_error = ''
         self.last_sync = self.last_attempt = self.next_sync = 0
         self.processed_revision = ''
         self.epoch = 0
-        self.semaphore = asyncio.Semaphore(2)
+        self.semaphore = asyncio.Semaphore(4)
         self.connections = set()
         self.upstreams = set()
         self.force_rotate = set()
         self.maintenance_wakeup = asyncio.Event()
-        self.cooldown = {country: 0 for country in REGIONS}
-        self.failures = {country: 0 for country in REGIONS}
+        self.cooldown = {country: 0 for country in self.regions}
+        self.failures = {country: 0 for country in self.regions}
+        self.last_used = {country: 0 for country in self.regions}
+        self.failovers = {country: 0 for country in self.regions}
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         with contextlib.suppress(OSError, ValueError, KeyError):
             saved = unseal((directory / 'active.xgb').read_bytes(), key, ACTIVE_CONTEXT)
             self.active = saved['active']
             self.processed_revision = saved.get('processed_revision', '')
             self.plans = saved.get('plans', [])
-            self.pools = {c: [s for s in saved.get('pools', {}).get(c, []) if s.get('expires_at', 0) > stamp()] for c in REGIONS}
+            self.pools = {c: [s for s in saved.get('pools', {}).get(c, []) if s.get('expires_at', 0) > stamp()] for c in self.regions}
 
     def save(self):
         atomic_write(self.directory / 'active.xgb', seal({'active': self.active, 'plans': self.plans,
@@ -197,18 +221,29 @@ class Manager:
     def enabled(self):
         return bool(self.desired.get('enabled') and self.active.get('enabled'))
 
+    def fresh(self, session):
+        return (session.get('last_success', 0) > stamp() - SESSION_FRESHNESS and
+                session.get('expires_at', 0) > stamp() and session.get('failures', 0) < 3)
+
+    def probe_interval(self, country):
+        return PROBE_AGE if self.last_used[country] > stamp() - 300 else IDLE_PROBE_AGE
+
     def report(self):
         pools = []
         for country, sessions in self.pools.items():
             live = sessions[0] if sessions else {}
-            recent = live.get('last_success', 0) > stamp() - PROBE_AGE * 2 and live.get('expires_at', 0) > stamp()
+            recent = self.fresh(live)
+            standby = sum(self.fresh(s) and s.get('retry_after', 0) <= stamp() for s in sessions[1:])
             value = {'country': country, 'label': '动态住宅 · ' + REGIONS[country], 'status': 'disabled' if not self.enabled() else 'healthy' if recent else 'unavailable',
-                'standby': max(0, len(sessions) - 1), 'failures': self.failures[country], 'error': '' if recent else '等待可用会话'}
+                'standby': max(0, len(sessions) - 1), 'ready_standby': standby, 'probe_interval': self.probe_interval(country),
+                'failovers': self.failovers[country], 'failures': self.failures[country], 'error': '' if recent else '等待可用会话'}
             value.update({key: live[key] for key in ('exit_ip', 'exit_country', 'https_ms', 'doh_ms', 'last_success', 'selected_at', 'expires_at') if key in live})
             pools.append(value)
         healthy = sum(p['status'] == 'healthy' for p in pools)
-        status = 'healthy' if healthy == 4 else 'degraded' if self.enabled() else 'disabled' if self.active.get('api_key') else 'unconfigured'
-        value = {'updated': stamp(), 'status': status, 'message': '四个动态入口可用' if healthy == 4 else '部分区域正在寻找可用出口' if self.enabled() else '选择套餐并启用动态住宅池',
+        total = len(self.regions)
+        status = 'healthy' if healthy == total else 'degraded' if self.enabled() else 'disabled' if self.active.get('api_key') else 'unconfigured'
+        message = f'{healthy}/{total} 个国家/地区入口可用' if self.enabled() else '选择套餐并启用动态住宅池'
+        value = {'updated': stamp(), 'status': status, 'message': message,
             'enabled': self.enabled(), 'active_plan_id': self.active.get('plan_id', 0), 'revision': self.processed_revision,
             'last_sync': self.last_sync, 'last_attempt': self.last_attempt, 'next_sync': self.next_sync,
             'sync_error': self.sync_error, 'usage_error': self.usage_error, 'plans': self.plans, 'pools': pools, 'events': self.events[:20], **self.usage}
@@ -249,7 +284,7 @@ class Manager:
             self.active = next_active
             if changed:
                 self.epoch += 1
-                self.pools = {country: [] for country in REGIONS}
+                self.pools = {country: [] for country in self.regions}
             if desired.get('action') == 'rotate' and desired.get('revision') != self.processed_revision:
                 self.force_rotate.add(desired['country'])
             self.processed_revision = desired.get('revision', '')
@@ -283,42 +318,58 @@ class Manager:
     async def checked(self, session, country, credential):
         async with self.semaphore:
             result = await self.check(session['username'], credential['password'], country)
-        return {**session, **result, 'failures': 0}
+        return {**session, **result, 'failures': 0, 'last_checked': stamp(), 'retry_after': 0}
 
     async def maintain_region(self, country):
         if not self.enabled() or 'credentials' not in self.active:
             return
         epoch, credential = self.epoch, dict(self.active['credentials'])
         old = self.pools[country][0] if self.pools[country] else None
-        sessions = [s for s in self.pools[country] if s['expires_at'] > stamp()]
+        before = [dict(s) for s in self.pools[country]]
+        sessions = [s for s in before if s['expires_at'] > stamp()]
         forced = country in self.force_rotate
         if forced:
             self.force_rotate.discard(country)
             sessions = [s for s in sessions if old is None or s['username'] != old['username']]
         checked = []
-        for session in sessions:
-            if session.get('last_success', 0) <= stamp() - PROBE_AGE:
+        for index, session in enumerate(sessions):
+            interval = self.probe_interval(country) if index == 0 else BACKUP_PROBE_AGE
+            if session.get('failures', 0):
+                interval = 30
+            if session.get('last_checked', session.get('last_success', 0)) <= stamp() - interval:
                 try:
                     session = await self.checked(session, country, credential)
                 except ProviderError:
-                    session = {**session, 'failures': session.get('failures', 0) + 1}
+                    session = {**session, 'failures': session.get('failures', 0) + 1, 'last_checked': stamp()}
                     if session['failures'] >= 3:
                         continue
             checked.append(session)
         sessions = checked
+        # Replenish a nearly expired backup early. Do not discard the active session first.
+        if len(sessions) >= STANDBY_COUNT + 1:
+            expiring = next((s for s in sessions[1:] if s['expires_at'] <= stamp() + 180), None)
+            if expiring:
+                sessions.remove(expiring)
         if len(sessions) < STANDBY_COUNT + 1 and stamp() >= self.cooldown[country]:
             # At most two new sessions per region per pass; never enumerate an exported 20,000-row list.
             for _ in range(min(2, STANDBY_COUNT + 1 - len(sessions))):
                 identifier = str(secrets.randbelow(2**48))
-                candidate = {'username': session_username(credential['base'], country, identifier), 'expires_at': stamp() + SESSION_AGE}
+                candidate = {'username': session_username(credential['base'], country, identifier),
+                    'expires_at': stamp() + SESSION_AGE - secrets.randbelow(600)}
                 try:
                     candidate = await self.checked(candidate, country, credential)
                     if candidate['exit_ip'] not in {s.get('exit_ip') for s in sessions}:
                         sessions.append(candidate)
+                    else:
+                        self.cooldown[country] = stamp() + 60
                 except ProviderError:
                     self.cooldown[country] = stamp() + 60
         if epoch != self.epoch or not self.enabled():
             return
+        # A connection may already have promoted a backup while a slow probe was running.
+        current = self.pools[country][0] if self.pools[country] else None
+        if current and old and current['username'] != old['username']:
+            old = current
         # Keep a healthy current session even when a newer candidate has lower latency.
         if old and any(s['username'] == old['username'] and s.get('failures', 0) < 3 for s in sessions) and not forced:
             sessions.sort(key=lambda s: (s['username'] != old['username'], s.get('failures', 0), s.get('https_ms', 99999)))
@@ -334,19 +385,34 @@ class Manager:
             self.events = self.events[:20]
         self.pools[country] = sessions
         self.failures[country] = sessions[0].get('failures', 0) if sessions else 3
+        return before != sessions
 
     async def maintenance_loop(self):
-        while True:
-            try:
-                await asyncio.gather(*(self.maintain_region(country) for country in REGIONS))
-                if self.enabled():
+        tasks, due = {}, {c: 0 for c in self.regions}
+        try:
+            while True:
+                changed = False
+                for country, task in list(tasks.items()):
+                    if task.done():
+                        try:
+                            changed = bool(task.result()) or changed
+                        except Exception:
+                            self.sync_error = '池维护暂时失败，将自动重试'
+                        del tasks[country]
+                        due[country] = stamp() + 20
+                if changed and self.enabled():
                     self.save()
-            except Exception:
-                # Exception details can contain provider credentials; never log them.
-                self.sync_error = '池维护暂时失败，将自动重试'
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self.maintenance_wakeup.wait(), 20)
-            self.maintenance_wakeup.clear()
+                if self.maintenance_wakeup.is_set():
+                    self.maintenance_wakeup.clear()
+                    due = {c: 0 for c in self.regions}
+                for country in self.regions:
+                    if country not in tasks and stamp() >= due[country]:
+                        tasks[country] = asyncio.create_task(self.maintain_region(country))
+                await asyncio.sleep(1)
+        finally:
+            for task in tasks.values():
+                task.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
 
     async def control_loop(self):
         syncing = None
@@ -362,7 +428,7 @@ class Manager:
                         if syncing and not syncing.done():
                             syncing.cancel()
                         self.active = {'enabled': False, 'plan_id': 0}
-                        self.pools = {country: [] for country in REGIONS}
+                        self.pools = {country: [] for country in self.regions}
                         self.plans, self.usage, self.sync_error = [], {}, ''
                         self.processed_revision = desired.get('revision', '')
                         self.epoch += 1
@@ -390,8 +456,61 @@ class Manager:
                 with contextlib.suppress(asyncio.CancelledError):
                     await syncing
 
+    def promote(self, country, selected, failed):
+        sessions = self.pools[country]
+        if not sessions or sessions[0]['username'] not in failed:
+            return
+        candidate = next((s for s in sessions if s['username'] == selected['username']), None)
+        if candidate is None:
+            return
+        sessions.remove(candidate)
+        candidate['selected_at'], candidate['retry_after'] = stamp(), 0
+        sessions.insert(0, candidate)
+        self.failures[country] = candidate.get('failures', 0)
+        self.failovers[country] += 1
+        self.events.insert(0, {'country': country, 'ts': stamp(), 'reason': '连接失败，已切换同国家备用出口'})
+        self.events = self.events[:20]
+        self.save()
+
+    async def connect_upstream(self, selected, credential, kind, address, port):
+        upstream = None
+        try:
+            source, upstream = await asyncio.open_connection('p.webshare.io', 80, family=socket.AF_INET)
+            self.upstreams.add(upstream)
+            upstream.write(b'\x05\x01\x02')
+            await upstream.drain()
+            if await source.readexactly(2) != b'\x05\x02':
+                raise ProviderError('Proxy authentication unavailable')
+            user, password = selected['username'].encode(), credential['password'].encode()
+            upstream.write(b'\x01' + bytes([len(user)]) + user + bytes([len(password)]) + password)
+            await upstream.drain()
+            if await source.readexactly(2) != b'\x01\x00':
+                raise ProviderError('Proxy authentication failed')
+            upstream.write(b'\x05\x01\x00' + bytes([kind]) + address + port)
+            await upstream.drain()
+            header = await source.readexactly(4)
+            if header[0] != 5 or header[1] != 0:
+                raise ProviderError('Proxy connection failed')
+            if header[3] == 1:
+                await source.readexactly(6)
+            elif header[3] == 4:
+                await source.readexactly(18)
+            elif header[3] == 3:
+                await source.readexactly((await source.readexactly(1))[0] + 2)
+            else:
+                raise ProviderError('Proxy reply invalid')
+            return source, upstream
+        except BaseException:
+            if upstream:
+                self.upstreams.discard(upstream)
+                upstream.close()
+                with contextlib.suppress(OSError, asyncio.TimeoutError):
+                    await asyncio.wait_for(upstream.wait_closed(), 1)
+            raise
+
     async def handle(self, reader, writer, country):
         upstream = None
+        accepted = False
         try:
             if len(self.connections) >= 128:
                 return
@@ -428,36 +547,37 @@ class Manager:
                 port = await reader.readexactly(2)
                 if port == bytes(2) or not self.enabled():
                     raise ProviderError('Pool disabled')
-                sessions = self.pools[country]
-                if not sessions or sessions[0]['expires_at'] <= stamp() or sessions[0].get('last_success', 0) < stamp() - PROBE_AGE * 3:
-                    raise ProviderError('No healthy session')
-                selected, credential = dict(sessions[0]), dict(self.active['credentials'])
-                source, upstream = await asyncio.open_connection('p.webshare.io', 80, family=socket.AF_INET)
-                self.upstreams.add(upstream)
-                upstream.write(b'\x05\x01\x02')
-                await upstream.drain()
-                if await source.readexactly(2) != b'\x05\x02':
-                    raise ProviderError('Proxy authentication unavailable')
-                user, password = selected['username'].encode(), credential['password'].encode()
-                upstream.write(b'\x01' + bytes([len(user)]) + user + bytes([len(password)]) + password)
-                await upstream.drain()
-                if await source.readexactly(2) != b'\x01\x00':
-                    raise ProviderError('Proxy authentication failed')
-                upstream.write(b'\x05\x01\x00' + bytes([kind]) + address + port)
-                await upstream.drain()
-                header = await source.readexactly(4)
-                if header[0] != 5 or header[1] != 0:
-                    raise ProviderError('Proxy connection failed')
-                if header[3] == 1:
-                    await source.readexactly(6)
-                elif header[3] == 4:
-                    await source.readexactly(18)
-                elif header[3] == 3:
-                    await source.readexactly((await source.readexactly(1))[0] + 2)
-                else:
-                    raise ProviderError('Proxy reply invalid')
-                writer.write(b'\x05\x00\x00\x01' + bytes(6))
-                await writer.drain()
+            self.last_used[country] = stamp()
+            self.maintenance_wakeup.set()
+            epoch, credential = self.epoch, dict(self.active['credentials'])
+            candidates = [dict(s) for s in self.pools[country] if self.fresh(s)]
+            candidates.sort(key=lambda s: s.get('retry_after', 0) > stamp())
+            failed = []
+            for selected in candidates[:3]:
+                try:
+                    async with asyncio.timeout(6):
+                        source, upstream = await self.connect_upstream(selected, credential, kind, address, port)
+                    if epoch != self.epoch or not self.enabled():
+                        raise ProviderError('Pool changed during connection')
+                    if failed:
+                        self.promote(country, selected, failed)
+                    break
+                except (OSError, ProviderError, asyncio.IncompleteReadError, asyncio.TimeoutError):
+                    if upstream:
+                        self.upstreams.discard(upstream)
+                        upstream.close()
+                        upstream = None
+                    failed.append(selected['username'])
+                    for current in self.pools[country]:
+                        if current['username'] == selected['username']:
+                            current['retry_after'] = stamp() + 30
+                            current['last_checked'] = 0
+                    self.maintenance_wakeup.set()
+            else:
+                raise ProviderError('No healthy session connected')
+            writer.write(b'\x05\x00\x00\x01' + bytes(6))
+            await writer.drain()
+            accepted = True
             async def copy(source, destination):
                 while data := await asyncio.wait_for(source.read(65536), 600):
                     destination.write(data)
@@ -473,9 +593,10 @@ class Manager:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         except (OSError, ValueError, ProviderError, asyncio.IncompleteReadError, asyncio.TimeoutError):
-            with contextlib.suppress(OSError):
-                writer.write(b'\x05\x01\x00\x01' + bytes(6))
-                await writer.drain()
+            if not accepted:
+                with contextlib.suppress(OSError):
+                    writer.write(b'\x05\x01\x00\x01' + bytes(6))
+                    await writer.drain()
         finally:
             self.connections.discard(writer)
             self.upstreams.discard(upstream)
@@ -487,10 +608,16 @@ class Manager:
 
 
 async def main(args):
-    manager = Manager(args.state, args.key.read_bytes())
+    settings = json.loads(args.settings.read_text())
+    installed = {e['country'] for e in settings.get('residential_exits', []) if e.get('dynamic')}
+    regions = {country: label for country, label in REGIONS.items() if country in installed}
+    if not regions:
+        raise ValueError('No installed dynamic entrances')
+    manager = Manager(args.state, args.key.read_bytes(), regions=regions)
     servers = []
     try:
-        for country, port in PORTS.items():
+        for country in regions:
+            port = PORTS[country]
             servers.append(await asyncio.start_server(lambda r, w, c=country: manager.handle(r, w, c), '127.0.0.1', port, limit=65536))
         await asyncio.gather(manager.control_loop(), manager.maintenance_loop())
     finally:
@@ -502,6 +629,7 @@ async def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--state', type=Path, default=Path('/var/lib/xray-gateway/webshare'))
+    parser.add_argument('--settings', type=Path, default=Path('/etc/xray-gateway/settings.json'))
     parser.add_argument('--key', type=Path, default=Path('/etc/xray-gateway/security.key'))
     args = parser.parse_args()
     try:

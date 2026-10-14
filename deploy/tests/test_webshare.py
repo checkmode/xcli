@@ -2,6 +2,8 @@ import asyncio
 import importlib.util
 import json
 import os
+import ast
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -86,8 +88,10 @@ class WebshareTest(unittest.IsolatedAsyncioTestCase):
         m.pools['US'][0]['last_success'] = 1
         self.failed_users.add(original)
         for _ in range(2):
+            m.pools['US'][0]['last_checked'] = 0
             await m.maintain_region('US')
             self.assertEqual(m.pools['US'][0]['username'], original)
+        m.pools['US'][0]['last_checked'] = 0
         await m.maintain_region('US')
         self.assertNotEqual(m.pools['US'][0]['username'], original)
         previous = m.pools['US'][0]['username']
@@ -112,7 +116,7 @@ class WebshareTest(unittest.IsolatedAsyncioTestCase):
         m.desired = self.config
         self.assertFalse(m.enabled())
 
-    async def test_expired_sessions_removed_and_four_region_names(self):
+    async def test_expired_sessions_removed_and_country_names(self):
         m = self.manager
         for country in w.REGIONS:
             await m.maintain_region(country)
@@ -186,6 +190,119 @@ class WebshareTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await reader.readexactly(10))[1], 7)
                 writer.close();await writer.wait_closed()
                 self.assertEqual(len(received), 1)
+        finally:
+            proxy.close();server.close();await proxy.wait_closed();await server.wait_closed()
+
+    async def test_registry_matches_backend_and_installer(self):
+        root = SOURCE.parents[1]
+        header = (root / 'cpp/include/webshare_regions.hpp').read_text()
+        rows = [(*row[:4], int(row[4]), int(row[5])) for row in re.findall(
+            r'\{"([A-Z]{2})","([^"]+)","([^"]+)","([^"]+)",(\d+),(\d+)\}', header)]
+        self.assertEqual(rows, w.REGISTRY)
+        tree = ast.parse((root / 'deploy/webshare-pool.py').read_text())
+        registry = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == 'REGISTRY' for t in n.targets))
+        self.assertEqual(registry, rows)
+        self.assertEqual(len({p for row in rows for p in row[4:]}), 32)
+        legacy = w.Manager(Path(self.temporary.name) / 'legacy', self.key, regions={c: w.REGIONS[c] for c in ('US', 'JP', 'SG', 'ZZ')})
+        self.assertEqual(list(legacy.pools), ['US', 'JP', 'SG', 'ZZ'])
+
+    async def test_idle_probes_are_bounded_and_active_country_speeds_up(self):
+        m = self.manager
+        await m.maintain_region('JP')
+        await m.maintain_region('JP')
+        before = self.serial
+        for session in m.pools['JP']:
+            session['last_checked'] = w.stamp() - 200
+        await m.maintain_region('JP')
+        self.assertEqual(self.serial, before)
+        m.last_used['JP'] = w.stamp()
+        await m.maintain_region('JP')
+        self.assertEqual(self.serial, before + 1)
+        m.report()
+        report = json.loads((self.directory / 'report.json').read_text())
+        jp = next(p for p in report['pools'] if p['country'] == 'JP')
+        self.assertEqual(jp['ready_standby'], 3)
+        self.assertEqual(jp['probe_interval'], w.PROBE_AGE)
+
+    async def test_slow_region_does_not_block_other_country_maintenance(self):
+        m = self.manager
+        original = m.check
+        gate = asyncio.Event()
+        async def check(user, password, country):
+            if country == 'US':
+                await gate.wait()
+            return await original(user, password, country)
+        m.check = check
+        task = asyncio.create_task(m.maintenance_loop())
+        try:
+            async with asyncio.timeout(3):
+                while not m.pools['JP']:
+                    await asyncio.sleep(.01)
+            self.assertFalse(m.pools['US'])
+            self.assertTrue(m.pools['JP'])
+        finally:
+            gate.set()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_failed_connect_retries_same_country_before_sending_payload(self):
+        m = self.manager
+        await m.maintain_region('US')
+        await m.maintain_region('JP')
+        original = m.pools['US'][0]['username']
+        backup = m.pools['US'][1]['username']
+        attempted, delivered = [], []
+        reject_all = False
+        async def upstream(reader, writer):
+            try:
+                await reader.readexactly(3)
+                writer.write(b'\x05\x02');await writer.drain()
+                head = await reader.readexactly(2)
+                user = (await reader.readexactly(head[1])).decode()
+                await reader.readexactly((await reader.readexactly(1))[0])
+                attempted.append(user)
+                writer.write(b'\x01\x00');await writer.drain()
+                await reader.readexactly(10)
+                if reject_all or user == original:
+                    writer.write(b'\x05\x05\x00\x01' + bytes(6));await writer.drain()
+                    return
+                writer.write(b'\x05\x00\x00\x01' + bytes(6));await writer.drain()
+                payload = await reader.readexactly(4)
+                delivered.append((user, payload))
+                writer.write(payload);await writer.drain()
+            finally:
+                writer.close();await writer.wait_closed()
+        server = await asyncio.start_server(upstream, '127.0.0.1', 0)
+        proxy = await asyncio.start_server(lambda r, s: m.handle(r, s, 'US'), '127.0.0.1', 0)
+        original_open = asyncio.open_connection
+        async def redirected(host, port, **kwargs):
+            self.assertEqual(host, 'p.webshare.io', 'Unexpected direct upstream dial')
+            return await original_open('127.0.0.1', server.sockets[0].getsockname()[1])
+        async def client():
+            reader, writer = await original_open('127.0.0.1', proxy.sockets[0].getsockname()[1])
+            writer.write(b'\x05\x01\x00');await writer.drain();await reader.readexactly(2)
+            writer.write(b'\x05\x01\x00\x01\x08\x08\x08\x08\x01\xbb');await writer.drain()
+            return reader, writer, await reader.readexactly(10)
+        try:
+            with patch.object(w.asyncio, 'open_connection', redirected):
+                reader, writer, result = await client()
+                self.assertEqual(result[1], 0)
+                writer.write(b'once');await writer.drain()
+                self.assertEqual(await reader.readexactly(4), b'once')
+                writer.close();await writer.wait_closed()
+                self.assertEqual(attempted, [original, backup])
+                self.assertEqual(delivered, [(backup, b'once')])
+                self.assertEqual(m.pools['US'][0]['username'], backup)
+                self.assertEqual(m.failovers['US'], 1)
+                self.assertTrue(all('-us-' in user for user in attempted))
+                reject_all = True
+                reader, writer, result = await client()
+                self.assertNotEqual(result[1], 0)
+                writer.close();await writer.wait_closed()
+                self.assertEqual(len(delivered), 1)
+                self.assertFalse(m.upstreams)
         finally:
             proxy.close();server.close();await proxy.wait_closed();await server.wait_closed()
 

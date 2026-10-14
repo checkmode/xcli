@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SOURCE / 'deploy'))
@@ -24,22 +25,23 @@ class WebshareInstallTest(unittest.TestCase):
         self.firewall = (SOURCE / 'deploy/firewall.sh').read_text()
 
     def check_preservation(self, settings, core, nginx):
+        count = len(installer.REGISTRY)
         before = copy.deepcopy((settings, core))
         new_settings, new_core, new_nginx, firewall, locations = installer.configure(settings, core, nginx, self.firewall)
         self.assertEqual((settings, core), before)
-        self.assertEqual(new_core['inbounds'][:-4], core['inbounds'])
-        self.assertEqual(new_core['outbounds'][:-4], core['outbounds'])
-        self.assertEqual(new_core['routing']['rules'][:-5], core['routing']['rules'])
-        self.assertEqual(new_settings['residential_exits'][:-4], settings.get('residential_exits', []))
-        self.assertEqual([e['country'] for e in new_settings['residential_exits'][-4:]], ['US', 'JP', 'SG', 'ZZ'])
-        self.assertEqual([e['port'] for e in new_settings['residential_exits'][-4:]], list(range(10110, 10114)))
-        self.assertTrue(all(e['dynamic'] and not e['exit_ip'] for e in new_settings['residential_exits'][-4:]))
-        self.assertEqual(new_core['routing']['rules'][-5]['network'], 'udp')
-        self.assertEqual(new_core['routing']['rules'][-5]['outboundTag'], 'blocked')
+        self.assertEqual(new_core['inbounds'][:-count], core['inbounds'])
+        self.assertEqual(new_core['outbounds'][:-count], core['outbounds'])
+        self.assertEqual(new_core['routing']['rules'][:-(count+1)], core['routing']['rules'])
+        self.assertEqual(new_settings['residential_exits'][:-count], settings.get('residential_exits', []))
+        self.assertEqual([e['country'] for e in new_settings['residential_exits'][-count:]], [row[0] for row in installer.REGISTRY])
+        self.assertEqual([e['port'] for e in new_settings['residential_exits'][-count:]], [row[4] for row in installer.REGISTRY])
+        self.assertTrue(all(e['dynamic'] and not e['exit_ip'] for e in new_settings['residential_exits'][-count:]))
+        self.assertEqual(new_core['routing']['rules'][-(count+1)]['network'], 'udp')
+        self.assertEqual(new_core['routing']['rules'][-(count+1)]['outboundTag'], 'blocked')
         self.assertIn(str(installer.LOCATIONS), new_nginx)
-        self.assertEqual(locations.count('location = '), 4)
-        self.assertLess(firewall.index('10120,10121,10122,10123'), firewall.index('for net in'))
-        self.assertIn('-d 127.0.0.1/32 -p tcp -m multiport --dports 10120,10121,10122,10123 -j RETURN', firewall)
+        self.assertEqual(locations.count('location = '), count)
+        self.assertLess(firewall.index('10120:10123,10300:10311'), firewall.index('for net in'))
+        self.assertIn('-d 127.0.0.1/32 -p tcp -m multiport --dports 10120:10123,10300:10311 -j RETURN', firewall)
         with self.assertRaises(ValueError):
             installer.configure(new_settings, new_core, new_nginx, firewall)
 
@@ -51,6 +53,21 @@ class WebshareInstallTest(unittest.TestCase):
             'port': 1080, 'username': 'testuser', 'password': 'testpassword', 'country': 'US'} for i in range(10)]}
         settings, core, _, nginx, _ = residential.configure(self.settings, self.core, self.monitor, self.nginx, pool)
         self.check_preservation(settings, core, nginx)
+
+    def test_expand_preserves_four_existing_entrances_and_rejects_reinstall(self):
+        with patch.object(installer, 'REGISTRY', installer.REGISTRY[:4]), patch.object(installer, 'ALLOW', installer.LEGACY_ALLOW):
+            old_s, old_c, old_n, old_f, _ = installer.configure(self.settings, self.core, self.nginx, self.firewall)
+        s, c, n, f, locations = installer.configure(old_s, old_c, old_n, old_f, expand=True)
+        self.assertEqual(s['residential_exits'][:4], old_s['residential_exits'])
+        self.assertEqual(c['inbounds'][:-12], old_c['inbounds'])
+        self.assertEqual(c['outbounds'][:-12], old_c['outbounds'])
+        self.assertEqual(c['routing']['rules'][:-13], old_c['routing']['rules'])
+        self.assertEqual(n, old_n)
+        self.assertEqual(locations.count('location = '), 16)
+        self.assertNotIn('10120,10121,10122,10123', f)
+        self.assertIn('10120:10123,10300:10311', f)
+        with self.assertRaises(ValueError):
+            installer.configure(s, c, n, f, expand=True)
 
     def test_conflicting_tag_port_and_catchall_refused(self):
         for change in ('tag', 'port', 'rule'):

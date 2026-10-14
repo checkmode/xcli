@@ -102,7 +102,7 @@ jobs:
           sudo python3 deploy/tests/verify_upgrade.py upgraded
       - name: Add a fixed residential fixture and roll back its configuration
         run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_residential.py
-      - name: Add four disabled Webshare entrances and verify rollback
+      - name: Install and expand country pools, verify both rollbacks
         run: |
           sudo apt-get install -y --no-install-recommends python3-cryptography
           sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_webshare.py

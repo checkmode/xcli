@@ -47,7 +47,7 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
   auto hy2=settings_.value("hysteria2_port",Json(0));
   if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
   auto exits=settings_.value("residential_exits",Json::array());
-  if(!exits.is_array()||exits.size()>20)throw std::runtime_error("Invalid residential exit registry");
+  if(!exits.is_array()||exits.size()>40)throw std::runtime_error("Invalid residential exit registry");
   std::set<std::string> exit_tags,exit_paths;std::set<Int> exit_ports;
   for(const auto& exit:exits) {
     fields(exit,{"tag","label","exit_ip","country","ws_path","port","dynamic"},{"tag","label","exit_ip","country","ws_path","port"});
@@ -60,9 +60,8 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
        !exit_tags.insert(tag).second||!exit_paths.insert(path).second||!exit_ports.insert(port).second)
       throw std::runtime_error("Invalid residential exit metadata");
     if(dynamic) {
-      const std::map<std::string,std::pair<std::string,Int>> regions={{"residential-11",{"US",10110}},{"residential-12",{"JP",10111}},{"residential-13",{"SG",10112}},{"residential-14",{"ZZ",10113}}};
-      auto expected=regions.find(tag);
-      if(expected==regions.end()||expected->second.first!=country||expected->second.second!=port)throw std::runtime_error("Invalid dynamic residential registry");
+      bool valid=false;for(const auto& region:webshare_regions)if(region.tag==tag&&region.country==country&&region.port==port)valid=true;
+      if(!valid)throw std::runtime_error("Invalid dynamic residential registry");
     }
     (void)user_name(exit.at("label"));
   }

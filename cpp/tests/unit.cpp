@@ -132,7 +132,10 @@ int main() {
       check(clash.at("proxies")[0].at("reality-opts").at("public-key")==settings.at("reality_public"),"Wrong REALITY key");
       check(clash.at("proxies")[2].at("type")=="hysteria2","Missing Hysteria 2");
       for(int i=3;i<13;++i)check(clash.at("proxies")[i].at("udp")==false,"Residential UDP enabled");
-      check(clash.at("proxy-groups")[0].at("proxies").size()==13,"Clash group omitted nodes");
+      for(const auto& proxy:clash.at("proxies")) {
+        const auto& choices=clash.at("proxy-groups")[0].at("proxies");
+        check(std::find(choices.begin(),choices.end(),proxy.at("name"))!=choices.end(),"Clash group omitted a node");
+      }
       panel.poll_once();check(live->live.size()==13,"Not every residential inbound was reconciled");
       for(const auto& tag:panel.inbound_tags())check(live->live.at(tag).at(u.email(tag))==u.uuid,"Residential identity differs from its owner");
       check(panel.preflight().at("pending_additions")==0,"Residential preflight incomplete");
@@ -146,10 +149,10 @@ int main() {
     }
     {
       Temp dynamic;Options config;config.state=dynamic.path/"state";config.settings=dynamic.path/"settings.json";config.offline=true;
-      settings["residential_exits"]=Json::array();int i=11;
-      for(const auto& country:{"US","JP","SG","ZZ"}){
-        const auto tag="residential-"+std::to_string(i++);
-        settings["residential_exits"].push_back({{"tag",tag},{"label",std::string("动态住宅 · ")+country},{"exit_ip",""},{"country",country},{"ws_path","/connect/test/"+tag},{"port",10098+i},{"dynamic",true}});
+      settings["residential_exits"]=Json::array();
+      for(const auto& region:webshare_regions){
+        const std::string tag(region.tag),country(region.country);
+        settings["residential_exits"].push_back({{"tag",tag},{"label",std::string("动态住宅 · ")+std::string(region.label)},{"exit_ip",""},{"country",country},{"ws_path","/connect/test/"+tag},{"port",region.port},{"dynamic",true}});
       }
       std::ofstream(config.settings)<<settings.dump();Backend panel(config,std::make_unique<FakeCore>());
       {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
@@ -165,11 +168,13 @@ int main() {
       write_private_file(config.state/"webshare/report.json",Json({{"updated",now()},{"plans",Json::array({{{"id",17},{"eligible",true},{"label","住宅"},{"password","must-not-leak"}}})}}).dump());
       check(panel.webshare_status(session).dump().find("must-not-leak")==std::string::npos,"Provider data escaped public allowlist");
       panel.configure_webshare(session,csrf,{{"plan_id",17},{"enabled",true}});
-      auto clash=panel.clash_configuration(u);check(clash.at("proxies").size()==7,"Clash must include exactly four enabled dynamic entries");
+      auto clash=panel.clash_configuration(u);check(clash.at("proxies").size()==19,"Clash must include all sixteen enabled dynamic entries");
+      check(clash.at("proxy-groups").size()==17,"Country groups missing from Clash export");
+      check(panel.webshare_status(session).at("regions").size()==16,"Installed country registry missing");
       check(clash.at("proxies").at(0).at("reality-opts").at("public-key")==settings.at("reality_public"),"Clash Reality key differs");
       check(clash.at("proxies").at(1).at("ws-opts").at("path")==settings.at("ws_path"),"Clash WebSocket path differs");
       check(clash.at("proxies").at(2).at("password")==u.uuid,"Clash Hysteria authentication differs");
-      for(std::size_t index=3;index<7;++index)check(clash.at("proxies").at(index).at("udp")==false,"Residential UDP must remain disabled");
+      for(std::size_t index=3;index<19;++index)check(clash.at("proxies").at(index).at("udp")==false,"Residential UDP must remain disabled");
       check(clash.at("dns").at("nameserver").at(0)=="https://1.1.1.1/dns-query#PROXY","Clash DNS did not follow selected proxy");
       auto [yaml,info]=panel.clash_subscription(u.token);check(yaml.find("fixture-api-key")==std::string::npos&&yaml.find("type\":\"vless")!=std::string::npos,"Invalid Clash export");
       panel.configure_webshare(session,csrf,{{"clear_key",true}});check(!panel.dynamic_residential_enabled(),"Clearing key left dynamic pool enabled");

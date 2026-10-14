@@ -31,19 +31,32 @@ Json Backend::clash_configuration(const User& user) const {
   if(const auto port=settings_.value("hysteria2_port",0);port>0)
     add({{"name","Hysteria 2"},{"type","hysteria2"},{"server",address},{"port",port},{"password",user.uuid},{"sni",domain},{"skip-cert-verify",false}});
   const bool dynamic_enabled=dynamic_residential_enabled();
+  std::map<std::string,Json> country_nodes;
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
-    websocket(exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>()),exit.at("ws_path").get<std::string>(),false);
+    const auto name=exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>());
+    websocket(name,exit.at("ws_path").get<std::string>(),false);
+    const auto country=exit.at("country").get<std::string>();
+    if(!country_nodes.contains(country))country_nodes[country]=Json::array();
+    if(dynamic)country_nodes[country].insert(country_nodes[country].begin(),Json(name));
+    else country_nodes[country].push_back(name);
   }
   // Prefer the HTTPS transport for interoperability with current Mihomo clients.
   std::swap(names[0],names[1]);
+  Json groups=Json::array();
+  for(const auto& [country,nodes]:country_nodes) {
+    std::string label=country;for(const auto& region:webshare_regions)if(region.country==country)label=region.label;
+    const auto name="住宅分组 · "+label;names.push_back(name);
+    groups.push_back({{"name",name},{"type","select"},{"proxies",nodes}});
+  }
+  groups.insert(groups.begin(),Json{{"name","PROXY"},{"type","select"},{"proxies",names}});
   return {{"mixed-port",7890},{"allow-lan",false},{"mode","rule"},{"log-level","warning"},{"ipv6",false},
     {"profile",{{"store-selected",true}}},{"hosts",{{domain,address}}},
     {"dns",{{"enable",true},{"ipv6",false},{"enhanced-mode","fake-ip"},{"fake-ip-range","198.18.0.1/16"},
       {"use-hosts",true},{"default-nameserver",Json::array({"https://1.1.1.1/dns-query"})},
       {"proxy-server-nameserver",Json::array({"https://1.1.1.1/dns-query"})},
       {"nameserver",Json::array({"https://1.1.1.1/dns-query#PROXY","https://1.0.0.1/dns-query#PROXY"})}}},
-    {"proxies",proxies},{"proxy-groups",Json::array({{{"name","PROXY"},{"type","select"},{"proxies",names}}})},
+    {"proxies",proxies},{"proxy-groups",groups},
     {"rules",Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
       "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve","MATCH,PROXY"})}};
 }

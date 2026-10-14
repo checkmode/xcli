@@ -7,7 +7,7 @@
 namespace xg {
 namespace {
 constexpr auto context="xcli:webshare:config:v1";
-bool region(const std::string& value){return value=="US"||value=="JP"||value=="SG"||value=="ZZ";}
+bool region(const std::string& value){for(const auto& item:webshare_regions)if(item.country==value)return true;return false;}
 void fields(const Json& input,const std::set<std::string>& allowed,const std::set<std::string>& required) {
   if(!input.is_object())throw HttpError(422,"请求必须是 JSON 对象");
   for(auto it=input.begin();it!=input.end();++it)if(!allowed.contains(it.key()))throw HttpError(422,"包含不支持的字段");
@@ -47,10 +47,10 @@ Json Backend::webshare_public_status() const {
       result["plans"].push_back(out);
     }
     for(const auto& pool:value.value("pools",Json::array())) {
-      auto country=pool.value("country",std::string());if(!region(country)||result["pools"].size()>=4)continue;
+      auto country=pool.value("country",std::string());if(!region(country)||result["pools"].size()>=webshare_regions.size())continue;
       Json out={{"country",country}};
       for(const auto* key:{"label","status","error","exit_ip","exit_country"})if(pool.contains(key)&&pool.at(key).is_string())out[key]=pool.at(key).get<std::string>().substr(0,256);
-      for(const auto* key:{"last_success","selected_at","expires_at","standby","failures","https_ms","doh_ms"})if(pool.contains(key)&&pool.at(key).is_number_integer())out[key]=pool.at(key);
+      for(const auto* key:{"last_success","selected_at","expires_at","standby","ready_standby","failures","https_ms","doh_ms","probe_interval","failovers"})if(pool.contains(key)&&pool.at(key).is_number_integer())out[key]=pool.at(key);
       result["pools"].push_back(out);
     }
     for(const auto& event:value.value("events",Json::array())) {
@@ -67,6 +67,10 @@ Json Backend::webshare_status(const std::string& token) {
   result["key_saved"]=!config.value("api_key",std::string()).empty();result["plan_id"]=config.value("plan_id",Int(0));
   result["enabled"]=config.value("enabled",false);result["requested_revision"]=config.value("revision",std::string());
   result["installed"]=false;for(const auto& exit:settings_.value("residential_exits",Json::array()))if(exit.value("dynamic",false))result["installed"]=true;
+  result["regions"]=Json::array();
+  for(const auto& item:webshare_regions)for(const auto& exit:settings_.value("residential_exits",Json::array()))
+    if(exit.value("dynamic",false)&&exit.at("country")==item.country)
+      result["regions"].push_back({{"country",item.country},{"label",item.label},{"group",item.group}});
   return result;
 }
 void Backend::configure_webshare(const std::string& token,const std::string& csrf,const Json& input) {

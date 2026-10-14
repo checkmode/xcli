@@ -1,5 +1,5 @@
 let webshareBusy=false,webshareState=null,websharePlanDirty=false;
-const webshareCountries={US:'美国',JP:'日本',SG:'新加坡',ZZ:'全球'};
+let webshareCountries={US:'美国',JP:'日本',SG:'新加坡',ZZ:'全球'};
 function clearWebshareSecrets(){const f=$('#webshare-key-form');if(f)f.reset();}
 async function loadWebshare(reset=false){
   if(webshareBusy||!csrf||page!=='webshare')return;
@@ -19,13 +19,25 @@ async function loadWebshare(reset=false){
     form.querySelector('button').disabled=!s.installed||!s.key_saved;$('#webshare-sync').disabled=!s.key_saved;$('#webshare-clear').disabled=!s.key_saved;
     const rows=[['最后成功同步',s.last_sync?date(s.last_sync):'尚无'],['当前使用套餐',s.active_plan_id?'#'+s.active_plan_id:'未选择'],['最近 24 小时流量',s.bandwidth_total===undefined?'等待供应商统计':bytes(s.bandwidth_total)],['请求成功 / 总数',s.requests_total===undefined?'等待供应商统计':(s.requests_successful||0)+' / '+s.requests_total],['用量更新时间',s.usage_updated?date(s.usage_updated):'尚无']];
     $('#webshare-summary').innerHTML=rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
-    $('#webshare-pools').innerHTML=Object.entries(webshareCountries).map(([country,label])=>{
-      const p=s.pools.find(v=>v.country===country)||{},healthy=p.status==='healthy'&&s.status!=='stale';
-      return `<article class="panel"><div class="panel-heading"><h2>动态住宅 · ${label}</h2><span class="badge ${healthy?'good':''}">${healthy?'可用':s.enabled?'寻找出口':'未启用'}</span></div><p>当前出口：${esc(p.exit_ip||'尚未分配')}${p.exit_country?' · '+esc(p.exit_country):''}</p><p>HTTPS ${p.https_ms===undefined?'—':esc(p.https_ms)+' ms'} · DoH ${p.doh_ms===undefined?'—':esc(p.doh_ms)+' ms'}</p><p class="muted small">备用会话 ${Number(p.standby||0)} 个 · 最近成功 ${p.last_success?date(p.last_success):'尚无'}</p><p class="muted small">探测点：服务器至 Webshare 上游出口。</p><button class="secondary" type="button" data-webshare-rotate="${country}" ${s.enabled&&s.status!=='stale'?'':'disabled'}>更换后续连接的出口</button></article>`;
-    }).join('');
+    webshareCountries=Object.fromEntries((s.regions||[]).map(r=>[r.country,r.label]));
+    renderWebsharePools(s);
     $('#webshare-events').innerHTML=s.events.length?s.events.map(e=>`<div class="event"><time>${date(e.ts)}</time><strong>${esc(webshareCountries[e.country]||e.country)}</strong><span class="detail">${esc(e.reason)}</span></div>`).join(''):'<p class="muted">尚无会话切换记录</p>';
   }catch(err){$('#webshare-error').textContent=err.message;}finally{webshareBusy=false;}
 }
+function renderWebsharePools(s){
+  const query=$('#webshare-country-filter').value.trim().toLowerCase();
+  const regions=(s.regions||[]).filter(r=>!query||(r.country+' '+r.label+' '+r.group).toLowerCase().includes(query));
+  const groups=['亚洲','北美','欧洲','大洋洲','全球'];
+  $('#webshare-pools').innerHTML=groups.map(group=>{
+    const entries=regions.filter(r=>r.group===group);if(!entries.length)return '';
+    return `<section class="country-section"><h2>${esc(group)} <span class="count">${entries.length}</span></h2><div class="node-grid">`+entries.map(r=>{
+      const country=r.country,p=s.pools.find(v=>v.country===country)||{},healthy=p.status==='healthy'&&s.status!=='stale';
+      const standby=Number(p.ready_standby??p.standby??0),label=healthy?(standby?'可用 · 有备用':'可用 · 补充备用'):s.status==='stale'?'状态已过期':s.enabled?'寻找出口':'未启用';
+      return `<article class="panel"><div class="panel-heading"><h3>${esc(r.label)} <span class="small muted">${esc(country==='ZZ'?'WORLD':country)}</span></h3><span class="badge ${healthy?'good':''}">${esc(label)}</span></div><p>当前出口：${esc(p.exit_ip||'尚未分配')}${p.exit_country?' · '+esc(p.exit_country):''}</p><p>HTTPS ${p.https_ms===undefined?'—':esc(p.https_ms)+' ms'} · DoH ${p.doh_ms===undefined?'—':esc(p.doh_ms)+' ms'}</p><p class="small">可用备用 ${standby} / 3 · 本次运行连接故障切换 ${Number(p.failovers||0)} 次</p><p class="muted small">最近探测成功 ${p.last_success?date(p.last_success):'尚无'}<br>当前探测间隔 ${Math.round(Number(p.probe_interval||900)/60)} 分钟；有流量时自动加快。</p><button class="secondary" type="button" data-webshare-rotate="${esc(country)}" ${s.enabled&&s.status!=='stale'?'':'disabled'}>更换后续连接的出口</button></article>`;
+    }).join('')+'</div></section>';
+  }).join('')||'<p class="muted">没有匹配的国家/地区。</p>';
+}
+$('#webshare-country-filter').oninput=()=>{if(webshareState)renderWebsharePools(webshareState);};
 async function webshareSave(button,body){
   button.disabled=true;
   try{await api('webshare','PUT',body);clearWebshareSecrets();websharePlanDirty=false;toast('已保存，后台正在应用');await loadWebshare(true);}catch(err){$('#webshare-error').textContent=err.message;}finally{button.disabled=false;}
