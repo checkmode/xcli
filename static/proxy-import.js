@@ -80,6 +80,7 @@ $('#proxy-manage-table').onclick=e=>{
   for(const key of ['label','address','port','protocol'])form.elements[key].value=p[key];
   $('#proxy-manage-fields').hidden=proxyManageOperation!=='edit';
   $('#proxy-manage-fields').querySelectorAll('input,select').forEach(el=>el.disabled=proxyManageOperation!=='edit');
+  $('#proxy-manage-summary').textContent='';
   $('#proxy-manage-title').textContent=proxyManageNames[proxyManageOperation]+' · '+p.label;
   $('#proxy-manage-description').textContent={edit:'修改后先检测 HTTPS 和加密 DNS；检测通过再确认保存。入口编号保持不变。',enable:'启用前会重新检测代理，确认后重新加入订阅。',disable:'停用后将关闭此代理入口，并从订阅移除；配置保留，可随时启用。',delete:'确认后关闭入口并从订阅移除。配置保存在回收站，不会自动清空，可随时找回。',restore:'从回收站找回原配置与入口编号。找回后保持停用，启用时再检测连接。'}[proxyManageOperation];
   $('#proxy-manage-prepare').textContent=['edit','enable'].includes(proxyManageOperation)?'检测并预览':'预览操作';
@@ -91,6 +92,7 @@ $('#proxy-manage-form').onsubmit=async e=>{
   e.preventDefault();if(proxyManageBusy)return;
   const f=e.currentTarget;const payload={action:'manage',operation:proxyManageOperation,tag:proxyManageTarget};
   if(proxyManageOperation==='edit')payload.changes={label:f.label.value,address:f.address.value,port:Number(f.port.value),protocol:f.protocol.value,username:f.username.value,password:f.password.value};
+  $('#proxy-manage-summary').textContent=proxyManageOperation==='edit'?`${payload.changes.label} · ${payload.changes.address}:${payload.changes.port} · ${payload.changes.protocol==='socks'?'SOCKS5':'HTTP CONNECT'} · ${payload.changes.username||payload.changes.password?'更新认证信息':'保留已保存认证信息'}`:'';
   proxyManageBusy=true;$('#proxy-manage-prepare').disabled=true;$('#proxy-manage-error').textContent='';
   try{const result=await api('proxy-import','POST',payload);clearProxyManageSecrets();proxyManageJob=result.id;$('#proxy-manage-message').textContent='请求已提交，等待处理…';loadProxyManage()}
   catch(e){proxyManageBusy=false;$('#proxy-manage-prepare').disabled=false;$('#proxy-manage-error').textContent=e.message}
