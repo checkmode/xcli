@@ -151,8 +151,13 @@ def install(args):
         raise ValueError('Use a new /root backup directory; no existing residential configuration may be replaced')
     if args.pool.stat().st_mode & 0o077:
         raise ValueError('Private proxy input must have mode 0600')
-    for service in SERVICES + ['nginx']:
-        run('systemctl', 'is-active', '--quiet', service)
+    ready = time.monotonic() + 20
+    while time.monotonic() < ready:
+        if all(subprocess.run(['systemctl', 'is-active', '--quiet', service], capture_output=True).returncode == 0 for service in SERVICES + ['nginx']):
+            break
+        time.sleep(1)
+    else:
+        raise ValueError('Existing services did not become active; deployment stopped')
     old = {name: path.read_bytes() for name, path in FILES.items()}
     if any(path.is_symlink() for path in FILES.values()):
         raise ValueError('Deployment files must be regular files; review customized links first')
@@ -179,10 +184,21 @@ def install(args):
     probe = args.source / 'scripts/probe.py'
     if 'def residential_exit(' not in probe.read_text():
         raise ValueError('Candidate source lacks residential probe support')
-    preflight = run('/usr/local/lib/xray-gateway/panel-current', '--secret-key', '/etc/xray-gateway/security.key',
-                    '--monitor-config', '/etc/xcli-monitor/monitor.json', '--preflight')
+    ready = time.monotonic() + 20
+    while True:
+        try:
+            preflight = run('/usr/local/lib/xray-gateway/panel-current', '--secret-key', '/etc/xray-gateway/security.key',
+                            '--monitor-config', '/etc/xcli-monitor/monitor.json', '--preflight')
+        except RuntimeError:
+            if time.monotonic() >= ready:
+                raise
+            time.sleep(1)
+            continue
+        state = json.loads(preflight)
+        if state['database_integrity'] != 'ok' or not (state['pending_additions'] or state['pending_revocations']) or time.monotonic() >= ready:
+            break
+        time.sleep(1)
     private_write(args.backup / 'preflight.json', preflight)
-    state = json.loads(preflight)
     if state['database_integrity'] != 'ok' or state['pending_additions'] or state['pending_revocations']:
         raise ValueError('Existing core accounts have pending changes; wait for synchronization first')
     for command in [('/usr/local/lib/xray-gateway/xray', 'run', '-test', '-config', args.backup / 'core.candidate.json'),

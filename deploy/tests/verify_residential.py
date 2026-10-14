@@ -22,20 +22,24 @@ def main():
     settings_path = Path('/etc/xray-gateway/settings.json')
     before_settings = settings_path.read_bytes()
     settings = json.loads(before_settings)
-    with socket.socket() as sock:
+    reservations = []
+    ports = []
+    for _ in range(10):
+        sock = socket.socket()
         sock.bind((settings['public_ip'], 0))
-        port = sock.getsockname()[1]
+        ports.append(sock.getsockname()[1])
+        reservations.append(sock)
     root = Path('/root/xcli-residential-fixture')
     root.mkdir(mode=0o700)
     upstream = root / 'upstream.json'
     upstream.write_text(json.dumps({'log': {'loglevel': 'none'},
         'inbounds': [{'listen': settings['public_ip'], 'port': port, 'protocol': 'socks',
-                      'settings': {'auth': 'password', 'accounts': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}}],
+                      'settings': {'auth': 'password', 'accounts': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}} for port in ports],
         'outbounds': [{'protocol': 'freedom', 'streamSettings': {'sockopt': {'domainStrategy': 'UseIPv4'}}}]}))
     upstream.chmod(0o600)
     pool = root / 'proxies.json'
-    pool.write_text(json.dumps({'proxies': [{'tag': 'residential-01', 'address': settings['public_ip'], 'port': port,
-                                         'username': 'fixture-user', 'password': 'fixture-password', 'country': 'US'}]}))
+    pool.write_text(json.dumps({'proxies': [{'tag': f'residential-{index:02d}', 'address': settings['public_ip'], 'port': port,
+                                         'username': 'fixture-user', 'password': 'fixture-password', 'country': 'US'} for index, port in enumerate(ports, 1)]}))
     pool.chmod(0o600)
     db = Path('/var/lib/xray-gateway/gateway.sqlite')
     before = snapshot(db, settings_path)
@@ -58,13 +62,17 @@ def main():
     assert users, 'Seed upgrade users before this test'
     uid = next(u['id'] for u in users if u['status'] == 'active')
     links = api('users/' + uid + '/links')
+    for sock in reservations:
+        sock.close()
     process = subprocess.Popen(['/usr/local/lib/xray-gateway/xray', 'run', '-config', str(upstream)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection((settings['public_ip'], port), timeout=.2):
-                    break
+                for port in ports:
+                    with socket.create_connection((settings['public_ip'], port), timeout=.2):
+                        pass
+                break
             except OSError:
                 assert process.poll() is None
                 time.sleep(.1)
@@ -77,7 +85,8 @@ def main():
             encoded = response.read()
         import base64
         subscription = base64.b64decode(encoded).decode()
-        assert len(subscription.splitlines()) == 4 and nodes['residential-01'] in subscription
+        assert len(subscription.splitlines()) == 13
+        assert all(nodes[f'residential-{index:02d}'] in subscription for index in range(1, 11))
         assert 'fixture-user' not in subscription and 'fixture-password' not in subscription
         now = snapshot(db, settings_path)
         for name in ('identity_digest', 'admin_digest', 'security'):
@@ -87,6 +96,7 @@ def main():
         report = api('overview')['monitor']
         residential = next(row for row in report['checks'] if row['transport'] == 'residential-01')
         assert residential['status'] == 'healthy' and residential['doh_ms'] is not None and residential['udp_supported'] is False
+        assert len(report['checks']) == 13 and all(row['status'] == 'healthy' for row in report['checks'])
         subprocess.run(['bash', '/root/xcli-residential-ci/rollback.sh'], check=True)
         assert settings_path.read_bytes() == before_settings
         assert api('session')['csrf'] == auth['csrf'], 'Existing login session changed'

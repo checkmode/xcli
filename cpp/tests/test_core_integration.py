@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import struct
 import subprocess
+import sys
 import threading
 import time
 import pytest
@@ -55,7 +56,27 @@ def udp_roundtrip(proxy, target, payload):
 
 def test_real_grpc_accounting_and_live_revocation(tmp_path):
     state = tmp_path / 'state'
-    api_port, reality_port, ws_port, hy2_port, panel_port = [available_port() for _ in range(5)]
+    reservations = {}
+    def reserve_port(udp=False):
+        while True:
+            tcp = socket.socket()
+            tcp.bind(('127.0.0.1', 0))
+            port = tcp.getsockname()[1]
+            sockets = [tcp]
+            if udp:
+                datagram = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    datagram.bind(('127.0.0.1', port))
+                except OSError:
+                    datagram.close();tcp.close();continue
+                sockets.append(datagram)
+            reservations[port] = sockets
+            return port
+    def release_port(port):
+        for sock in reservations.pop(port, []):
+            sock.close()
+    api_port, reality_port, ws_port, panel_port = [reserve_port() for _ in range(4)]
+    hy2_port = reserve_port(udp=True)
     core_pid_file = tmp_path / 'core.pid'
     keys = subprocess.check_output([str(XRAY), 'x25519'], text=True)
     keys = dict(line.split(':', 1) for line in keys.splitlines() if ':' in line)
@@ -88,8 +109,8 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         'streamSettings': {'network': 'hysteria', 'security': 'tls', 'hysteriaSettings': {'version': 2},
             'tlsSettings': {'alpn': ['h3'], 'certificates': [{'certificateFile': str(cert), 'keyFile': str(key)}]},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}})
-    residence_ports = {tag: available_port() for tag in ('residential-01', 'residential-02')}
-    upstream_port, broken_port = available_port(), available_port()
+    residence_ports = {tag: reserve_port() for tag in ('residential-01', 'residential-02')}
+    upstream_port, broken_port = reserve_port(), reserve_port()
     config['outbounds'][0]['tag'] = 'direct'
     config['outbounds'].append({'tag': 'blocked', 'protocol': 'blackhole'})
     config['routing'] = {'rules': []}
@@ -129,10 +150,13 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
                       'settings': {'auth': 'password', 'accounts': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}}],
         'outbounds': [config['outbounds'][0]]}))
     upstream_cfg.chmod(0o600)
+    release_port(upstream_port)
     upstream = subprocess.Popen([str(XRAY), 'run', '-config', str(upstream_cfg)], stdout=core_log, stderr=core_log)
     processes.append(upstream)
     def supervise():
         try:
+            for port in (api_port, reality_port, ws_port, hy2_port, *residence_ports.values()):
+                release_port(port)
             while not stop.is_set():
                 core = subprocess.Popen([str(XRAY), 'run', '-config', str(core_config)], stdout=core_log, stderr=core_log)
                 core_pid_file.write_text(str(core.pid));core_pid_file.chmod(0o600)
@@ -176,6 +200,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     echo_thread = threading.Thread(target=echo_loop);echo_thread.start()
 
     def start_panel():
+        release_port(panel_port)
         proc = subprocess.Popen([str(BINARY), '--state', str(state), '--settings', str(settings),
             '--static', str(LEGACY.parent / 'static'), '--port', str(panel_port), '--poll-seconds', '1',
             '--api', '127.0.0.1:' + str(api_port), '--core-binary', str(XRAY), '--core-pid-file', str(core_pid_file)],
@@ -319,6 +344,10 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         assert fetch(new_proxy, timeout=3).returncode != 0, 'Expired Hy2 credentials still connected'
         assert not core_error
     finally:
+        if sys.exc_info()[0]:
+            print('Isolated panel diagnostics:', (tmp_path / 'panel.log').read_text(errors='replace')[-2000:])
+        for port in list(reservations):
+            release_port(port)
         for process in reversed(processes):
             if process.poll() is None:
                 process.terminate()

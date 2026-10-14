@@ -18,6 +18,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 
 
@@ -204,10 +205,47 @@ def main():
             last_success = {c['transport']: c['last_success'] for c in previous['checks']}
     with tempfile.TemporaryDirectory(prefix='xcli-probe-') as directory:
         clients = {}
+        startup_lock = threading.Lock()
+        def temporary_probe(kind):
+            # Keep a large subscription within the original monitor service's
+            # task/memory limits: at most four small client processes at once.
+            process = None
+            try:
+                with startup_lock:
+                    if stopped:
+                        raise RuntimeError('Monitor stopping')
+                    port = available_port()
+                    path = pathlib.Path(directory) / (kind + '.json')
+                    path.write_text(json.dumps(client_config(config, kind, port)))
+                    path.chmod(0o600)
+                    process = subprocess.Popen([args.xray, 'run', '-config', str(path)],
+                        env={**os.environ, 'GOMAXPROCS': '2'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    for _ in range(40):
+                        try:
+                            with socket.create_connection(('127.0.0.1', port), timeout=.1):
+                                break
+                        except OSError:
+                            if process.poll() is not None:
+                                raise RuntimeError('Probe client did not start')
+                            time.sleep(.05)
+                    else:
+                        raise RuntimeError('Probe client startup timed out')
+                return check(config, kind, port)
+            except (OSError, RuntimeError, ValueError):
+                return {'transport': kind, 'status': 'failed', 'https_ms': None, 'udp_ms': None,
+                        'doh_ms': None, 'udp_supported': not bool(residential_exit(config, kind)),
+                        'error': 'Probe client unavailable', 'last_success': 0}
+            finally:
+                if process and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill();process.wait()
         try:
             while not stopped:
                 started = time.monotonic()
-                for kind in kinds:
+                for kind in ([] if config.get('residential_exits') else kinds):
                     if kind in clients and clients[kind][0].poll() is None:
                         continue
                     port = available_port()
@@ -225,9 +263,12 @@ def main():
                             if process.poll() is not None:
                                 break
                             time.sleep(.05)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=len(kinds)) as pool:
-                    futures = [pool.submit(check, config, kind, port) for kind, (_, port) in clients.items()]
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(kinds))) as pool:
+                    futures = ([pool.submit(temporary_probe, kind) for kind in kinds] if config.get('residential_exits') else
+                               [pool.submit(check, config, kind, port) for kind, (_, port) in clients.items()])
                     checks = [future.result() for future in futures]
+                if stopped:
+                    break
                 for result in checks:
                     kind = result['transport']
                     if result['status'] == 'healthy':
