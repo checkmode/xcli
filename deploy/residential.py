@@ -138,12 +138,16 @@ def rollback(backup):
         replace(path, (backup / name).read_bytes(), backup / name)
     LOCATIONS.unlink(missing_ok=True)
     PRIVATE_POOL.unlink(missing_ok=True)
+    run('systemctl', 'stop', 'xray-gateway-monitor')
+    since = int(time.time())
     run('systemctl', 'restart', 'xray-gateway-core')
     run('systemctl', 'restart', 'xray-gateway-panel')
     run('nginx', '-t')
     run('systemctl', 'reload', 'nginx')
-    run('systemctl', 'restart', 'xray-gateway-monitor')
-    print('Previous three-node configuration restored; current database and accumulated traffic retained.')
+    time.sleep(6)
+    run('systemctl', 'start', 'xray-gateway-monitor')
+    wait_ready({'reality', 'websocket', 'hysteria2'}, since)
+    print('Previous three-node configuration restored and healthy; current database and accumulated traffic retained.')
 
 
 def install(args):

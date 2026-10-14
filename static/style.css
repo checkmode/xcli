@@ -29,3 +29,4 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 .country-section{margin-top:26px}.country-section>h2{margin-bottom:16px}.country-section .panel h3{font-size:18px;margin:0}.country-section .panel p{overflow-wrap:anywhere}.country-search{display:block;max-width:560px;margin:10px 0 14px}.country-search input{width:100%}
 
 #proxy-import-dialog{width:min(760px,calc(100vw - 32px));max-width:760px}#proxy-import-text{width:100%;min-height:140px;font-family:ui-monospace,monospace;resize:vertical}#proxy-import-results{margin:16px 0}#proxy-import-results td{vertical-align:top}#proxy-import-form[aria-busy="true"]{opacity:.65}
+#proxy-import-form select{display:block;width:100%;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit;color:inherit}
