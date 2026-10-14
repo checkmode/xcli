@@ -127,6 +127,7 @@ int main() {
       for(const auto& tag:panel.inbound_tags())check(subscription.find(links.at(tag).get<std::string>()+"\n")!=std::string::npos,"Residential subscription omitted an entry");
       const auto clash=panel.clash_configuration(u);
       check(clash.at("proxy-groups")[0].at("proxies")[0]=="HTTPS","Clash default should use HTTPS");
+      check(clash.at("proxies")[0].at("reality-opts").at("support-x25519mlkem768")==true,"Missing modern REALITY handshake support");
       check(clash.at("proxies").size()==13,"Clash export omitted nodes");
       check(clash.at("proxies")[0].at("reality-opts").at("public-key")==settings.at("reality_public"),"Wrong REALITY key");
       check(clash.at("proxies")[2].at("type")=="hysteria2","Missing Hysteria 2");

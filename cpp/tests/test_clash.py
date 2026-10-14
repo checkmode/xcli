@@ -17,6 +17,7 @@ def test_clash_export_and_revocation(fixture):
     (fixture['tmp'] / 'clash.yaml').write_bytes(content)
     value = yaml.safe_load(content)
     assert len(value['proxies']) == 2
+    assert value['proxies'][0]['reality-opts']['support-x25519mlkem768'] is True
     assert value['proxy-groups'][0]['type'] == 'select'
     assert value['proxy-groups'][0]['proxies'][0] == 'HTTPS'
     assert value['rules'][-1] == 'MATCH,PROXY'

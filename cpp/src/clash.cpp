@@ -21,7 +21,7 @@ Json Backend::clash_configuration(const User& user) const {
   add({{"name","REALITY"},{"type","vless"},{"server",address},{"port",443},{"uuid",user.uuid},
     {"udp",true},{"tls",true},{"network","tcp"},{"flow","xtls-rprx-vision"},{"packet-encoding","xudp"},
     {"servername",settings_.at("reality_sni")},{"client-fingerprint","chrome"},
-    {"reality-opts",{{"public-key",settings_.at("reality_public")},{"short-id",settings_.at("short_id")}}}});
+    {"reality-opts",{{"public-key",settings_.at("reality_public")},{"short-id",settings_.at("short_id")},{"support-x25519mlkem768",true}}}});
   auto websocket=[&](const std::string& name,const std::string& path,bool udp){
     add({{"name",name},{"type","vless"},{"server",address},{"port",443},{"uuid",user.uuid},
       {"udp",udp},{"tls",true},{"skip-cert-verify",false},{"servername",domain},{"client-fingerprint","chrome"},
