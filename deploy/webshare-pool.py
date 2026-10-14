@@ -123,17 +123,18 @@ def preflight():
         '/etc/xray-gateway/security.key', '--monitor-config', '/etc/xcli-monitor/monitor.json', '--preflight'))
 
 
-def wait_ready(since):
+def wait_ready(since, registry=None):
+    registry = REGISTRY if registry is None else registry
     deadline = time.monotonic() + 100
     while time.monotonic() < deadline:
         try:
             state = preflight()
             report = json.loads(Path('/var/lib/xray-gateway-monitor/report.json').read_text())
             if state['database_integrity'] == 'ok' and state['pending_additions'] == state['pending_revocations'] == 0 and report['updated'] >= since and report['status'] == 'healthy':
-                for port in [row[4] for row in REGISTRY]:
+                for port in [row[4] for row in registry]:
                     with socket.create_connection(('127.0.0.1', port), timeout=1):
                         pass
-                for port in [row[5] for row in REGISTRY]:
+                for port in [row[5] for row in registry]:
                     with socket.create_connection(('127.0.0.1', port), timeout=1) as conn:
                         conn.sendall(b'\x05\x01\x00')
                         if conn.recv(2) != b'\x05\x00':
@@ -171,11 +172,15 @@ def rollback(backup):
     if 'webshare.service' in manifest['existing']:
         run('systemctl', 'start', SERVICE)
     run('nginx', '-t')
+    since = int(time.time())
     run('systemctl', 'restart', 'xray-gateway-core')
     run('systemctl', 'start', 'xray-gateway-panel')
     run('systemctl', 'reload', 'nginx')
     run('systemctl', 'start', 'xray-gateway-monitor')
-    print('Dynamic entrances removed; original routes, current users and traffic retained. Encrypted pool state retained.')
+    restored = json.loads(FILES['settings.json'].read_text())
+    countries = {e['country'] for e in restored.get('residential_exits', []) if e.get('dynamic')}
+    wait_ready(since, [row for row in REGISTRY if row[0] in countries])
+    print('Previous entrances restored and healthy; current users, traffic and encrypted pool state retained.')
 
 
 def install(args):
