@@ -180,7 +180,12 @@ def configure(old,proxies,protocol,label,rows):
     if not re.fullmatch(r'/connect/[A-Za-z0-9_-]+',settings['ws_path']):raise ImportErrorSafe('现有入口路径需要人工检查')
     tags={x['tag'] for x in core['inbounds']}|{x['tag'] for x in core['outbounds']}
     ports={x.get('port') for x in core['inbounds']};entries=[];locations=old.get('locations',b'').decode()
-    pool=json.loads(old.get('pool',b'{"proxies":[]}'))
+    pool=load_pool(old)
+    tags.update(p['tag'] for p in pool['proxies'])
+    ports.update(p['entry']['port'] for p in pool['proxies'])
+    check_inventory_capacity(settings,pool,len(proxies))
+    if any((p['address'],p['port']) in {(q['address'],q['port']) for q in pool['proxies']} for p in proxies):
+        raise ImportErrorSafe('地址和端口已存在，包括停用项或回收站，请先找回或编辑原代理')
     for p,row in zip(proxies,rows):
         public_ip(row['exit_ip'])
         if not re.fullmatch('[A-Z]{2}',row['country']):raise ImportErrorSafe('出口地区无效')
@@ -197,7 +202,7 @@ def configure(old,proxies,protocol,label,rows):
             'settings':{'clients':[],'decryption':'none'},'streamSettings':{'network':'ws','wsSettings':{'path':path}}})
         core['outbounds'].append({'tag':tag+'-exit','protocol':protocol,'settings':{'servers':[{'address':p['address'],'port':p['port'],
             'users':[{'user':p['username'],'pass':p['password']}]}]}})
-        pool['proxies'].append({**p,'tag':tag,'protocol':protocol,'country':row['country']})
+        pool['proxies'].append({**p,'tag':tag,'protocol':protocol,'country':row['country'],'entry':entry,'enabled':True,'deleted_at':0})
         locations+=f'\nlocation = {path} {{\n    proxy_pass http://127.0.0.1:{port};\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection $connection_upgrade;\n    proxy_set_header Host $host;\n    proxy_read_timeout 600s;\n    proxy_send_timeout 600s;\n    proxy_buffering off;\n}}\n'
     rules=core['routing']['rules'];rules.append({'type':'field','inboundTag':[e['tag'] for e in entries],'network':'udp','outboundTag':'blocked'})
     rules.extend({'type':'field','inboundTag':[e['tag']],'network':'tcp','outboundTag':e['tag']+'-exit'} for e in entries)
@@ -211,6 +216,101 @@ def configure(old,proxies,protocol,label,rows):
         'nginx':nginx.encode(),'locations':locations.encode(),'pool':json.dumps(pool).encode()}
     if len(result['monitor'])>16384:raise ImportErrorSafe('探测配置容量不足，未修改配置')
     return result,entries
+
+
+def load_pool(config):
+    pool=json.loads(config.get('pool',b'{"proxies":[]}'))
+    entries={e['tag']:e for e in json.loads(config['settings']).get('residential_exits',[])}
+    for p in pool['proxies']:
+        if 'entry' not in p:
+            if p['tag'] not in entries:raise ImportErrorSafe('代理记录与入口不一致，请检查配置')
+            p['entry']=entries[p['tag']]
+        p.setdefault('enabled',True);p.setdefault('deleted_at',0)
+    return pool
+
+
+def check_inventory_capacity(settings,pool,additional=0):
+    tags={p['tag'] for p in pool['proxies']}
+    count=sum(e['tag'] not in tags for e in settings.get('residential_exits',[]))+len(tags)+additional
+    if count>40:raise ImportErrorSafe('入口与回收站合计最多 40 个，已保留找回所需的编号和端口')
+
+
+def inventory(config):
+    return [{**{k:p[k] for k in ('tag','protocol','address','port','enabled','deleted_at')},
+             **{k:p['entry'][k] for k in ('label','country','exit_ip')}} for p in load_pool(config)['proxies']]
+
+
+def manage_config(old,request,verified=None):
+    operation=request.get('operation');tag=request.get('tag')
+    if operation not in ('edit','enable','disable','delete','restore') or not isinstance(tag,str) or not re.fullmatch(r'residential-[0-9]{2}',tag):
+        raise ImportErrorSafe('代理操作不正确')
+    pool=load_pool(old);target=next((p for p in pool['proxies'] if p['tag']==tag),None)
+    if target is None:raise ImportErrorSafe('只能管理手动导入的代理')
+    if bool(target['deleted_at']) != (operation=='restore'):raise ImportErrorSafe('代理状态已变化，请刷新列表')
+    if operation=='edit':
+        changes=request.get('changes',{})
+        if not isinstance(changes,dict) or set(changes)-{'label','address','port','protocol','username','password'}:
+            raise ImportErrorSafe('编辑字段不正确')
+        for k,v in changes.items():
+            if k=='label':
+                if not isinstance(v,str) or not 1<=len(v)<=60 or any(ord(c)<32 or ord(c)==127 for c in v):raise ImportErrorSafe('名称需为 1～60 个可见字符')
+                target['entry']['label']=v
+            elif k not in ('username','password') or v:target[k]=v
+    elif operation=='enable':target['enabled']=True
+    elif operation=='disable':target['enabled']=False
+    elif operation=='delete':target.update(enabled=False,deleted_at=stamp())
+    elif operation=='restore':target.update(enabled=False,deleted_at=0)
+    proxy={k:target[k] for k in ('address','port','username','password')}
+    validate([proxy],target['protocol'],'管理代理')
+    if any(p['tag']!=tag and (p['address'],p['port'])==(target['address'],target['port']) for p in pool['proxies']):
+        raise ImportErrorSafe('地址和端口与其他代理或回收站记录重复')
+    settings=json.loads(old['settings']);core=json.loads(old['core']);monitor=json.loads(old['monitor'])
+    other_core={**core,'outbounds':[o for o in core['outbounds'] if o['tag']!=tag+'-exit']}
+    if (target['address'],target['port']) in existing_peers(other_core):raise ImportErrorSafe('地址和端口与现有出口重复')
+    if operation in ('edit','enable'):
+        if verified is None:return None,proxy,target['protocol']
+        if verified.get('status')!='verified':raise ImportErrorSafe('代理检测失败，原配置未修改')
+        public_ip(verified['exit_ip'])
+        if not re.fullmatch('[A-Z]{2}',verified['country']):raise ImportErrorSafe('出口地区无效')
+        target['country']=verified['country'];target['entry'].update(country=verified['country'],exit_ip=verified['exit_ip'])
+    check_inventory_capacity(settings,pool)
+    # Remove only the selected managed entry. Retain every other route and its ordering.
+    for config in (settings,monitor):config['residential_exits']=[e for e in config.get('residential_exits',[]) if e['tag']!=tag]
+    core['inbounds']=[e for e in core['inbounds'] if e['tag']!=tag]
+    core['outbounds']=[e for e in core['outbounds'] if e['tag']!=tag+'-exit']
+    rules=[]
+    for r in core['routing']['rules']:
+        if tag in r.get('inboundTag',[]):
+            r={**r,'inboundTag':[t for t in r['inboundTag'] if t!=tag]}
+            if not r['inboundTag']:continue
+        if r.get('outboundTag')==tag+'-exit':raise ImportErrorSafe('代理被自定义路由引用，请先检查配置')
+        rules.append(r)
+    core['routing']['rules']=rules
+    entries=[]
+    if target['enabled'] and not target['deleted_at']:
+        e=target['entry'];entries=[e]
+        # Preserve original list position when editing an active entry.
+        for name,config in (('settings',settings),('monitor',monitor)):
+            previous=json.loads(old[name]).get('residential_exits',[])
+            index=next((i for i,x in enumerate(previous) if x['tag']==tag),len(config['residential_exits']))
+            config['residential_exits'].insert(index,e)
+        core['inbounds'].append({'tag':tag,'listen':'127.0.0.1','port':e['port'],'protocol':'vless',
+            'settings':{'clients':[],'decryption':'none'},'streamSettings':{'network':'ws','wsSettings':{'path':e['ws_path']}}})
+        core['outbounds'].append({'tag':tag+'-exit','protocol':target['protocol'],'settings':{'servers':[
+            {'address':target['address'],'port':target['port'],'users':[{'user':target['username'],'pass':target['password']}]}]}})
+        rules.extend([{'type':'field','inboundTag':[tag],'network':'udp','outboundTag':'blocked'},
+                      {'type':'field','inboundTag':[tag],'network':'tcp','outboundTag':tag+'-exit'}])
+    locations=''
+    for p in pool['proxies']:
+        if not p['enabled'] or p['deleted_at']:continue
+        e=p['entry'];path=e['ws_path'];port=e['port']
+        if not re.fullmatch(r'/connect/[A-Za-z0-9_-]+/residential-[0-9]{2}',path) or type(port) is not int or not 10450<=port<10550:
+            raise ImportErrorSafe('已保存的入口无效')
+        locations+=f'\nlocation = {path} {{\n    proxy_pass http://127.0.0.1:{port};\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection $connection_upgrade;\n    proxy_set_header Host $host;\n    proxy_read_timeout 600s;\n    proxy_send_timeout 600s;\n    proxy_buffering off;\n}}\n'
+    new={**old,'settings':json.dumps(settings).encode(),'core':json.dumps(core).encode(),'monitor':json.dumps(monitor).encode(),
+         'pool':json.dumps(pool).encode(),'locations':locations.encode()}
+    if len(new['monitor'])>16384:raise ImportErrorSafe('探测配置容量不足')
+    return new,entries,target
 
 
 def run(*args,timeout=90):
@@ -274,8 +374,10 @@ def apply_config(old,new,entries,job_id):
     atomic(backup/'nginx.candidate.conf',new['nginx'].replace(str(FILES['locations']).encode(),str(backup/'locations.candidate.conf').encode()))
     run('/usr/local/lib/xray-gateway/xray','run','-test','-config',backup/'core.candidate.json')
     run('nginx','-t','-c',backup/'nginx.candidate.conf')
+    old_ports={e.get('port') for e in json.loads(old['core'])['inbounds']}
     for e in entries:
-        with socket.socket() as s:s.bind(('127.0.0.1',e['port']))
+        if e['port'] not in old_ports:
+            with socket.socket() as s:s.bind(('127.0.0.1',e['port']))
     if not preflight():raise ImportErrorSafe('现有用户权限尚未同步完成，请稍后重试')
     manifest['phase']='applying';atomic(backup/'manifest.json',json.dumps(manifest))
     atomic(ROOT/'transaction.json',json.dumps({'id':job_id}))
@@ -312,9 +414,13 @@ class Worker:
         with self.lock:
             self.report.update(fields,updated=stamp());atomic(ROOT/'report.json',json.dumps(self.report),0o640,0,self.owner.pw_gid)
 
+    def catalog(self):
+        items=inventory(read_config())
+        atomic(ROOT/'catalog.json',json.dumps({'items':items}),0o640,0,self.owner.pw_gid)
+
     def heartbeat(self):
         while not self.stop.wait(5):
-            try:self.publish()
+            try:self.catalog();self.publish()
             except Exception:pass
 
     def preview(self,request):
@@ -329,7 +435,21 @@ class Worker:
         for row,entry in zip(rows,entries):row['label']=entry['label']
         atomic(ROOT/'preview.json',json.dumps({'id':request['id'],'expires':stamp()+TTL,'digests':digests(old),
             'proxies':proxies,'protocol':protocol,'label':label,'rows':rows}))
-        self.publish(status='ready',message='全部检测通过，确认后加入节点和订阅',rows=rows,expires=stamp()+TTL)
+        self.publish(kind='import',status='ready',message='全部检测通过，确认后加入节点和订阅',rows=rows,expires=stamp()+TTL)
+
+    def manage(self,request):
+        (ROOT/'preview.json').unlink(missing_ok=True)
+        old=read_config();new,second,third=manage_config(old,request)
+        rows=[];verified=None
+        if new is None:
+            self.publish(status='verifying',message='正在验证编辑后的代理和加密 DNS')
+            verified=probe(second,third);rows=[verified]
+            if verified['status']!='verified':
+                self.publish(status='failed',message='检测失败，原代理配置保持不变',rows=rows);return
+            new,entries,target=manage_config(old,request,verified)
+        atomic(ROOT/'preview.json',json.dumps({'id':request['id'],'expires':stamp()+TTL,'digests':digests(old),
+            'management':request,'verified':verified,'rows':rows}))
+        self.publish(kind='manage',status='ready',message='操作已准备好，确认后更新代理；找回的代理保持停用',rows=rows,expires=stamp()+TTL)
 
     def apply(self,request):
         preview=json.loads(read_regular(ROOT/'preview.json'))
@@ -340,10 +460,13 @@ class Worker:
             if (ROOT/'transaction.json').exists():raise ImportErrorSafe('存在未完成的恢复事务，请先检查服务')
             old=read_config()
             if digests(old)!=preview['digests']:raise ImportErrorSafe('服务器配置已变化，请重新检测')
-            new,entries=configure(old,preview['proxies'],preview['protocol'],preview['label'],preview['rows'])
+            if 'management' in preview:
+                new,entries,_=manage_config(old,preview['management'],preview['verified'])
+            else:new,entries=configure(old,preview['proxies'],preview['protocol'],preview['label'],preview['rows'])
             self.publish(status='applying',message='正在保存恢复快照并应用节点，连接可能短暂重连',rows=preview['rows'])
             apply_config(old,new,entries,request['id'])
-        self.publish(status='complete',message=f'已添加 {len(entries)} 个节点，请更新客户端订阅',added=len(entries),rows=preview['rows'])
+        self.catalog()
+        self.publish(status='complete',message='代理操作已完成，请更新客户端订阅' if 'management' in preview else f'已添加 {len(entries)} 个节点，请更新客户端订阅',added=0 if 'management' in preview else len(entries),rows=preview['rows'])
         (ROOT/'preview.json').unlink(missing_ok=True)
 
     def process(self):
@@ -368,6 +491,7 @@ class Worker:
             action=request.get('action')
             if action=='preview':self.preview(request)
             elif action=='apply':self.apply(request)
+            elif action=='manage':self.manage(request)
             else:raise ImportErrorSafe('不支持此操作')
         except ImportErrorSafe as e:self.publish(status='failed',message=str(e))
         except Exception:self.publish(status='failed',message='导入未完成，请检查服务状态后重新检测')
@@ -385,7 +509,7 @@ class Worker:
             self.publish(status='failed' if phase!='committed' else 'complete',message='上次导入已恢复原配置，请重新检测' if phase!='committed' else '节点已添加，请更新客户端订阅')
 
     def loop(self):
-        self.recover();self.publish();threading.Thread(target=self.heartbeat,daemon=True).start()
+        self.recover();self.catalog();self.publish();threading.Thread(target=self.heartbeat,daemon=True).start()
         while True:
             try:self.process()
             except Exception:pass  # Untrusted request failures never include credentials in logs.

@@ -13,6 +13,9 @@
 <section class="page" id="page-nodes" hidden><div class="page-heading"><div><p class="eyebrow">CONNECTIONS</p><h1>接入节点</h1><p class="muted" id="node-intro">同一个出口，多种连接方式。通过用户订阅导入客户端。</p></div><button id="proxy-import-open" class="primary" type="button">＋ 导入固定代理</button></div>
 <div class="notice">配置摘要来自运行进程启动参数指向的配置文件当前内容；监听状态来自该进程的套接字，公网可用性来自服务器自检。文件内容不等于核心已加载的配置，客户端网络仍需单独验证。</div>
 <p id="nodes-runtime-sampled" class="small muted">等待配置与监听采样</p>
+<article class="panel"><div class="panel-heading"><div><h2>已导入代理</h2><p class="muted">编辑、停用或移入回收站后会同步更新订阅。回收站保留配置，找回后保持停用。</p></div><button id="proxy-manage-refresh" class="secondary" type="button">刷新列表</button></div>
+<div class="tabs"><button id="proxy-manage-active" class="selected" type="button">代理列表</button><button id="proxy-manage-trash" type="button">回收站</button></div>
+<p id="proxy-manage-list-error" class="error" role="alert"></p><div id="proxy-manage-table" class="table-wrap" tabindex="0" role="region" aria-label="已导入代理">正在读取…</div></article>
 <div id="runtime-nodes" class="node-grid"></div>
 <article class="panel guide"><h2>连接客户端</h2><p>在用户管理中选择用户获取节点订阅或小火箭导入指南。若 Wi-Fi 下检测到本地运营商 DNS，请关闭小火箭兼容模式并重连，再重新测试。</p><button class="secondary" data-page="users">选择用户并获取节点 →</button></article></section>
 <section class="page" id="page-webshare" hidden>
@@ -96,6 +99,20 @@
   <label><span id="connection-label">手机引导地址</span><textarea id="node-link" readonly rows="2"></textarea></label>
   <div class="dialog-actions connect-actions"><button id="download-qr" class="secondary">保存二维码</button><button id="copy-link" class="secondary">复制地址</button><a id="open-client" class="primary" rel="noopener noreferrer" hidden>打开手机引导</a></div>
   <p id="connect-note" class="small muted"></p>
+</dialog>
+<dialog id="proxy-manage-dialog" aria-labelledby="proxy-manage-title">
+<div class="dialog-heading"><h2 id="proxy-manage-title">管理代理</h2><button type="button" class="close" data-close="proxy-manage-dialog" aria-label="关闭">×</button></div>
+<form id="proxy-manage-form" autocomplete="off">
+<div id="proxy-manage-fields">
+<label>节点名称<input name="label" maxlength="60" required></label>
+<div class="form-row"><label>代理地址<input name="address" maxlength="15" required></label><label>端口<input name="port" type="number" min="1" max="65535" required></label></div>
+<label>协议<select name="protocol"><option value="socks">SOCKS5</option><option value="http">HTTP CONNECT</option></select></label>
+<div class="form-row"><label>新账号<input name="username" maxlength="255" autocomplete="off" placeholder="留空保留已保存账号"></label><label>新密码<input name="password" type="password" maxlength="255" autocomplete="new-password" placeholder="留空保留已保存密码"></label></div>
+</div>
+<p id="proxy-manage-description" class="notice"></p><button id="proxy-manage-prepare" class="primary" type="submit">检测并预览</button>
+</form>
+<p id="proxy-manage-message" class="muted" aria-live="polite"></p><p id="proxy-manage-error" class="error" role="alert"></p>
+<div id="proxy-manage-confirmation" hidden><p class="notice">确认后应用变更，现有连接可能短暂重连；检查失败会自动回退。删除的代理可以从回收站找回。</p><button id="proxy-manage-apply" class="primary" type="button">确认应用</button></div>
 </dialog>
 <dialog id="proxy-import-dialog" aria-labelledby="proxy-import-title">
 <div class="dialog-heading"><div><p class="eyebrow">ADD PROXY EXITS</p><h2 id="proxy-import-title">导入固定代理</h2></div><button type="button" class="close" data-close="proxy-import-dialog" aria-label="关闭">×</button></div>

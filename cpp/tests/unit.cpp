@@ -66,6 +66,18 @@ int main() {
       for(const auto& bad:std::vector<std::string>{"127.0.0.1:1080:u:p","169.254.169.254:80:u:p","1.1.1.1:70000:u:p","1.1.1.1:80:u:p\n1.1.1.1:80:u:p"}) {
         auto invalid=input;invalid["text"]=bad;status(422,[&]{backend.request_proxy_import(token,csrf,invalid);});
       }
+      write_private_file(import_state/"catalog.json",Json({{"items",Json::array({{{"tag","residential-27"},{"password","must-not-leak"},{"username","must-not-leak"},{"enabled",true}}})}}).dump(),true);
+      check(backend.proxy_import_status(token).dump().find("must-not-leak")==std::string::npos,"Catalog leaked credentials");
+      status(422,[&]{backend.request_proxy_import(token,csrf,{{"action","manage"},{"operation","delete"},{"tag","reality"}});});
+      status(422,[&]{backend.request_proxy_import(token,csrf,{{"action","manage"},{"operation","erase"},{"tag","residential-27"}});});
+      Json edit={{"action","manage"},{"operation","edit"},{"tag","residential-27"},{"changes",{{"label","Edited"},{"address","127.0.0.1"},{"port",12324},{"protocol","socks"}}}};
+      status(422,[&]{backend.request_proxy_import(token,csrf,edit);});
+      edit["changes"]["address"]="1.1.1.1";edit["changes"]["password"]="edited-secret";
+      auto management=backend.request_proxy_import(token,csrf,edit);
+      auto sealed_edit=read_file(opts.state/"proxy-import/request.xgb");
+      check(sealed_edit.find("edited-secret")==std::string::npos,"Edit credentials not sealed");
+      check(Json::parse(unseal(sealed_edit,key,"xcli:proxy-import:request:v1"))["changes"]["password"]=="edited-secret","Edit not queued");
+      report({{"id",management["id"]},{"updated",now()},{"status","complete"}});
       auto queued=backend.request_proxy_import(token,csrf,input);auto job=queued["id"].get<std::string>();
       auto ciphertext=read_file(opts.state/"proxy-import/request.xgb");check(ciphertext.find("secret-password")==std::string::npos,"Import queue stored plaintext password");
       auto decoded=Json::parse(unseal(ciphertext,key,"xcli:proxy-import:request:v1"));check(decoded["proxies"][0]["port"]==12324,"Import parser port");

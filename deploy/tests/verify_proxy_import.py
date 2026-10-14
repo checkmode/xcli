@@ -84,6 +84,32 @@ def main():
         for uid,values in before['traffic'].items():assert all(a>=b for a,b in zip(now['traffic'][uid],values))
         # Duplicate preview must not change the running configuration.
         current=settings_path.read_bytes();job=api('proxy-import',payload,csrf)['id'];wait(job,'failed');assert settings_path.read_bytes()==current
+        # Exercise management through the same authenticated Web API and actual core.
+        catalog=api('proxy-import')['items'];assert len(catalog)==2
+        tag=catalog[0]['tag'];management_jobs=[]
+        def change(operation,changes=None):
+            payload={'action':'manage','operation':operation,'tag':tag}
+            if changes is not None:payload['changes']=changes
+            previous=settings_path.read_bytes()
+            preview=api('proxy-import',payload,csrf)['id'];wait(preview,'ready')
+            assert settings_path.read_bytes()==previous
+            job=api('proxy-import',{'action':'apply','preview_id':preview},csrf)['id'];wait(job,'complete');management_jobs.append(job)
+            result=api('proxy-import')
+            assert 'fixture-password' not in json.dumps(result) and 'fixture-user' not in json.dumps(result)
+            return next(p for p in result['items'] if p['tag']==tag)
+        def count(n):
+            with client.open(links['subscription'],timeout=10) as r:assert len(base64.b64decode(r.read()).decode().splitlines())==n
+            assert len(api('overview')['monitor']['checks'])==n
+        changed=change('edit',{'label':'Edited fixture','address':settings['public_ip'],'port':ports[0],'protocol':'socks','username':'','password':''})
+        assert changed['label']=='Edited fixture';count(5)
+        assert not change('disable')['enabled'];count(4)
+        assert change('enable')['enabled'];count(5)
+        assert change('delete')['deleted_at'];count(4)
+        restored=change('restore');assert not restored['deleted_at'] and not restored['enabled'];count(4)
+        assert change('enable')['enabled'];count(5)
+        for job in reversed(management_jobs):subprocess.run(['python3','/opt/xray-gateway/scripts/proxy_import.py','rollback',job],check=True)
+        now=snapshot(Path('/var/lib/xray-gateway/gateway.sqlite'),settings_path)
+        for key in ('identity_digest','admin_digest','security'):assert now[key]==before[key],key
         for job in (second_job,first_job):subprocess.run(['python3','/opt/xray-gateway/scripts/proxy_import.py','rollback',job],check=True)
         assert settings_path.read_bytes()==before_settings
         assert not Path('/etc/nginx/xcli-import-locations.conf').exists()

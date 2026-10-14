@@ -48,6 +48,48 @@ class ProxyImportTests(unittest.TestCase):
         self.assertEqual(second['nginx'],first['nginx'])
         self.assertEqual(len(json.loads(second['monitor'])['residential_exits']),2)
 
+    def test_management_lifecycle_and_reserved_identity(self):
+        first,entries=imp.configure(self.old,self.proxies,'socks','IPRoyal ISP',self.rows)
+        tag=entries[0]['tag'];original=copy.deepcopy(entries[0])
+        # Legacy imported pool records are upgraded without changing their endpoint.
+        pool=json.loads(first['pool']);pool['proxies'][0].pop('entry');pool['proxies'][0].pop('enabled');pool['proxies'][0].pop('deleted_at')
+        first['pool']=json.dumps(pool).encode()
+        disabled,_,_=imp.manage_config(first,{'operation':'disable','tag':tag})
+        self.assertNotIn(tag,[e['tag'] for e in json.loads(disabled['core'])['inbounds']])
+        self.assertEqual(json.loads(disabled['settings'])['residential_exits'],[])
+        self.assertEqual(disabled['locations'],b'')
+        deleted,_,_=imp.manage_config(disabled,{'operation':'delete','tag':tag})
+        self.assertGreater(imp.inventory(deleted)[0]['deleted_at'],0)
+        self.assertNotIn('secret-fixture',json.dumps(imp.inventory(deleted)))
+        other=[{**self.proxies[0],'address':'8.8.4.4'}];rows=[{**self.rows[0],'exit_ip':'8.8.4.4'}]
+        added,new_entries=imp.configure(deleted,other,'http','Other',rows)
+        self.assertEqual(new_entries[0]['tag'],'residential-28');self.assertEqual(new_entries[0]['port'],10451)
+        restored,_,_=imp.manage_config(added,{'operation':'restore','tag':tag})
+        self.assertFalse(imp.inventory(restored)[0]['enabled'])
+        enabled,_,_=imp.manage_config(restored,{'operation':'enable','tag':tag},self.rows[0])
+        self.assertEqual(json.loads(enabled['settings'])['residential_exits'][-1],original)
+        for k in ('username','password'):
+            self.assertEqual(imp.load_pool(enabled)['proxies'][0][k],self.proxies[0][k])
+
+    def test_edit_preserves_credentials_and_unrelated_configuration(self):
+        first,entries=imp.configure(self.old,self.proxies,'socks','Original',self.rows)
+        tag=entries[0]['tag'];changes={'label':'New name','address':'8.8.4.4','port':12323,'protocol':'http','username':'','password':''}
+        request={'operation':'edit','tag':tag,'changes':changes}
+        self.assertIsNone(imp.manage_config(first,request)[0])
+        new,_,_=imp.manage_config(first,request,{**self.rows[0],'exit_ip':'8.8.4.4','country':'US'})
+        p=imp.load_pool(new)['proxies'][0]
+        self.assertEqual(p['password'],'secret-fixture');self.assertEqual(p['entry']['label'],'New name')
+        self.assertEqual(p['entry']['country'],'US');self.assertEqual(p['entry']['ws_path'],entries[0]['ws_path'])
+        self.assertEqual(json.loads(new['core'])['inbounds'][:-1],json.loads(first['core'])['inbounds'][:-1])
+        self.assertEqual(json.loads(new['core'])['outbounds'][:-1],json.loads(first['core'])['outbounds'][:-1])
+        self.assertEqual(new['nginx'],first['nginx'])
+        with self.assertRaises(imp.ImportErrorSafe):imp.manage_config(first,request,{'status':'failed'})
+        for op in ('enable','disable','delete','restore','edit'):
+            with self.assertRaises(imp.ImportErrorSafe):imp.manage_config(first,{'operation':op,'tag':'residential-01'})
+        changes['address']='127.0.0.1'
+        with self.assertRaises(imp.ImportErrorSafe):imp.manage_config(first,request)
+        with self.assertRaises(imp.ImportErrorSafe):imp.manage_config(first,{'operation':'restore','tag':tag})
+
     def test_reject_private_multicast_and_control_characters(self):
         for ip in ('127.0.0.1','169.254.169.254','10.0.0.1','224.0.0.1','100.64.0.1','::1','example.com','1.1.1.01'):
             p=copy.deepcopy(self.proxies);p[0]['address']=ip
