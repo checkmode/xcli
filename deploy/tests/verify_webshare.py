@@ -18,7 +18,11 @@ spec.loader.exec_module(installer)
 
 
 def run(*args):
-    return subprocess.check_output(list(map(str, args)), stderr=subprocess.STDOUT)
+    try:
+        return subprocess.check_output(list(map(str, args)), stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as error:
+        print(error.output.decode(errors='replace')[-8000:], flush=True)
+        raise
 
 
 def main():

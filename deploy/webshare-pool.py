@@ -53,6 +53,14 @@ ALLOW = ['-d', '127.0.0.1/32', '-p', 'tcp', '-m', 'multiport', '--dports', '1012
 
 LEGACY_ALLOW = ['-d', '127.0.0.1/32', '-p', 'tcp', '-m', 'multiport', '--dports', '10120,10121,10122,10123', '-j', 'RETURN']
 
+
+def install_file(path, content):
+    if path.exists():
+        replace(path, content, mode=0o644)
+    else:
+        private_write(path, content, 0o644)
+
+
 def configure(settings, core, nginx, firewall, expand=False):
     settings, core = copy.deepcopy(settings), copy.deepcopy(core)
     exits = settings.setdefault('residential_exits', [])
@@ -176,6 +184,7 @@ def rollback(backup):
     run('systemctl', 'restart', 'xray-gateway-core')
     run('systemctl', 'start', 'xray-gateway-panel')
     run('systemctl', 'reload', 'nginx')
+    time.sleep(6)
     run('systemctl', 'start', 'xray-gateway-monitor')
     restored = json.loads(FILES['settings.json'].read_text())
     countries = {e['country'] for e in restored.get('residential_exits', []) if e.get('dynamic')}
@@ -237,8 +246,8 @@ def install(args):
     os.chmod(directory, 0o700)
     os.chown(directory, owner.pw_uid, owner.pw_gid)
     try:
-        private_write(FILES['webshare.py'], (args.source / 'scripts/webshare.py').read_bytes(), 0o644)
-        private_write(FILES['webshare.service'], (args.source / 'deploy/xray-gateway-webshare.service').read_bytes(), 0o644)
+        install_file(FILES['webshare.py'], (args.source / 'scripts/webshare.py').read_bytes())
+        install_file(FILES['webshare.service'], (args.source / 'deploy/xray-gateway-webshare.service').read_bytes())
         replace(FILES['firewall.sh'], firewall)
         run('iptables', '-w', '-I', 'XG_OUT', '1', *ALLOW)
         run('systemctl', 'daemon-reload')
@@ -249,7 +258,7 @@ def install(args):
         run('systemctl', 'restart', SERVICE)
         if expanding:
             run('iptables', '-w', '-D', 'XG_OUT', *LEGACY_ALLOW)
-        private_write(LOCATIONS, locations, 0o644)
+        install_file(LOCATIONS, locations)
         replace(FILES['nginx.conf'], nginx)
         run('nginx', '-t')
         since = int(time.time())
