@@ -14,7 +14,7 @@
   <div class="brand"><span class="brand-mark" aria-hidden="true">X</span> Xdistribute</div>
   <p class="eyebrow">SHADOWROCKET SETUP</p>
   <h1>一次扫码，<br>连接你的小火箭。</h1>
-  <p class="intro">按顺序导入节点与 DNS 模块。<br>保留小火箭的其他默认设置。</p>
+  <p class="intro">按顺序导入节点与 DNS 模块，再关闭兼容模式。<br>保留小火箭的其他默认设置。</p>
   <p id="setup-status" class="status" role="status" aria-live="polite" data-state="loading">正在检查连接地址…</p>
   <button id="retry-check" class="secondary" type="button" hidden>重新检查</button>
   <noscript><p class="status">请在 Safari 中打开此页面并启用 JavaScript，再继续导入。</p></noscript>
@@ -41,8 +41,15 @@
     <li class="step">
       <span class="step-number" aria-hidden="true">3</span>
       <div class="step-content">
+        <h2>关闭兼容模式</h2>
+        <p>在小火箭「设置 → 代理」中关闭「兼容模式（Compatibility Mode）」，然后返回此页。此开关需要手动设置，安装 DNS 模块不会自动关闭它。</p>
+      </div>
+    </li>
+    <li class="step">
+      <span class="step-number" aria-hidden="true">4</span>
+      <div class="step-content">
         <h2>使用首页所选节点</h2>
-        <p>将「全局路由」切换为「代理」，再选择一个节点并打开连接。</p>
+        <p>将「全局路由」切换为「代理」，再选择一个节点并打开连接。如果修改兼容模式时 VPN 已连接，请断开后重新连接，期间会短暂中断 VPN。</p>
         <a id="set-proxy" class="primary">切换为全局代理 <span aria-hidden="true">↗</span></a>
       </div>
     </li>
@@ -56,7 +63,12 @@
   <details class="explanation">
     <summary>哪些设置会改变？</summary>
     <p>DNS 随首页所选节点转发，关闭系统 DNS 与不支持 UDP 时的直连回退，并固定本服务器节点域名的解析地址。其他配置字段和规则保留。</p>
-    <p>这三步需要分别在小火箭中确认。页面无法读取安装结果；请确认模块已启用。停用模块即可撤销 DNS 覆盖。</p>
+    <p>上述步骤需要在小火箭中完成。页面无法读取安装结果或兼容模式状态；请确认模块已启用、兼容模式已关闭。停用模块可撤销 DNS 覆盖；兼容模式需在「设置 → 代理」中单独恢复，修改后重连 VPN。</p>
+  </details>
+  <details class="explanation">
+    <summary>Wi-Fi 下仍出现运营商 DNS？</summary>
+    <p>即使网页出口是代理服务器，部分 DNS 查询也可能使用 Wi-Fi 侧的解析路径。确认兼容模式已关闭并重连后，保持同一 Wi-Fi、节点和全局代理模式，重新运行 DNS 泄漏扩展测试；不要沿用旧结果。</p>
+    <p>使用本指南的 DNS 模块时，应检查解析器是否为预期的 Cloudflare，而不只看国家或出口 IP。若仍出现本地运营商 DNS，请继续检查模块是否启用及实际 DNS 日志；关闭兼容模式不保证覆盖所有隧道外流量。</p>
   </details>
   <footer>连接地址仅供对应用户使用。<br>如果按钮没有打开小火箭，请先确认已安装该 App；也可复制地址后手动添加。</footer>
 </main>

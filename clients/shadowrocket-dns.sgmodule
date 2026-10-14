@@ -1,5 +1,8 @@
 #!name=Xcli DNS 随所选节点
 #!desc=DNS 通过首页所选节点；关闭系统 DNS 与不支持 UDP 时的直连回退。启用后将首页全局路由设为代理。节点使用域名时，需另设 Host 映射或改用 IP。
+# 使用前在「设置 → 代理」手动关闭「兼容模式（Compatibility Mode）」；本模块不会修改该开关。
+# 如果 VPN 已连接，修改后断开并重新连接，再保持同一 Wi-Fi 和节点重新进行 DNS 扩展测试。
+# 停用模块只撤销 DNS 覆盖；兼容模式需手动恢复原值并重连。
 
 [General]
 dns-server = https://1.1.1.1/dns-query#proxy
