@@ -53,9 +53,9 @@ def configuration_for(binary, servers=None):
     version = run(binary, '-version')
     content = configuration(servers)
     if re.search(rb'\b2\.0\.\d+', version.stdout + version.stderr):
-        # 2.0.x uses the old name and only honors ignore_system_dns when the
-        # list is nonempty. Fixed upstream IPs need no bootstrap; discard any
-        # unexpected bootstrap attempt locally instead of using system DNS.
+        # 2.0.x uses the old name and retains a last-resort system resolver.
+        # Literal upstream IPs avoid that bootstrap path. Keep its legacy
+        # fallback list local instead of configuring a public plaintext DNS.
         content = content.replace('bootstrap_resolvers = []', "fallback_resolvers = ['127.0.0.1:9']")
         content = content.replace('http3 = false\n', '')
     return content
