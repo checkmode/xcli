@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import struct
@@ -46,6 +47,18 @@ log_level = 2
     for name, address, hostname in servers:
         result += "\n[static.'%s']\nstamp = '%s'\n" % (name, stamp(address, hostname))
     return result
+
+
+def configuration_for(binary, servers=None):
+    version = run(binary, '-version')
+    content = configuration(servers)
+    if re.search(rb'\b2\.0\.\d+', version.stdout + version.stderr):
+        # 2.0.x uses the old name and only honors ignore_system_dns when the
+        # list is nonempty. Fixed upstream IPs need no bootstrap; discard any
+        # unexpected bootstrap attempt locally instead of using system DNS.
+        content = content.replace('bootstrap_resolvers = []', "fallback_resolvers = ['127.0.0.1:9']")
+        content = content.replace('http3 = false\n', '')
+    return content
 
 
 SERVICE = """[Unit]
@@ -183,7 +196,7 @@ def apply(backup):
             run('systemctl', 'mask', *STOCK)
             run('apt-get', 'install', '-y', '--no-install-recommends', 'dnscrypt-proxy', timeout=300)
             run('systemctl', 'disable', *STOCK, check=False)
-        write(CONFIG, configuration())
+        write(CONFIG, configuration_for('/usr/sbin/dnscrypt-proxy'))
         run('/usr/sbin/dnscrypt-proxy', '-config', CONFIG, '-check')
         write(UNIT, SERVICE)
         run('systemctl', 'daemon-reload')

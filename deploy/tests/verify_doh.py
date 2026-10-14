@@ -95,7 +95,7 @@ def verify(binary):
                 host = ('localhost' if valid_tls else 'wrong.test') + ':' + str(server.server_port)
                 config = root / 'doh.toml'
                 address = '127.0.0.1:' + str(server.server_port)
-                config.write_text(doh.configuration([('fixture', address, host)])
+                config.write_text(doh.configuration_for(binary, [('fixture', address, host)])
                     .replace('cache = true', 'cache = false')
                     .replace("netprobe_address = '1.1.1.1:443'", "netprobe_address = '" + address + "'"))
                 log = (root / 'proxy.log').open('w')
