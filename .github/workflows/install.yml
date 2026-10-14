@@ -2,9 +2,9 @@ name: Fresh server installation
 on:
   push:
     branches: [main]
-    paths: ['install.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/install.yml']
+    paths: ['install.sh', 'update.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/install.yml']
   pull_request:
-    paths: ['install.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/install.yml']
+    paths: ['install.sh', 'update.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/install.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +21,7 @@ jobs:
       - name: Unit checks
         run: |
           bash -n install.sh
+          bash -n update.sh deploy/update-panel.sh
           python3 -m unittest discover -s deploy/tests -v
       - name: Prepare disposable machine and trusted test certificate
         run: bash deploy/tests/prepare-machine.sh
@@ -46,6 +47,21 @@ jobs:
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
               cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py
+      - name: Verify one-click panel update and rollback
+        run: |
+          sudo python3 cpp/tests/migration_state.py save /root/xcli-before-update.json
+          sudo bash update.sh --check
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            sudo bash update.sh --yes --ref "$GITHUB_SHA"
+          else
+            work=$(mktemp -d /var/tmp/xcli-update-test.XXXXXXXX)
+            chmod 755 "$work"
+            mkdir "$work/source"
+            git archive HEAD | tar -x -C "$work/source"
+            sudo bash "$work/source/deploy/update-panel.sh" "$work/source" "$GITHUB_SHA"
+          fi
+          sudo python3 cpp/tests/migration_state.py verify /root/xcli-before-update.json
+          sudo python3 deploy/tests/verify_panel_update.py
       - name: Verify login and safe repeat refusal
         run: sudo python3 deploy/tests/verify_install.py
       - name: Installation diagnostics on failure
