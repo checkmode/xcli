@@ -3,8 +3,9 @@ Description=Xdistribute fixed proxy import worker
 After=network-online.target xray-gateway-panel.service
 Wants=network-online.target
 [Service]
-User=root
-Group=root
+# System services default to root. Keep CAP_SETUID available for dropping
+# credentials in probe subprocesses; explicit User=root with NoNewPrivileges
+# can remove it on some systemd versions. The worker also checks geteuid().
 WorkingDirectory=/opt/xray-gateway
 ExecStart=/usr/bin/python3 /opt/xray-gateway/scripts/proxy_import.py
 Restart=on-failure

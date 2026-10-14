@@ -50,7 +50,7 @@ def main():
             try:
                 result=api('proxy-import')
                 if result.get('id')==job and result['status'] not in ('idle','verifying','applying'):
-                    assert result['status']==expected,result.get('message');return result
+                    assert result['status']==expected,(result.get('message'),result.get('rows'));return result
             except (OSError,urllib.error.URLError):pass
             time.sleep(1)
         raise RuntimeError('Import job timed out')

@@ -151,6 +151,9 @@ def probe(p,protocol):
         if r.returncode or len(r.stdout)<12 or struct.unpack('!H',r.stdout[:2])[0]!=1234 or not struct.unpack('!H',r.stdout[6:8])[0]:
             row['error']='加密 DNS 测试失败';return row
         row.update(status='verified',error='',doh_ms=round((time.monotonic()-started)*1000))
+    except (PermissionError, FileNotFoundError):
+        row['error']='探测进程无法启动，请检查导入服务权限'
+        return row
     except Exception:
         return row
     return row
