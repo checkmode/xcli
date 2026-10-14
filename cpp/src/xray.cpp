@@ -2,6 +2,7 @@
 #include "app/proxyman/command/command.grpc.pb.h"
 #include "app/stats/command/command.grpc.pb.h"
 #include "proxy/vless/account.pb.h"
+#include "proxy/vmess/account.pb.h"
 #include "proxy/hysteria/account/config.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <csignal>
@@ -81,6 +82,12 @@ class XrayCore final : public Core {
         result.emplace(user.email(),account.auth());
         continue;
       }
+      if(tag=="vmess") {
+        xray::proxy::vmess::Account account;
+        if(user.account().type()!=account.GetDescriptor()->full_name()||!account.ParseFromString(user.account().value()))
+          throw std::runtime_error("Unexpected Xray VMess account type");
+        result.emplace(user.email(),account.id());continue;
+      }
       xray::proxy::vless::Account account;
       if(user.account().type()!=account.GetDescriptor()->full_name()||!account.ParseFromString(user.account().value()))
         throw std::runtime_error("Unexpected Xray account type");
@@ -93,6 +100,10 @@ class XrayCore final : public Core {
     auto target=operation.mutable_user();target->set_level(0);target->set_email(user.email(tag));
     if(tag=="hysteria2") {
       xray::proxy::hysteria::account::Account account;account.set_auth(user.uuid);
+      target->mutable_account()->set_type(account.GetDescriptor()->full_name());
+      target->mutable_account()->set_value(account.SerializeAsString());
+    } else if(tag=="vmess") {
+      xray::proxy::vmess::Account account;account.set_id(user.uuid);
       target->mutable_account()->set_type(account.GetDescriptor()->full_name());
       target->mutable_account()->set_value(account.SerializeAsString());
     } else {

@@ -24,7 +24,7 @@ def main():
     before=snapshot(Path('/var/lib/xray-gateway/gateway.sqlite'),settings_path)
     root=Path('/root/xcli-import-ci');root.mkdir(mode=0o700)
     state=Path('/var/lib/xray-gateway-import');state.mkdir(mode=0o750,exist_ok=True);shutil.chown(state,'root','xgateway')
-    for source,target in [(SOURCE/'scripts/proxy_import.py',Path('/opt/xray-gateway/scripts/proxy_import.py')),
+    for source,target in [(SOURCE/'scripts/proxy_vmess.py',Path('/opt/xray-gateway/scripts/proxy_vmess.py')),(SOURCE/'scripts/proxy_import.py',Path('/opt/xray-gateway/scripts/proxy_import.py')),
                           (SOURCE/'deploy/xray-gateway-import.service',Path('/etc/systemd/system/xray-gateway-import.service'))]:
         shutil.copyfile(source,target);target.chmod(0o644)
     subprocess.run(['systemctl','daemon-reload'],check=True);subprocess.run(['systemctl','enable','--now','xray-gateway-import'],check=True)

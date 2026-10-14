@@ -1,6 +1,6 @@
 'use strict';
 let historyData=null, historyRequest=0, notificationBusy=false;
-const serviceNames={reality:'REALITY 入口',websocket:'WebSocket / TLS 入口',hysteria2:'Hysteria 2 入口',probe:'探测结果采集',core:'Xray 管理接口',backup:'本地自动加密备份',test:'通知通道测试'};
+const serviceNames={reality:'REALITY 入口',websocket:'WebSocket / TLS 入口',hysteria2:'Hysteria 2 入口',vmess:'VMess / TLS 入口',probe:'探测结果采集',core:'Xray 管理接口',backup:'本地自动加密备份',test:'通知通道测试'};
 const deliveryNames={pending:'等待投递',delivered:'已投递',failed:'投递失败',cancelled:'已取消',superseded:'已被新状态替代'};
 const presentDate=stamp=>stamp?date(stamp):'—';
 const milliseconds=n=>n===null||n===undefined?'—':Number(n).toFixed(0)+' ms';

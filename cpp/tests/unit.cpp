@@ -78,6 +78,11 @@ int main() {
       check(sealed_edit.find("edited-secret")==std::string::npos,"Edit credentials not sealed");
       check(Json::parse(unseal(sealed_edit,key,"xcli:proxy-import:request:v1"))["changes"]["password"]=="edited-secret","Edit not queued");
       report({{"id",management["id"]},{"updated",now()},{"status","complete"}});
+      auto share="vmess://"+base64(Json({{"v","2"},{"id","11111111-1111-4111-8111-111111111111"},{"add","1.1.1.1"},{"port","443"}}).dump());
+      auto vmrequest=backend.request_proxy_import(token,csrf,{{"action","preview"},{"protocol","vmess"},{"label","VMess"},{"text",share}});
+      auto vmsealed=read_file(opts.state/"proxy-import/request.xgb");check(vmsealed.find(share)==std::string::npos,"VMess link stored plaintext");
+      check(Json::parse(unseal(vmsealed,key,"xcli:proxy-import:request:v1"))["links"]==share,"VMess link not queued");
+      report({{"id",vmrequest["id"]},{"updated",now()},{"status","complete"}});
       auto queued=backend.request_proxy_import(token,csrf,input);auto job=queued["id"].get<std::string>();
       auto ciphertext=read_file(opts.state/"proxy-import/request.xgb");check(ciphertext.find("secret-password")==std::string::npos,"Import queue stored plaintext password");
       auto decoded=Json::parse(unseal(ciphertext,key,"xcli:proxy-import:request:v1"));check(decoded["proxies"][0]["port"]==12324,"Import parser port");
@@ -144,6 +149,23 @@ int main() {
       std::ofstream(config.monitor_report)<<Json({{"schema",1},{"scope","server"},{"updated",now()},{"status","healthy"},
         {"checks",Json::array({Json{{"transport","reality"},{"status","healthy"}},Json{{"transport","websocket"},{"status","healthy"}}})}}).dump();
       Backend missing(config);check(missing.monitor_status().at("status")=="unknown","Missing Hy2 probe claimed healthy");
+    }
+    {
+      Temp vmess;Options config;config.state=vmess.path/"state";config.settings=vmess.path/"settings.json";config.offline=true;
+      auto vm_settings=settings;vm_settings["vmess_ws_path"]="/connect/test/vmess";vm_settings["vmess_port"]=10081;
+      std::ofstream(config.settings)<<vm_settings.dump();auto adapter=std::make_unique<FakeCore>();auto live=adapter.get();Backend panel(config,std::move(adapter));
+      {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+      std::string session;auto auth=panel.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",session);
+      auto guard=auth.at("csrf").get<std::string>();auto uid=panel.create_user(session,guard,{{"name","VMess 测试"},{"quota",1000}}).at("id").get<std::string>();
+      User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
+      auto link=panel.links(session,uid).at("vmess").get<std::string>();check(link.starts_with("vmess://"),"VMess link missing");
+      auto decoded=Json::parse(unbase64(link.substr(8)));check(decoded["id"]==u.uuid&&decoded["net"]=="ws"&&decoded["tls"]=="tls"&&decoded["aid"]=="0","VMess share settings wrong");
+      check(unbase64(panel.subscription(u.token).first).find(link)!=std::string::npos,"VMess subscription missing");
+      auto clash=panel.clash_configuration(u);check(clash["proxies"].back()["type"]=="vmess"&&clash["proxies"].back()["alterId"]==0,"VMess Clash export wrong");
+      check(panel.qr(session,uid,"vmess").starts_with("\x89PNG"),"VMess QR missing");panel.poll_once();
+      check(live->live["vmess"].at(u.email("vmess"))==u.uuid,"VMess account not synchronized");
+      live->values={{"user>>>"+u.email("vmess")+">>>traffic>>>downlink",1000}};panel.poll_once();
+      check(live->restarts==1,"VMess quota did not revoke");status(403,[&]{panel.subscription(u.token);});
     }
     {
       Temp residence;Options config;config.state=residence.path/"state";config.settings=residence.path/"settings.json";config.offline=true;

@@ -46,6 +46,11 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
   auto hy2=settings_.value("hysteria2_port",Json(0));
   if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
+  if(settings_.contains("vmess_ws_path")) {
+    auto path=checked_string(settings_["vmess_ws_path"],1,256);
+    if(path!=settings_.at("ws_path").get<std::string>()+"/vmess"||settings_.value("vmess_port",0)!=10081)
+      throw std::runtime_error("Invalid VMess entry settings");
+  }
   auto exits=settings_.value("residential_exits",Json::array());
   if(!exits.is_array()||exits.size()>40)throw std::runtime_error("Invalid residential exit registry");
   std::set<std::string> exit_tags,exit_paths;std::set<Int> exit_ports;
@@ -81,6 +86,7 @@ Backend::~Backend() {stop_worker();}
 std::vector<std::string> Backend::transports() const {
   std::vector<std::string> result={"reality","websocket"};
   if(settings_.value("hysteria2_port",0)>0)result.push_back("hysteria2");
+  if(settings_.contains("vmess_ws_path"))result.push_back("vmess");
   return result;
 }
 std::vector<std::string> Backend::inbound_tags() const {
@@ -191,6 +197,11 @@ Json Backend::links_for(const User& user) const {
   Json result={{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
   if(auto port=settings_.value("hysteria2_port",0);port>0)
     result["hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+s("domain")+":"+std::to_string(port)+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · Hysteria 2",false,true);
+  if(settings_.contains("vmess_ws_path")) {
+    Json node={{"v","2"},{"ps",user.name+" · VMess TLS"},{"add",s("domain")},{"port","443"},{"id",user.uuid},
+      {"aid","0"},{"scy","auto"},{"net","ws"},{"type","none"},{"host",s("domain")},{"path",s("vmess_ws_path")},{"tls","tls"},{"sni",s("domain")}};
+    result["vmess"]="vmess://"+base64(node.dump());
+  }
   const bool dynamic_enabled=dynamic_residential_enabled();
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
@@ -252,7 +263,7 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& generation,const std::vector<Counter>& counters) {
-  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|residential-[0-9]{2})>>>traffic>>>(uplink|downlink))");
+  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|vmess|residential-[0-9]{2})>>>traffic>>>(uplink|downlink))");
   Int up=0,down=0;auto stamp=now();
   auto previous_sample=database.one("SELECT value FROM metadata WHERE key='activity_sample'");
   Int interval=previous_sample?std::clamp<Int>(stamp-std::stoll(previous_sample->at("value").get<std::string>()),1,300):options_.poll_seconds;

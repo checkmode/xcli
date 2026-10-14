@@ -24,6 +24,9 @@ import subprocess
 import sys
 import threading
 import time
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import proxy_vmess
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 ROOT = Path('/var/lib/xray-gateway-import')
@@ -42,8 +45,7 @@ COUNTRIES = {'US':'美国','JP':'日本','SG':'新加坡','HK':'香港','TW':'�
 TTL = 900
 
 
-class ImportErrorSafe(Exception):
-    pass
+ImportErrorSafe = proxy_vmess.InvalidProxy
 
 
 def stamp():
@@ -92,19 +94,21 @@ def public_ip(value):
 
 
 def validate(proxies, protocol, label):
-    if protocol not in ('socks','http'):raise ImportErrorSafe('请选择 SOCKS5 或 HTTP 协议')
+    if protocol not in ('socks','http','vmess'):raise ImportErrorSafe('请选择 SOCKS5 或 HTTP 协议')
     if not isinstance(label,str) or not 1<=len(label)<=30 or any(ord(c)<32 for c in label):
         raise ImportErrorSafe('名称前缀需为 1～30 个可见字符')
     if not isinstance(proxies,list) or not 1<=len(proxies)<=20:raise ImportErrorSafe('每次可导入 1～20 个代理')
     seen=set()
     for p in proxies:
-        if not isinstance(p,dict) or set(p)!= {'address','port','username','password'}:raise ImportErrorSafe('代理字段不正确')
-        public_ip(p['address'])
+        if protocol=='vmess':
+            proxy_vmess.validate(p)
+        elif not isinstance(p,dict) or set(p)!= {'address','port','username','password'}:raise ImportErrorSafe('代理字段不正确')
+        if protocol!='vmess':public_ip(p['address'])
         if type(p['port']) is not int or not 1<=p['port']<=65535:raise ImportErrorSafe('代理端口不正确')
-        for k in ('username','password'):
+        for k in (() if protocol=='vmess' else ('username','password')):
             if not isinstance(p[k],str) or not 1<=len(p[k].encode())<=255 or any(ord(c)<32 or ord(c)==127 for c in p[k]):
                 raise ImportErrorSafe('账号或密码格式不正确')
-        if ':' in p['username']:raise ImportErrorSafe('账号不能包含冒号')
+        if protocol!='vmess' and ':' in p['username']:raise ImportErrorSafe('账号不能包含冒号')
         peer=(p['address'],p['port'])
         if peer in seen:raise ImportErrorSafe('列表包含重复地址和端口')
         seen.add(peer)
@@ -116,6 +120,8 @@ def existing_peers(core):
         if outbound.get('protocol') in ('socks','http'):
             for s in outbound.get('settings',{}).get('servers',[]):
                 result.add((s.get('address'),s.get('port')))
+        elif outbound.get('protocol')=='vmess':
+            for server in outbound.get('settings',{}).get('vnext',[]):result.add((server.get('address'),server.get('port')))
     return result
 
 
@@ -129,11 +135,12 @@ def check_capacity(settings,core,proxies):
         raise ImportErrorSafe('现有自定义全局路由需要人工检查，未修改配置')
 
 
-def probe(p,protocol):
+def probe(p,protocol,probe_user='xgateway'):
+    if protocol=='vmess':return probe_vmess(p)
     # curl reads credentials through stdin; neither command arguments nor reports contain them.
     def quote(s):return '"'+s.replace('\\','\\\\').replace('"','\\"')+'"'
     config='proxy = '+quote(('socks5h' if protocol=='socks' else 'http')+'://'+p['address']+':'+str(p['port']))+'\nproxy-user = '+quote(p['username']+':'+p['password'])+'\n'
-    user=pwd.getpwnam('xgateway')
+    user=pwd.getpwnam(probe_user)
     def get(url,extra=()):
         return subprocess.run(['/usr/bin/curl','-q','--config','-','--noproxy','','-fsS','--connect-timeout','8',
             '--max-time','20','--max-filesize','8192',*extra,url],input=config.encode(),capture_output=True,timeout=24,
@@ -157,6 +164,53 @@ def probe(p,protocol):
     except Exception:
         return row
     return row
+
+
+def probe_vmess(p):
+    row={'address':p['address'],'port':p['port'],'protocol':'vmess','status':'failed','error':'VMess 连接或认证失败'}
+    process=None
+    try:
+        ip=proxy_vmess.resolve_public(p['address'])
+        with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
+        credentials={'address':'127.0.0.1','port':port,'username':secrets.token_hex(12),'password':secrets.token_hex(24)}
+        config={'log':{'loglevel':'none'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks',
+            'settings':{'auth':'password','accounts':[{'user':credentials['username'],'pass':credentials['password']}]}}],
+            'outbounds':[proxy_vmess.outbound(p,ip)]}
+        # The dedicated monitor account can reach its own ephemeral loopback
+        # client; xgateway's data-plane firewall deliberately rejects such ports.
+        user=pwd.getpwnam('xgprobe')
+        process=subprocess.Popen(['/usr/local/lib/xray-gateway/xray','run','-config','stdin:'],
+            stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+            user=user.pw_uid,group=user.pw_gid,extra_groups=[],env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent'})
+        process.stdin.write(json.dumps(config).encode());process.stdin.close()
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            if process.poll() is not None:return row
+            try:
+                with socket.create_connection(('127.0.0.1',port),timeout=.2):break
+            except OSError:time.sleep(.05)
+        result=probe(credentials,'socks',probe_user='xgprobe')
+        result.update(address=p['address'],port=p['port'],protocol='vmess',server_ip=ip)
+        if result['status']!='verified':result['error']='VMess HTTPS / 加密 DNS 检测失败，请检查 UUID、传输和 TLS 配置'
+        return result
+    except ImportErrorSafe as e:row['error']=str(e)
+    except (PermissionError,FileNotFoundError):row['error']='VMess 探测进程无法启动，请检查服务权限'
+    except Exception:pass
+    finally:
+        if process is not None:
+            if process.poll() is None:process.terminate()
+            try:process.wait(timeout=3)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)
+    return row
+
+
+def proxy_fields(p,protocol):
+    return {k:p[k] for k in (proxy_vmess.FIELDS if protocol=='vmess' else ('address','port','username','password'))}
+
+
+def upstream(p,protocol,server_ip=None):
+    if protocol=='vmess':return proxy_vmess.outbound(proxy_fields(p,protocol),server_ip or p['server_ip'])
+    return {'protocol':protocol,'settings':{'servers':[{'address':p['address'],'port':p['port'],'users':[{'user':p['username'],'pass':p['password']}]}]}}
 
 
 def read_config():
@@ -200,9 +254,8 @@ def configure(old,proxies,protocol,label,rows):
         settings.setdefault('residential_exits',[]).append(entry);monitor.setdefault('residential_exits',[]).append(entry)
         core['inbounds'].append({'tag':tag,'listen':'127.0.0.1','port':port,'protocol':'vless',
             'settings':{'clients':[],'decryption':'none'},'streamSettings':{'network':'ws','wsSettings':{'path':path}}})
-        core['outbounds'].append({'tag':tag+'-exit','protocol':protocol,'settings':{'servers':[{'address':p['address'],'port':p['port'],
-            'users':[{'user':p['username'],'pass':p['password']}]}]}})
-        pool['proxies'].append({**p,'tag':tag,'protocol':protocol,'country':row['country'],'entry':entry,'enabled':True,'deleted_at':0})
+        core['outbounds'].append({'tag':tag+'-exit',**upstream(p,protocol,row.get('server_ip'))})
+        pool['proxies'].append({**p,**({'server_ip':row['server_ip']} if protocol=='vmess' else {}),'tag':tag,'protocol':protocol,'country':row['country'],'entry':entry,'enabled':True,'deleted_at':0})
         locations+=f'\nlocation = {path} {{\n    proxy_pass http://127.0.0.1:{port};\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection $connection_upgrade;\n    proxy_set_header Host $host;\n    proxy_read_timeout 600s;\n    proxy_send_timeout 600s;\n    proxy_buffering off;\n}}\n'
     rules=core['routing']['rules'];rules.append({'type':'field','inboundTag':[e['tag'] for e in entries],'network':'udp','outboundTag':'blocked'})
     rules.extend({'type':'field','inboundTag':[e['tag']],'network':'tcp','outboundTag':e['tag']+'-exit'} for e in entries)
@@ -237,7 +290,8 @@ def check_inventory_capacity(settings,pool,additional=0):
 
 def inventory(config):
     return [{**{k:p[k] for k in ('tag','protocol','address','port','enabled','deleted_at')},
-             **{k:p['entry'][k] for k in ('label','country','exit_ip')}} for p in load_pool(config)['proxies']]
+             **{k:p['entry'][k] for k in ('label','country','exit_ip')},
+             **({**{k:p[k] for k in proxy_vmess.PUBLIC_FIELDS},'tls':p['tls']} if p['protocol']=='vmess' else {})} for p in load_pool(config)['proxies']]
 
 
 def manage_config(old,request,verified=None):
@@ -249,18 +303,21 @@ def manage_config(old,request,verified=None):
     if bool(target['deleted_at']) != (operation=='restore'):raise ImportErrorSafe('代理状态已变化，请刷新列表')
     if operation=='edit':
         changes=request.get('changes',{})
-        if not isinstance(changes,dict) or set(changes)-{'label','address','port','protocol','username','password'}:
+        if not isinstance(changes,dict) or set(changes)-{'label','address','port','protocol','username','password','uuid',*proxy_vmess.PUBLIC_FIELDS,'tls'}:
             raise ImportErrorSafe('编辑字段不正确')
         for k,v in changes.items():
             if k=='label':
                 if not isinstance(v,str) or not 1<=len(v)<=60 or any(ord(c)<32 or ord(c)==127 for c in v):raise ImportErrorSafe('名称需为 1～60 个可见字符')
                 target['entry']['label']=v
-            elif k not in ('username','password') or v:target[k]=v
+            elif k not in ('username','password','uuid') or v:target[k]=v
     elif operation=='enable':target['enabled']=True
     elif operation=='disable':target['enabled']=False
     elif operation=='delete':target.update(enabled=False,deleted_at=stamp())
     elif operation=='restore':target.update(enabled=False,deleted_at=0)
-    proxy={k:target[k] for k in ('address','port','username','password')}
+    if target['protocol']!=next(p['protocol'] for p in load_pool(old)['proxies'] if p['tag']==tag) and 'vmess' in (target['protocol'],next(p['protocol'] for p in load_pool(old)['proxies'] if p['tag']==tag)):
+        raise ImportErrorSafe('VMess 与 HTTP/SOCKS5 之间请使用重新导入')
+    if target['protocol']=='vmess':target['address']=proxy_vmess.address(target['address'])
+    proxy=proxy_fields(target,target['protocol'])
     validate([proxy],target['protocol'],'管理代理')
     if any(p['tag']!=tag and (p['address'],p['port'])==(target['address'],target['port']) for p in pool['proxies']):
         raise ImportErrorSafe('地址和端口与其他代理或回收站记录重复')
@@ -272,6 +329,7 @@ def manage_config(old,request,verified=None):
         if verified.get('status')!='verified':raise ImportErrorSafe('代理检测失败，原配置未修改')
         public_ip(verified['exit_ip'])
         if not re.fullmatch('[A-Z]{2}',verified['country']):raise ImportErrorSafe('出口地区无效')
+        if target['protocol']=='vmess':target['server_ip']=public_ip(verified['server_ip'])
         target['country']=verified['country'];target['entry'].update(country=verified['country'],exit_ip=verified['exit_ip'])
     check_inventory_capacity(settings,pool)
     # Remove only the selected managed entry. Retain every other route and its ordering.
@@ -296,8 +354,7 @@ def manage_config(old,request,verified=None):
             config['residential_exits'].insert(index,e)
         core['inbounds'].append({'tag':tag,'listen':'127.0.0.1','port':e['port'],'protocol':'vless',
             'settings':{'clients':[],'decryption':'none'},'streamSettings':{'network':'ws','wsSettings':{'path':e['ws_path']}}})
-        core['outbounds'].append({'tag':tag+'-exit','protocol':target['protocol'],'settings':{'servers':[
-            {'address':target['address'],'port':target['port'],'users':[{'user':target['username'],'pass':target['password']}]}]}})
+        core['outbounds'].append({'tag':tag+'-exit',**upstream(target,target['protocol'])})
         rules.extend([{'type':'field','inboundTag':[tag],'network':'udp','outboundTag':'blocked'},
                       {'type':'field','inboundTag':[tag],'network':'tcp','outboundTag':tag+'-exit'}])
     locations=''
@@ -311,6 +368,28 @@ def manage_config(old,request,verified=None):
          'pool':json.dumps(pool).encode(),'locations':locations.encode()}
     if len(new['monitor'])>16384:raise ImportErrorSafe('探测配置容量不足')
     return new,entries,target
+
+
+def vmess_entry_config(old):
+    settings=json.loads(old['settings']);core=json.loads(old['core']);monitor=json.loads(old['monitor'])
+    if settings.get('vmess_ws_path'):raise ImportErrorSafe('VMess 客户端入口已经启用')
+    if any(e.get('tag')=='vmess' or e.get('port')==10081 for e in core['inbounds']):
+        raise ImportErrorSafe('VMess 入口编号或端口已被占用')
+    if not re.fullmatch(r'/connect/[A-Za-z0-9_-]+',settings['ws_path']):raise ImportErrorSafe('现有 WebSocket 路径无效')
+    path=settings['ws_path']+'/vmess';settings.update(vmess_ws_path=path,vmess_port=10081);monitor['vmess_ws_path']=path
+    core['inbounds'].append({'tag':'vmess','listen':'127.0.0.1','port':10081,'protocol':'vmess',
+        'settings':{'clients':[]},'streamSettings':{'network':'ws','wsSettings':{'path':path}}})
+    nginx=old['nginx'].decode();marker='location = '+settings['ws_path']+' {'
+    if nginx.count(marker)!=1 or ('location = '+path+' {') in nginx:raise ImportErrorSafe('无法确定 VMess 的 Nginx 入口')
+    include='include '+str(FILES['locations'])+';'
+    if 'locations' not in old:
+        if include in nginx:raise ImportErrorSafe('导入入口配置不一致')
+        nginx=nginx.replace(marker,include+'\n        '+marker,1)
+    block=f'location = {path} {{\n            proxy_pass http://127.0.0.1:10081;\n            proxy_http_version 1.1;\n            proxy_set_header Upgrade $http_upgrade;\n            proxy_set_header Connection $connection_upgrade;\n            proxy_set_header Host $host;\n            proxy_read_timeout 600s;\n            proxy_send_timeout 600s;\n            proxy_buffering off;\n        }}\n        '
+    nginx=nginx.replace(marker,block+marker,1)
+    new={**old,'settings':json.dumps(settings).encode(),'core':json.dumps(core).encode(),'monitor':json.dumps(monitor).encode(),
+         'nginx':nginx.encode(),'locations':old.get('locations',b''),'pool':old.get('pool',b'{"proxies":[]}')}
+    return new,[{'tag':'vmess','port':10081}]
 
 
 def run(*args,timeout=90):
@@ -343,7 +422,7 @@ def service_start():
 
 def monitor_tags(config):
     settings=json.loads(config['settings']);monitor=json.loads(config['monitor'])
-    return {'reality','websocket'}|({'hysteria2'} if settings.get('hysteria2_port') else set())|{e['tag'] for e in monitor.get('residential_exits',[])}
+    return {'reality','websocket'}|({'hysteria2'} if settings.get('hysteria2_port') else set())|({'vmess'} if settings.get('vmess_ws_path') else set())|{e['tag'] for e in monitor.get('residential_exits',[])}
 
 
 def rollback(backup):
@@ -425,7 +504,7 @@ class Worker:
 
     def preview(self,request):
         (ROOT/'preview.json').unlink(missing_ok=True)
-        proxies=request['proxies'];protocol=request['protocol'];label=request['label'];validate(proxies,protocol,label)
+        protocol=request['protocol'];proxies=proxy_vmess.parse_links(request.get('links','')) if protocol=='vmess' else request['proxies'];label=request['label'];validate(proxies,protocol,label)
         old=read_config();check_capacity(json.loads(old['settings']),json.loads(old['core']),proxies)
         self.publish(status='verifying',message='正在检测认证、HTTPS 和加密 DNS',rows=[])
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:rows=list(pool.map(lambda p:probe(p,protocol),proxies))
@@ -530,6 +609,13 @@ def main():
     if ROOT.is_symlink() or ROOT.stat().st_uid!=0:raise SystemExit('Unsafe service state directory')
     os.chown(ROOT,0,owner.pw_gid);os.chmod(ROOT,0o750)
     (ROOT/'backups').mkdir(mode=0o700,exist_ok=True)
+    if len(sys.argv)==2 and sys.argv[1]=='enable-vmess':
+        with open('/run/lock/xcli-update.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            if (ROOT/'transaction.json').exists():raise ImportErrorSafe('请先恢复未完成的事务')
+            old=read_config();new,entries=vmess_entry_config(old);job=secrets.token_hex(16)
+            apply_config(old,new,entries,job)
+        print('VMess WebSocket/TLS entry enabled; users retained. Rollback job: '+job);return
     if len(sys.argv)==3 and sys.argv[1]=='rollback' and re.fullmatch('[0-9a-f]{32}',sys.argv[2]):
         with open('/run/lock/xcli-update.lock','a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);rollback(ROOT/'backups'/sys.argv[2])

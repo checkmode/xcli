@@ -30,6 +30,10 @@ Json Backend::clash_configuration(const User& user) const {
   websocket("HTTPS",settings_.at("ws_path").get<std::string>(),true);
   if(const auto port=settings_.value("hysteria2_port",0);port>0)
     add({{"name","Hysteria 2"},{"type","hysteria2"},{"server",address},{"port",port},{"password",user.uuid},{"sni",domain},{"skip-cert-verify",false}});
+  if(settings_.contains("vmess_ws_path"))
+    add({{"name","VMess TLS"},{"type","vmess"},{"server",address},{"port",443},{"uuid",user.uuid},{"alterId",0},{"cipher","auto"},
+      {"udp",true},{"tls",true},{"skip-cert-verify",false},{"servername",domain},{"network","ws"},
+      {"ws-opts",{{"path",settings_["vmess_ws_path"]},{"headers",{{"Host",domain}}}}}});
   const bool dynamic_enabled=dynamic_residential_enabled();
   std::map<std::string,Json> country_nodes;
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {

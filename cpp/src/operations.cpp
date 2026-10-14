@@ -7,7 +7,7 @@ namespace xg {
 namespace {
 constexpr Int retention = 30*86400;
 const std::map<std::string,std::string> service_names={{"reality","REALITY 入口"},{"websocket","WebSocket / TLS 入口"},
-  {"hysteria2","Hysteria 2 入口"},
+  {"hysteria2","Hysteria 2 入口"},{"vmess","VMess / TLS 入口"},
   {"probe","探测结果采集"},{"core","Xray 管理接口"},{"backup","本地自动加密备份"},{"test","通知通道测试"}};
 Int numeric(const Json& input,const std::string& key,Int fallback,Int low,Int high) {
   auto value=input.value(key,Json(fallback));

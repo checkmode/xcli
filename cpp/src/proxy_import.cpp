@@ -59,8 +59,9 @@ Json Backend::proxy_import_status(const std::string& token) {
     for(const auto& row:catalog.value("items",Json::array())) {
       if(result["items"].size()>=40)break;
       Json item=Json::object();
-      for(const auto* key:{"tag","protocol","address","label","country","exit_ip"})if(row.contains(key)&&row[key].is_string())item[key]=row[key].get<std::string>().substr(0,256);
+      for(const auto* key:{"tag","protocol","address","label","country","exit_ip","network","security","server_name","host","path","alpn","fingerprint"})if(row.contains(key)&&row[key].is_string())item[key]=row[key].get<std::string>().substr(0,std::string(key)=="path"?1024:256);
       for(const auto* key:{"port","deleted_at"})if(row.contains(key)&&row[key].is_number_integer())item[key]=row[key];
+      if(row.contains("tls")&&row["tls"].is_boolean())item["tls"]=row["tls"];
       item["enabled"]=row.value("enabled",false);result["items"].push_back(item);
     }
   }catch(...){}
@@ -81,11 +82,22 @@ Json Backend::request_proxy_import(const std::string& token,const std::string& c
   if(action=="preview") {
     fields(input,{"action","protocol","label","text"},{"action","protocol","label","text"});
     auto protocol=checked_string(input["protocol"],1,8),label=user_name(input["label"]);
-    if(protocol!="socks"&&protocol!="http")throw HttpError(422,"请选择 SOCKS5 或 HTTP 协议");
+    if(protocol!="socks"&&protocol!="http"&&protocol!="vmess")throw HttpError(422,"请选择 SOCKS5、HTTP 或 VMess 协议");
     if(label.size()>120)throw HttpError(422,"名称前缀过长");
-    auto proxies=parse_proxies(input["text"]);
-    if(settings_.value("residential_exits",Json::array()).size()+proxies.size()>40)throw HttpError(422,"固定和动态入口合计最多 40 个，请减少导入数量");
-    request["protocol"]=protocol;request["label"]=label;request["proxies"]=proxies;
+    request["protocol"]=protocol;request["label"]=label;
+    if(protocol=="vmess") {
+      auto links=checked_string(input["text"],1,12000);std::istringstream stream(links);std::string line;int count=0;
+      while(std::getline(stream,line)) {
+        if(line.find_first_not_of(" \t\r")==std::string::npos)continue;
+        if(++count>20||!line.starts_with("vmess://"))throw HttpError(422,"每行一个 vmess:// 分享链接，每次最多 20 个");
+      }
+      if(!count)throw HttpError(422,"请填写 VMess 分享链接");
+      request["links"]=links;
+    }else {
+      auto proxies=parse_proxies(input["text"]);
+      if(settings_.value("residential_exits",Json::array()).size()+proxies.size()>40)throw HttpError(422,"固定和动态入口合计最多 40 个，请减少导入数量");
+      request["proxies"]=proxies;
+    }
   }else if(action=="manage") {
     fields(input,{"action","operation","tag","changes"},{"action","operation","tag"});
     auto operation=checked_string(input["operation"],1,10),tag=checked_string(input["tag"],14,14);
@@ -93,14 +105,25 @@ Json Backend::request_proxy_import(const std::string& token,const std::string& c
     request["operation"]=operation;request["tag"]=tag;
     if(operation=="edit") {
       if(!input.contains("changes"))throw HttpError(422,"缺少编辑字段");
-      const auto& changes=input["changes"];fields(changes,{"label","address","port","protocol","username","password"},{"label","address","port","protocol"});
+      const auto& changes=input["changes"];fields(changes,{"label","address","port","protocol","username","password","uuid","network","security","tls","server_name","host","path","alpn","fingerprint"},{"label","address","port","protocol"});
       request["changes"]={{"label",user_name(changes["label"])}};
-      auto protocol=checked_string(changes["protocol"],1,8),address=checked_string(changes["address"],7,15);
-      if(protocol!="socks"&&protocol!="http")throw HttpError(422,"协议无效");
-      if(!std::regex_match(address,std::regex("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))||!public_webhook_address(address))throw HttpError(422,"仅支持公网 IPv4 地址");
+      auto protocol=checked_string(changes["protocol"],1,8),address=checked_string(changes["address"],1,253);
+      if(protocol!="socks"&&protocol!="http"&&protocol!="vmess")throw HttpError(422,"协议无效");
+      if(protocol!="vmess"&&(!std::regex_match(address,std::regex("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))||!public_webhook_address(address)))throw HttpError(422,"仅支持公网 IPv4 地址");
       if(!changes["port"].is_number_integer()||changes["port"].get<Int>()<1||changes["port"].get<Int>()>65535)throw HttpError(422,"端口无效");
       request["changes"]["address"]=address;request["changes"]["port"]=changes["port"];request["changes"]["protocol"]=protocol;
+      for(const auto* key:{"uuid","network","security","server_name","host","path","alpn","fingerprint"})if(changes.contains(key)) {
+        if(protocol!="vmess")throw HttpError(422,"此字段仅适用于 VMess");
+        auto value=checked_string(changes[key],0,std::string(key)=="path"?1024:255);
+        if(std::any_of(value.begin(),value.end(),[](unsigned char c){return c<32||c==127;}))throw HttpError(422,"VMess 字段格式不正确");
+        request["changes"][key]=value;
+      }
+      if(changes.contains("tls")) {
+        if(protocol!="vmess"||!changes["tls"].is_boolean())throw HttpError(422,"TLS 开关无效");
+        request["changes"]["tls"]=changes["tls"];
+      }
       for(const auto* key:{"username","password"})if(changes.contains(key)) {
+        if(protocol=="vmess")throw HttpError(422,"VMess 使用 UUID 认证");
         auto value=checked_string(changes[key],0,255);
         if(std::any_of(value.begin(),value.end(),[](unsigned char c){return c<32||c==127;})||(std::string(key)=="username"&&value.find(':')!=std::string::npos))throw HttpError(422,"账号或密码格式不正确");
         request["changes"][key]=value;

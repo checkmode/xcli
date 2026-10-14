@@ -107,11 +107,11 @@ def client_config(config, kind, port):
         stream = {'network': 'tcp', 'security': 'reality', 'realitySettings': {
             'serverName': config['reality_sni'], 'fingerprint': 'chrome',
             'publicKey': config['reality_public'], 'shortId': config['short_id']}}
-    elif transport == 'websocket':
+    elif transport in ('websocket','vmess'):
         host = config['domain']
         stream = {'network': 'ws', 'security': 'tls',
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'useSystemCA': True},
-            'wsSettings': {'path': exit['ws_path'] if exit else config['ws_path'], 'headers': {'Host': config['domain']}}}
+            'wsSettings': {'path': exit['ws_path'] if exit else config['vmess_ws_path'] if transport=='vmess' else config['ws_path'], 'headers': {'Host': config['domain']}}}
     if transport == 'hysteria2':
         outbound = {'protocol': 'hysteria', 'settings': {'version': 2, 'address': config['public_ip'],
             'port': config['hysteria2_port']}, 'streamSettings': {'network': 'hysteria', 'security': 'tls',
@@ -119,8 +119,9 @@ def client_config(config, kind, port):
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False,
                 'useSystemCA': True, 'alpn': ['h3']},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
-    elif transport in ('reality', 'websocket'):
-        outbound = {'protocol': 'vless', 'settings': {'vnext': [
+    elif transport in ('reality', 'websocket','vmess'):
+        if transport=='vmess':user={'id':config['uuid'],'security':'auto'}
+        outbound = {'protocol': 'vmess' if transport=='vmess' else 'vless', 'settings': {'vnext': [
             {'address': host, 'port': 443, 'users': [user]}]}, 'streamSettings': stream}
     else:
         raise ValueError('Unsupported transport')
@@ -189,7 +190,7 @@ def main():
     if not 30 <= args.interval <= 3600:
         parser.error('interval must be 30..3600 seconds')
     config = json.loads(args.config.read_text())
-    kinds = ['reality', 'websocket'] + (['hysteria2'] if config.get('hysteria2_port', 0) else []) + [e['tag'] for e in config.get('residential_exits', [])]
+    kinds = ['reality', 'websocket'] + (['hysteria2'] if config.get('hysteria2_port', 0) else []) + (['vmess'] if config.get('vmess_ws_path') else []) + [e['tag'] for e in config.get('residential_exits', [])]
     if args.config.stat().st_mode & 0o007:
         parser.error('configuration must not be world-readable')
     stopped = False

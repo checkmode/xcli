@@ -30,3 +30,5 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 
 #proxy-import-dialog{width:min(760px,calc(100vw - 32px));max-width:760px}#proxy-import-text{width:100%;min-height:140px;font-family:ui-monospace,monospace;resize:vertical}#proxy-import-results{margin:16px 0}#proxy-import-results td{vertical-align:top}#proxy-import-form[aria-busy="true"]{opacity:.65}
 #proxy-import-form select{display:block;width:100%;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit;color:inherit}
+
+#proxy-manage-dialog{width:min(720px,calc(100vw - 32px));max-width:720px}#proxy-manage-vmess-fields{padding-top:8px}#proxy-manage-summary{overflow-wrap:anywhere}

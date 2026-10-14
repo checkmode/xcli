@@ -92,7 +92,7 @@
   <div class="dialog-heading"><div><p class="eyebrow">CONNECT YOUR DEVICE</p><h2 id="connect-title">连接设备</h2></div><button class="close" data-close="connect-dialog" aria-label="关闭">×</button></div>
   <div class="tabs" aria-label="连接方式">
     <button data-kind="shadowrocket" class="active" aria-pressed="true">小火箭</button><button data-kind="dns" aria-pressed="false">DNS 模块</button><button data-kind="subscription" aria-pressed="false">节点订阅</button><button data-kind="clash" aria-pressed="false">Clash Verge</button>
-    <button data-kind="reality" aria-pressed="false">REALITY</button><button data-kind="websocket" aria-pressed="false">HTTPS</button><button data-kind="hysteria2" aria-pressed="false" hidden>Hysteria 2</button>
+    <button data-kind="reality" aria-pressed="false">REALITY</button><button data-kind="websocket" aria-pressed="false">HTTPS</button><button data-kind="vmess" aria-pressed="false" hidden>VMess TLS</button><button data-kind="hysteria2" aria-pressed="false" hidden>Hysteria 2</button>
   </div>
   <div class="qr-wrap"><img id="qr-image" alt="用于导入连接的二维码" width="240" height="240"></div>
   <p id="qr-description" class="muted center"></p>
@@ -105,9 +105,18 @@
 <form id="proxy-manage-form" autocomplete="off">
 <div id="proxy-manage-fields">
 <label>节点名称<input name="label" maxlength="60" required></label>
-<div class="form-row"><label>代理地址<input name="address" maxlength="15" required></label><label>端口<input name="port" type="number" min="1" max="65535" required></label></div>
-<label>协议<select name="protocol"><option value="socks">SOCKS5</option><option value="http">HTTP CONNECT</option></select></label>
-<div class="form-row"><label>新账号<input name="username" maxlength="255" autocomplete="off" placeholder="留空保留已保存账号"></label><label>新密码<input name="password" type="password" maxlength="255" autocomplete="new-password" placeholder="留空保留已保存密码"></label></div>
+<div class="form-row"><label>代理地址<input name="address" maxlength="253" required></label><label>端口<input name="port" type="number" min="1" max="65535" required></label></div>
+<label>协议<select name="protocol"><option value="socks">SOCKS5</option><option value="http">HTTP CONNECT</option><option value="vmess">VMess</option></select></label>
+<div class="form-row" id="proxy-manage-http-fields"><label>新账号<input name="username" maxlength="255" autocomplete="off" placeholder="留空保留已保存账号"></label><label>新密码<input name="password" type="password" maxlength="255" autocomplete="new-password" placeholder="留空保留已保存密码"></label></div>
+<div id="proxy-manage-vmess-fields" hidden>
+<label>新 UUID<input name="uuid" type="password" maxlength="36" autocomplete="new-password" placeholder="留空保留已保存 UUID"></label>
+<div class="form-row"><label>传输方式<select name="network"><option value="tcp">TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option></select></label><label>加密方式<select name="security"><option value="auto">auto</option><option value="aes-128-gcm">aes-128-gcm</option><option value="chacha20-poly1305">chacha20-poly1305</option><option value="none">none</option><option value="zero">zero</option></select></label></div>
+<label class="check-label"><input name="tls" type="checkbox">开启 TLS（验证证书）</label>
+<div class="form-row"><label>TLS 服务名（SNI）<input name="server_name" maxlength="253" placeholder="留空使用服务器域名"></label><label>Host / gRPC authority<input name="host" maxlength="253" placeholder="WebSocket 或 gRPC 使用"></label></div>
+<label>WebSocket 路径 / gRPC 服务名<input name="path" maxlength="1024" placeholder="例如 /ws；TCP 留空"></label>
+<div class="form-row"><label>ALPN<input name="alpn" maxlength="100" placeholder="例如 h2,http/1.1；留空自动"></label><label>TLS 指纹<select name="fingerprint"><option value="">默认</option><option>chrome</option><option>firefox</option><option>safari</option><option>ios</option><option>android</option><option>edge</option><option>random</option><option>randomized</option></select></label></div>
+<p class="small muted">支持 VMess AEAD（alterId = 0）。域名在检测时解析为公网 IPv4 并固定；供应商更换服务器 IP 后，重新检测并保存即可更新。</p>
+</div>
 </div>
 <p id="proxy-manage-description" class="notice"></p><button id="proxy-manage-prepare" class="primary" type="submit">检测并预览</button>
 </form>
@@ -119,9 +128,9 @@
 <div class="dialog-heading"><div><p class="eyebrow">ADD PROXY EXITS</p><h2 id="proxy-import-title">导入固定代理</h2></div><button type="button" class="close" data-close="proxy-import-dialog" aria-label="关闭">×</button></div>
 <p class="muted">接入已购买的 ISP、住宅或机房代理。检测通过后自动识别地区，并加入用户订阅。</p>
 <form id="proxy-import-form" autocomplete="off">
-<div class="form-row"><label>上游协议<select name="protocol"><option value="socks">SOCKS5</option><option value="http">HTTP / HTTPS CONNECT</option></select></label><label>节点名称前缀<input name="label" maxlength="30" value="固定代理" placeholder="例如：IPRoyal ISP" required></label></div>
+<div class="form-row"><label>上游协议<select name="protocol"><option value="socks">SOCKS5</option><option value="http">HTTP / HTTPS CONNECT</option><option value="vmess">VMess 分享链接</option></select></label><label>节点名称前缀<input name="label" maxlength="30" value="固定代理" placeholder="例如：IPRoyal ISP" required></label></div>
 <label>代理列表<textarea name="text" id="proxy-import-text" rows="6" maxlength="12000" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="每行一个：HOST:PORT:USER:PASS" required></textarea></label>
-<p class="small muted">每次 1～20 个公网 IPv4 代理。请填写对应协议的端口；账号密码提交后清空，不会出现在检测结果或客户端订阅中。本次接入提供 TCP 及加密 DNS。</p>
+<p class="small muted" id="proxy-import-format">每次 1～20 个公网 IPv4 代理。请填写对应协议的端口。凭据提交后清空，不会出现在检测结果或客户端订阅中。本次接入提供 TCP 及加密 DNS。</p>
 <button id="proxy-import-detect" class="secondary" type="submit">检测并预览</button>
 </form>
 <button id="proxy-import-edit" class="secondary" type="button" hidden>重新填写代理列表</button>

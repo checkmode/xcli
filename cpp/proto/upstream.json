@@ -12,6 +12,8 @@
     "core/config.proto": "312ef0a4a9add73bbc044eab8864025fd8452ede49e7687fe75cccb17a749394",
     "proxy/vless/account.proto": "1e03384298211ee21e666cf8a80f50eba16a3c054fdc07a4da13fe67d9b71dac",
     "transport/internet/config.proto": "6dd79df85a60f2be5a47ada464ebca70905dbbe1bc10e166220a799661aab49c",
-    "proxy/hysteria/account/config.proto": "f3b64dfb54383f3674aec80cb4655a68a4528e24872bb5bb90d72de329604f1d"
+    "proxy/hysteria/account/config.proto": "f3b64dfb54383f3674aec80cb4655a68a4528e24872bb5bb90d72de329604f1d",
+    "proxy/vmess/account.proto": "6db693e9234046f3f5b79175f4300354292e2f2f2832b01e893c63e92b29214b",
+    "common/protocol/headers.proto": "b1df710e1446d97bc7e83130adc5a365309d4b94dc68f4f0302bf1ffa1c306dc"
   }
 }

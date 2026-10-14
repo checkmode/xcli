@@ -76,6 +76,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         for sock in reservations.pop(port, []):
             sock.close()
     api_port, reality_port, ws_port, panel_port = [reserve_port() for _ in range(4)]
+    vmess_port = reserve_port()
     hy2_port = reserve_port(udp=True)
     core_pid_file = tmp_path / 'core.pid'
     keys = subprocess.check_output([str(XRAY), 'x25519'], text=True)
@@ -109,6 +110,8 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         'streamSettings': {'network': 'hysteria', 'security': 'tls', 'hysteriaSettings': {'version': 2},
             'tlsSettings': {'alpn': ['h3'], 'certificates': [{'certificateFile': str(cert), 'keyFile': str(key)}]},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}})
+    config['inbounds'].append({'tag':'vmess','listen':'127.0.0.1','port':vmess_port,'protocol':'vmess',
+        'settings':{'clients':[]},'streamSettings':{'network':'ws','wsSettings':{'path':'/isolated-test/vmess'}}})
     residence_ports = {tag: reserve_port() for tag in ('residential-01', 'residential-02')}
     upstream_port, broken_port = reserve_port(), reserve_port()
     config['outbounds'][0]['tag'] = 'direct'
@@ -131,7 +134,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'origin': ORIGIN, 'domain': 'testserver', 'public_ip': '127.0.0.1',
         'reality_sni': 'www.bing.com', 'reality_public': public, 'short_id': short_id, 'ws_path': '/isolated-test', 'hysteria2_port': hy2_port,
-        'residential_exits': residence}))
+        'vmess_ws_path':'/isolated-test/vmess','vmess_port':10081,'residential_exits': residence}))
     settings.chmod(0o600)
     spec = importlib.util.spec_from_file_location('legacy_core_test', LEGACY)
     legacy = importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
@@ -155,7 +158,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     processes.append(upstream)
     def supervise():
         try:
-            for port in (api_port, reality_port, ws_port, hy2_port, *residence_ports.values()):
+            for port in (api_port, reality_port, ws_port, hy2_port, vmess_port, *residence_ports.values()):
                 release_port(port)
             while not stop.is_set():
                 core = subprocess.Popen([str(XRAY), 'run', '-config', str(core_config)], stdout=core_log, stderr=core_log)
@@ -227,10 +230,13 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
             stream = {'network': 'tcp', 'security': 'reality', 'realitySettings':
                       {'serverName': 'www.bing.com', 'fingerprint': 'chrome', 'publicKey': public, 'shortId': short_id}}
         else:
-            stream = {'network': 'ws', 'security': 'none', 'wsSettings': {'path': '/isolated-test' + ('/' + kind if kind in residence_ports else '')}}
+            stream = {'network': 'ws', 'security': 'none', 'wsSettings': {'path': '/isolated-test' + ('/' + kind if kind in residence_ports or kind=='vmess' else '')}}
         cfg = {'log': {'loglevel': 'warning'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port, 'protocol': 'socks', 'settings': {'auth': 'noauth', 'udp': True}}],
             'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': '127.0.0.1',
                 'port': reality_port if kind == 'reality' else residence_ports.get(kind, ws_port), 'users': [account]}]}, 'streamSettings': stream}]}
+        if kind=='vmess':
+            cfg['outbounds'][0]['protocol']='vmess'
+            server=cfg['outbounds'][0]['settings']['vnext'][0];server['port']=vmess_port;server['users']=[{'id':user['uuid'],'security':'auto'}]
         if kind == 'hysteria2':
             cfg['outbounds'] = [{'protocol': 'hysteria', 'settings': {'version': 2, 'address': '127.0.0.1', 'port': hy2_port},
                 'streamSettings': {'network': 'hysteria', 'security': 'tls',
@@ -259,13 +265,13 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         client.login()
         uid = client.json('/api/users', 'POST', {'name': 'integration-one'})['id']
         uid2 = client.json('/api/users', 'POST', {'name': 'integration-two'})['id']
-        eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2', 'residential-01', 'residential-02')))
-        expected = {'reality', 'websocket', 'hysteria2', 'residential-01', 'residential-02'}
+        eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2', 'vmess', 'residential-01', 'residential-02')))
+        expected = {'reality', 'websocket', 'hysteria2', 'vmess', 'residential-01', 'residential-02'}
         eventually(lambda: {entry['tag'] for entry in client.json('/api/runtime')['process']['inbounds']} == expected)
         visible = json.dumps(client.json('/api/runtime'))
         assert 'fixture-password' not in visible and 'fixture-user' not in visible
         user = db_user(uid)
-        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2', 'residential-01')}
+        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2', 'vmess', 'residential-01')}
         for proxy in proxies.values():
             reply = fetch(proxy)
             assert reply.returncode == 0 and reply.stdout == payload, reply.stderr.decode()[:100]
@@ -276,7 +282,9 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         sizes = (64, 1200, 1400, 2000, 4096)
         for size in sizes:
             udp_roundtrip(proxies['hysteria2'], echo.getsockname(), os.urandom(size))
-        eventually(lambda: db_user(uid)['download'] >= len(payload) * 4)
+        udp_roundtrip(proxies['vmess'],echo.getsockname(),os.urandom(64))
+        eventually(lambda: counter_value('user>>>'+uid+'.%@vmess>>>traffic>>>downlink')>=len(payload)+64)
+        eventually(lambda: db_user(uid)['download'] >= len(payload) * 5)
         eventually(lambda: counter_value('user>>>' + uid + '.%@hysteria2>>>traffic>>>downlink') >= len(payload) + sum(sizes))
         with legacy.db() as db:
             hy2_count = db.execute("SELECT value FROM counters WHERE name LIKE ?", ('user>>>' + uid + '.%@hysteria2>>>traffic>>>downlink',)).fetchone()
@@ -302,22 +310,30 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
             '-o', str(partial), base + '/slow'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         processes.append(stream)
         eventually(lambda: partial.exists() and partial.stat().st_size > 32768)
+        vmess_partial=tmp_path/'vmess-inflight.bin'
+        vmess_stream=subprocess.Popen(['curl','--noproxy','','--proxy',proxies['vmess'],'-fsS','--max-time','20',
+            '-o',str(vmess_partial),base+'/slow'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        processes.append(vmess_stream);eventually(lambda:vmess_partial.exists() and vmess_partial.stat().st_size>32768)
         client.json('/api/users/' + uid, 'PUT', {'name': 'disabled', 'enabled': False})
         eventually(lambda: core_pid_file.read_text() != core_pid)
         # QUIC peers can wait for their own idle timeout after the server exits.
         # Verify cessation of traffic independently of the client's error timing.
         time.sleep(1)
         stopped_at = partial.stat().st_size
+        vmess_stopped=vmess_partial.stat().st_size
         time.sleep(1)
         assert partial.stat().st_size == stopped_at < len(payload) * 128, 'Revoked QUIC stream continued receiving'
-        eventually(lambda: all(live_count(kind) == 1 for kind in ('reality', 'websocket', 'hysteria2')))
+        assert vmess_partial.stat().st_size==vmess_stopped<len(payload)*128,'Revoked VMess stream continued'
+        eventually(lambda: all(live_count(kind) == 1 for kind in ('reality', 'websocket', 'hysteria2', 'vmess')))
         disabled_proxy = start_client(user, 'hysteria2')
         assert fetch(disabled_proxy, timeout=3).returncode != 0, 'Disabled credentials still connected'
+        assert fetch(proxies['vmess'],timeout=3).returncode!=0,'Disabled VMess credential still connected'
         assert fetch(proxies['residential-01'], timeout=3).returncode != 0, 'Disabled residential credentials still connected'
         other_residential = start_client(db_user(uid2), 'residential-01')
         assert fetch(other_residential).stdout == payload, 'Other residential user did not recover'
         other = start_client(db_user(uid2), 'hysteria2')
         assert fetch(other).stdout == payload, 'Other user did not recover after revocation'
+        assert vmess_stream.wait(timeout=20)!=0
         assert stream.wait(timeout=20) != 0, 'Revoked transfer reported success'
 
         client.json('/api/users/' + uid, 'PUT', {'name': 'active'})
@@ -330,6 +346,8 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 2)
         assert fetch(proxies['hysteria2'], timeout=3).returncode != 0
         assert fetch(proxies['residential-01'], timeout=3).returncode != 0, 'Rotated residential credentials still connected'
+        assert fetch(proxies['vmess'],timeout=3).returncode!=0,'Rotated VMess credential still connected'
+        vmess_new=start_client(db_user(uid),'vmess');assert fetch(vmess_new).stdout==payload
         new_proxy = start_client(db_user(uid), 'hysteria2')
         assert fetch(new_proxy).stdout == payload
         assert client.call(old_links['subscription'].replace(ORIGIN, ''))[0] == 404
@@ -337,6 +355,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         old_pid = core_pid_file.read_text()
         client.json('/api/users/' + uid, 'PUT', {'name': 'quota', 'quota': 1})
         eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 1)
+        assert fetch(vmess_new,timeout=3).returncode!=0,'Quota-exhausted VMess credential still connected'
         assert next(u for u in client.json('/api/overview')['users'] if u['id'] == uid)['status'] == 'exhausted'
         client.json('/api/users/' + uid + '/reset-traffic', 'POST', {})
         eventually(lambda: live_count('hysteria2') == 2)
@@ -346,6 +365,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         client.json('/api/users/' + uid, 'PUT', {'name': 'expired', 'expires': int(time.time()) - 1})
         eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 1)
         assert fetch(new_proxy, timeout=3).returncode != 0, 'Expired Hy2 credentials still connected'
+        assert fetch(vmess_new,timeout=3).returncode!=0,'Expired VMess credential still connected'
         assert not core_error
     finally:
         if sys.exc_info()[0]:

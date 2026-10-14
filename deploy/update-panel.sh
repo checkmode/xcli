@@ -34,6 +34,15 @@ candidate=$build_dir/xray-gateway-panel
 python3 "$source_dir/cpp/tests/migration_state.py" save "$backup/state.json"
 "$current" --backup "$backup/gateway.sqlite"
 cp -a /etc/xray-gateway "$backup/config"
+probe_update=0
+if ! cmp -s /opt/xray-gateway/scripts/probe.py "$source_dir/scripts/probe.py"; then
+    cp -a /opt/xray-gateway/scripts/probe.py "$backup/previous-probe.py"
+    probe_update=1
+fi
+systemctl show xray-gateway-core nginx -p Id -p MainPID -p NRestarts > "$backup/dataplane-before.txt"
+if [[ -f /opt/xray-gateway/scripts/proxy_vmess.py ]]; then
+    cp -a /opt/xray-gateway/scripts/proxy_vmess.py "$backup/previous-proxy_vmess.py"
+fi
 webshare_update=0
 if [[ -f /etc/systemd/system/xray-gateway-webshare.service ]]; then
     [[ -f /opt/xray-gateway/scripts/webshare.py && -f "$source_dir/scripts/webshare.py" && -f "$source_dir/deploy/xray-gateway-webshare.service" ]] || exit 1
@@ -97,6 +106,15 @@ if [[ -f "$backup/previous-webshare.py" ]]; then
     cp -a "$backup/previous-webshare.service" /etc/systemd/system/xray-gateway-webshare.service
 fi
 systemctl stop xray-gateway-import 2>/dev/null || true
+if [[ -f "$backup/previous-proxy_vmess.py" ]]; then
+    cp -a "$backup/previous-proxy_vmess.py" /opt/xray-gateway/scripts/proxy_vmess.py
+else
+    rm -f /opt/xray-gateway/scripts/proxy_vmess.py
+fi
+if [[ -f "$backup/previous-probe.py" ]]; then
+    cp -a "$backup/previous-probe.py" /opt/xray-gateway/scripts/probe.py
+    systemctl restart xray-gateway-monitor
+fi
 if [[ -f "$backup/previous-import.service" ]]; then
     cp -a "$backup/previous-import.service" /etc/systemd/system/xray-gateway-import.service
     cp -a "$backup/previous-proxy_import.py" /opt/xray-gateway/scripts/proxy_import.py
@@ -133,6 +151,7 @@ if [[ $webshare_update == 1 ]]; then
 fi
 systemctl stop xray-gateway-import 2>/dev/null || true
 install -d -o root -g xgateway -m750 /var/lib/xray-gateway-import
+install -m644 "$source_dir/scripts/proxy_vmess.py" /opt/xray-gateway/scripts/proxy_vmess.py
 install -m644 "$source_dir/scripts/proxy_import.py" /opt/xray-gateway/scripts/proxy_import.py
 install -m644 "$source_dir/deploy/xray-gateway-import.service" /etc/systemd/system/xray-gateway-import.service
 systemctl daemon-reload
@@ -147,8 +166,18 @@ curl --noproxy '*' -fsS --retry 15 --retry-connrefused --retry-delay 1 --max-tim
 panel_pid=$(systemctl show xray-gateway-panel -p MainPID --value)
 [[ $(readlink -f "/proc/$panel_pid/exe") == "$release/xray-gateway-panel" ]] || { echo '面板未运行候选程序。'; exit 1; }
 python3 "$source_dir/cpp/tests/migration_state.py" verify "$backup/state.json"
+if [[ $probe_update == 1 ]]; then
+    install -m644 "$source_dir/scripts/probe.py" /opt/xray-gateway/scripts/probe.py
+    systemctl restart xray-gateway-monitor
+    systemctl is-active --quiet xray-gateway-monitor
+fi
 systemctl show xray-gateway-core xray-gateway-monitor nginx -p Id -p MainPID -p NRestarts > "$backup/processes-after.txt"
-cmp "$backup/processes-before.txt" "$backup/processes-after.txt"
+if [[ $probe_update == 0 ]]; then
+    cmp "$backup/processes-before.txt" "$backup/processes-after.txt"
+else
+    systemctl show xray-gateway-core nginx -p Id -p MainPID -p NRestarts > "$backup/dataplane-after.txt"
+    cmp "$backup/dataplane-before.txt" "$backup/dataplane-after.txt"
+fi
 switched=0
-echo "更新完成：$revision；核心、探测服务和 Nginx 进程保持原状。"
+echo "更新完成：$revision；核心和 Nginx 进程保持原状；探测服务仅在脚本变化时更新。"
 echo "回退：sudo bash $backup/rollback.sh"

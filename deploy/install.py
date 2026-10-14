@@ -293,7 +293,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         (app / 'static').symlink_to(self.release / 'static')
         for directory in ('scripts', 'deploy'):
             self.directory(app / directory)
-        for name in ('probe.py', 'gatewayctl.py', 'proxy_import.py'):
+        for name in ('probe.py', 'gatewayctl.py', 'proxy_import.py', 'proxy_vmess.py'):
             self.copy(self.args.source / 'scripts' / name, app / 'scripts' / name)
         self.copy(self.args.source / 'deploy/certificate.py', app / 'deploy/certificate.py')
         self.copy(self.args.source / 'deploy/network.py', app / 'deploy/network.py')
