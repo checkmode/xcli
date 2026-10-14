@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Same-schema 1.3.0 update; never restart the data plane or restore an old database.
+# Same-schema 1.3.0 update; preserve Xray/Nginx and never restore an old database.
 set -euo pipefail
 [[ $EUID == 0 && $# == 2 && "$2" =~ ^[0-9a-f]{40}$ ]] || exit 1
 source_dir=$(realpath -- "$1")
@@ -34,6 +34,19 @@ candidate=$build_dir/xray-gateway-panel
 python3 "$source_dir/cpp/tests/migration_state.py" save "$backup/state.json"
 "$current" --backup "$backup/gateway.sqlite"
 cp -a /etc/xray-gateway "$backup/config"
+webshare_update=0
+if [[ -f /etc/systemd/system/xray-gateway-webshare.service ]]; then
+    [[ -f /opt/xray-gateway/scripts/webshare.py && -f "$source_dir/scripts/webshare.py" && -f "$source_dir/deploy/xray-gateway-webshare.service" ]] || exit 1
+    python3 - "$source_dir/scripts/webshare.py" <<'PY'
+import pathlib,sys
+compile(pathlib.Path(sys.argv[1]).read_bytes(),sys.argv[1],'exec')
+PY
+    if ! cmp -s /opt/xray-gateway/scripts/webshare.py "$source_dir/scripts/webshare.py" || ! cmp -s /etc/systemd/system/xray-gateway-webshare.service "$source_dir/deploy/xray-gateway-webshare.service"; then
+        cp -a /opt/xray-gateway/scripts/webshare.py "$backup/previous-webshare.py"
+        cp -a /etc/systemd/system/xray-gateway-webshare.service "$backup/previous-webshare.service"
+        webshare_update=1
+    fi
+fi
 runuser -u xgateway -g xgateway -G xgmonitor -- "$candidate" \
     --secret-key /etc/xray-gateway/security.key --monitor-config /etc/xcli-monitor/monitor.json \
     --preflight > "$backup/preflight.json"
@@ -67,7 +80,12 @@ else
 fi
 ln -s "$previous" "${current}.rollback.$$"
 mv -Tf "${current}.rollback.$$" "$current"
+if [[ -f "$backup/previous-webshare.py" ]]; then
+    cp -a "$backup/previous-webshare.py" /opt/xray-gateway/scripts/webshare.py
+    cp -a "$backup/previous-webshare.service" /etc/systemd/system/xray-gateway-webshare.service
+fi
 systemctl daemon-reload
+if [[ -f "$backup/previous-webshare.py" ]]; then systemctl restart xray-gateway-webshare; fi
 systemctl restart xray-gateway-panel
 curl --noproxy '*' -fsS --retry 15 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:8080/healthz >/dev/null
 echo '旧面板已恢复；当前数据库、用户和累计流量保留。'
@@ -88,7 +106,15 @@ printf '[Service]\nEnvironment=XG_STATIC=%s/static\n' "$release" > "$dropin"
 chmod 644 "$dropin"
 ln -s "$release/xray-gateway-panel" "${current}.next.$$"
 mv -Tf "${current}.next.$$" "$current"
+if [[ $webshare_update == 1 ]]; then
+    install -m644 "$source_dir/scripts/webshare.py" /opt/xray-gateway/scripts/webshare.py
+    install -m644 "$source_dir/deploy/xray-gateway-webshare.service" /etc/systemd/system/xray-gateway-webshare.service
+fi
 systemctl daemon-reload
+if [[ $webshare_update == 1 ]]; then
+    systemctl restart xray-gateway-webshare
+    systemctl is-active --quiet xray-gateway-webshare
+fi
 systemctl restart xray-gateway-panel
 curl --noproxy '*' -fsS --retry 15 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:8080/healthz >/dev/null
 panel_pid=$(systemctl show xray-gateway-panel -p MainPID --value)

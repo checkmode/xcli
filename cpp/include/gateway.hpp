@@ -192,6 +192,10 @@ class Backend {
   Json test_notification(const std::string& token, const std::string& csrf);
   void collect_operations(Int timestamp = now());
   void deliver_notifications(Int timestamp = now());
+  Json webshare_status(const std::string& token);
+  void configure_webshare(const std::string& token, const std::string& csrf, const Json& input);
+  void request_webshare(const std::string& token, const std::string& csrf, const Json& input);
+  bool dynamic_residential_enabled() const;
  private:
   Options options_;
   Json settings_;
@@ -229,6 +233,8 @@ class Backend {
   fs::path backup_path(const std::string& id) const;
   std::vector<User> desired_users(Database& database);
   Json webhook_configuration(Database& database);
+  Json webshare_configuration() const;
+  Json webshare_public_status() const;
   std::string queue_notification(Database& database, const std::string& service,
     const std::string& kind, Int timestamp, Int started);
   void observe_alarm(Database& database, const std::string& service, bool failed,

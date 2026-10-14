@@ -45,7 +45,7 @@ add_library(xray_proto STATIC ${PROTO_SOURCES})
 target_include_directories(xray_proto PUBLIC "${GENERATED}")
 target_link_libraries(xray_proto PUBLIC protobuf::libprotobuf PkgConfig::GRPC)
 
-add_library(xg_backend STATIC src/database.cpp src/crypto.cpp src/backend.cpp src/clash.cpp src/security.cpp src/maintenance.cpp src/operations.cpp src/webhook.cpp src/xray.cpp src/http.cpp src/runtime.cpp)
+add_library(xg_backend STATIC src/database.cpp src/crypto.cpp src/backend.cpp src/clash.cpp src/security.cpp src/maintenance.cpp src/operations.cpp src/webhook.cpp src/webshare.cpp src/xray.cpp src/http.cpp src/runtime.cpp)
 target_include_directories(xg_backend PUBLIC include)
 target_link_libraries(xg_backend PUBLIC xray_proto nlohmann_json::nlohmann_json PkgConfig::HTTP
   PkgConfig::SQLITE PkgConfig::CRYPTO PkgConfig::CURL PkgConfig::QR PkgConfig::PNG Threads::Threads)

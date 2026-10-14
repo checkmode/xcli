@@ -50,14 +50,20 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
   if(!exits.is_array()||exits.size()>20)throw std::runtime_error("Invalid residential exit registry");
   std::set<std::string> exit_tags,exit_paths;std::set<Int> exit_ports;
   for(const auto& exit:exits) {
-    fields(exit,{"tag","label","exit_ip","country","ws_path","port"},{"tag","label","exit_ip","country","ws_path","port"});
+    fields(exit,{"tag","label","exit_ip","country","ws_path","port","dynamic"},{"tag","label","exit_ip","country","ws_path","port"});
     auto tag=checked_string(exit.at("tag"),14,14),path=checked_string(exit.at("ws_path"),1,256);
-    auto address=checked_string(exit.at("exit_ip"),7,15),country=checked_string(exit.at("country"),2,2);
+    const bool dynamic=exit.value("dynamic",false);
+    auto address=checked_string(exit.at("exit_ip"),dynamic?0:7,15),country=checked_string(exit.at("country"),2,2);
     auto port=integer(exit.at("port"),65535);
     if(!std::regex_match(tag,std::regex("residential-[0-9]{2}"))||path!=settings_.at("ws_path").get<std::string>()+"/"+tag||
-       !public_webhook_address(address)||!std::regex_match(country,std::regex("[A-Z]{2}"))||port<1024||
+       (dynamic?!address.empty():!public_webhook_address(address))||!std::regex_match(country,std::regex("[A-Z]{2}"))||port<1024||
        !exit_tags.insert(tag).second||!exit_paths.insert(path).second||!exit_ports.insert(port).second)
       throw std::runtime_error("Invalid residential exit metadata");
+    if(dynamic) {
+      const std::map<std::string,std::pair<std::string,Int>> regions={{"residential-11",{"US",10110}},{"residential-12",{"JP",10111}},{"residential-13",{"SG",10112}},{"residential-14",{"ZZ",10113}}};
+      auto expected=regions.find(tag);
+      if(expected==regions.end()||expected->second.first!=country||expected->second.second!=port)throw std::runtime_error("Invalid dynamic residential registry");
+    }
     (void)user_name(exit.at("label"));
   }
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
@@ -186,8 +192,11 @@ Json Backend::links_for(const User& user) const {
   Json result={{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
   if(auto port=settings_.value("hysteria2_port",0);port>0)
     result["hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+s("domain")+":"+std::to_string(port)+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · Hysteria 2",false,true);
-  for(const auto& exit:settings_.value("residential_exits",Json::array()))
-    result[exit.at("tag").get<std::string>()]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+" · "+exit.at("exit_ip").get<std::string>(),false,true);
+  const bool dynamic_enabled=dynamic_residential_enabled();
+  for(const auto& exit:settings_.value("residential_exits",Json::array())) {
+    const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
+    result[exit.at("tag").get<std::string>()]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>()),false,true);
+  }
   return result;
 }
 Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
@@ -239,7 +248,7 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
   static const std::regex format("[A-Za-z0-9_-]{43}");if(!std::regex_match(token,format))throw HttpError(404,"Not Found");
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");auto node=links_for(user);
-  std::string body;for(const auto& kind:inbound_tags())body+=node.at(kind).get<std::string>()+"\n";
+  std::string body;for(const auto& kind:inbound_tags())if(node.contains(kind))body+=node.at(kind).get<std::string>()+"\n";
   return {base64(body),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }

@@ -46,6 +46,8 @@ Json Backend::monitor_status(Int timestamp) {
         {"last_success",check.value("last_success",Int(0))},{"error",check.value("error",std::string(""))}});
     }
     if(result["status"]!="stale")for(const auto& kind:inbound_tags()) {
+      bool dynamic=false;for(const auto& entry:settings_.value("residential_exits",Json::array()))if(entry.at("tag")==kind&&entry.value("dynamic",false))dynamic=true;
+      if(dynamic)continue; // Dynamic upstream probes have their own pool status and do not impersonate public-entry checks.
       bool found=false;for(const auto& check:result["checks"])if(check["transport"]==kind)found=true;
       if(!found){result["status"]="unknown";result["message"]="等待全部入口的自检结果";}
     }

@@ -22,6 +22,8 @@ jobs:
         run: |
           bash -n install.sh
           bash -n update.sh deploy/update-panel.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-cryptography
           python3 -m unittest discover -s deploy/tests -v
       - name: Prepare disposable machine and trusted test certificate
         run: bash deploy/tests/prepare-machine.sh
@@ -46,7 +48,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml zbar-tools
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
-              cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py
+              cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py cpp/tests/test_webshare.py
       - name: Verify one-click panel update and rollback
         run: |
           sudo python3 cpp/tests/migration_state.py save /root/xcli-before-update.json
@@ -100,6 +102,10 @@ jobs:
           sudo python3 deploy/tests/verify_upgrade.py upgraded
       - name: Add a fixed residential fixture and roll back its configuration
         run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_residential.py
+      - name: Add four disabled Webshare entrances and verify rollback
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-cryptography
+          sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_webshare.py
       - name: Roll back while retaining users created after the upgrade
         run: |
           sudo /root/xcli-upgrade-ci/rollback.sh

@@ -1,0 +1,29 @@
+[Unit]
+Description=Xdistribute Webshare residential session pools
+After=network-online.target xray-gateway-firewall.service
+Wants=network-online.target
+[Service]
+User=xgateway
+Group=xgateway
+WorkingDirectory=/opt/xray-gateway
+ExecStart=/usr/bin/python3 /opt/xray-gateway/scripts/webshare.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/xray-gateway/webshare
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+LimitNOFILE=2048
+MemoryMax=256M
+[Install]
+WantedBy=multi-user.target
