@@ -440,6 +440,17 @@ def rollback(backup):
     manifest['phase']='rolled_back';atomic(backup/'manifest.json',json.dumps(manifest))
 
 
+def check_entry_port(port):
+    # Match Xray's listener semantics: old accepted sockets may remain in
+    # TIME_WAIT after disabling an entry, while a live listener must still fail.
+    try:
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            s.bind(('127.0.0.1',port))
+    except OSError:
+        raise ImportErrorSafe('代理入口端口被占用，原配置未修改') from None
+
+
 def apply_config(old,new,entries,job_id):
     backup=ROOT/'backups'/job_id;backup.mkdir(mode=0o700)
     metadata={}
@@ -456,7 +467,7 @@ def apply_config(old,new,entries,job_id):
     old_ports={e.get('port') for e in json.loads(old['core'])['inbounds']}
     for e in entries:
         if e['port'] not in old_ports:
-            with socket.socket() as s:s.bind(('127.0.0.1',e['port']))
+            check_entry_port(e['port'])
     if not preflight():raise ImportErrorSafe('现有用户权限尚未同步完成，请稍后重试')
     manifest['phase']='applying';atomic(backup/'manifest.json',json.dumps(manifest))
     atomic(ROOT/'transaction.json',json.dumps({'id':job_id}))

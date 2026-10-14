@@ -47,6 +47,7 @@ def main():
         raise AssertionError('VMess worker timed out')
     jobs=[]
     def apply(payload):
+        print('VMess check: '+payload.get('operation',payload['action']),flush=True)
         original=settings_path.read_bytes();preview=api('proxy-import',payload,csrf)['id'];wait(preview,'ready')
         assert settings_path.read_bytes()==original
         job=api('proxy-import',{'action':'apply','preview_id':preview},csrf)['id'];wait(job,'complete');jobs.append(job)

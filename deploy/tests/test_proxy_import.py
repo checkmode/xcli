@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,18 @@ imp=importlib.util.module_from_spec(spec);spec.loader.exec_module(imp)
 
 
 class ProxyImportTests(unittest.TestCase):
+    def test_port_check_allows_closed_connections_but_rejects_live_listener(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(('127.0.0.1',0));listener.listen()
+            port=listener.getsockname()[1]
+            with self.assertRaises(imp.ImportErrorSafe):imp.check_entry_port(port)
+            with socket.create_connection(('127.0.0.1',port),timeout=3) as client:
+                peer,_=listener.accept()
+                peer.close()
+                self.assertEqual(client.recv(1),b'')
+        imp.check_entry_port(port)
+
     def setUp(self):
         settings=provision.settings_for('panel.example.com','8.8.8.8','example.com','PrivateKey: '+('a'*43)+'\nPassword: '+('b'*43))
         self.old={'settings':json.dumps(settings).encode(),'core':json.dumps(provision.core_config(settings)).encode(),
