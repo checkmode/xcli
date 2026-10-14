@@ -21,6 +21,7 @@ def test_clash_export_and_revocation(fixture):
     assert value['proxy-groups'][0]['type'] == 'select'
     assert value['proxy-groups'][0]['proxies'][0] == 'HTTPS'
     assert value['rules'][-1] == 'MATCH,PROXY'
+    assert value['rules'][0] == 'DOMAIN,testserver,DIRECT'
     assert value['proxies'][1]['ws-opts'] == {'path': '/connect/test', 'headers': {'Host': 'testserver'}}
     assert value['proxies'][1]['skip-cert-verify'] is False
     assert value['dns']['nameserver'][0].endswith('#PROXY')

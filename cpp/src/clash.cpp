@@ -44,7 +44,7 @@ Json Backend::clash_configuration(const User& user) const {
       {"proxy-server-nameserver",Json::array({"https://1.1.1.1/dns-query"})},
       {"nameserver",Json::array({"https://1.1.1.1/dns-query#PROXY","https://1.0.0.1/dns-query#PROXY"})}}},
     {"proxies",proxies},{"proxy-groups",Json::array({{{"name","PROXY"},{"type","select"},{"proxies",names}}})},
-    {"rules",Json::array({"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    {"rules",Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
       "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve","MATCH,PROXY"})}};
 }
 std::pair<std::string,std::string> Backend::clash_subscription(const std::string& token) {
