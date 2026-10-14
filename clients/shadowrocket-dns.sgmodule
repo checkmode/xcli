@@ -1,0 +1,9 @@
+#!name=Xcli DNS 随所选节点
+#!desc=DNS 通过首页所选节点；关闭系统 DNS 与不支持 UDP 时的直连回退。启用后将首页全局路由设为代理。节点使用域名时，需另设 Host 映射或改用 IP。
+
+[General]
+dns-server = https://1.1.1.1/dns-query#proxy
+fallback-dns-server = https://1.0.0.1/dns-query#proxy
+dns-direct-system = false
+hijack-dns = :53
+udp-policy-not-supported-behaviour = REJECT

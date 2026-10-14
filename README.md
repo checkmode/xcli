@@ -84,6 +84,12 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## DNS 与小火箭默认配置
 
+防止手机 DNS 从本地网络漏出，关键是客户端的解析路径和失败回退策略。代理服务器使用普通 DNS，并不等于手机发生 DNS 泄漏；服务器 DoH 保护的是服务器到解析器这一段，属于独立的可选设置。
+
+已提供仅覆盖下列五项参数的 [小火箭 DNS 模块](clients/shadowrocket-dns.sgmodule)。在小火箭“配置 → 模块 → ＋”中填入 `https://raw.githubusercontent.com/checkmode/xcli/main/clients/shadowrocket-dns.sgmodule`，下载并启用，再把首页“全局路由”设为“代理”。模块保留原配置的其他字段和规则，不包含节点凭据、脚本或解密证书；停用模块即可撤销覆盖。节点域名的引导解析还需按下文配置。
+
+也可以把 `shadowrocket://install?module=` 加上经过 URL 编码的模块 HTTPS 地址生成二维码，用 iPhone 系统相机扫描后在小火箭中确认安装。模块安装不会同时导入节点或切换全局路由；已有节点无需重复导入。URL 方案和模块用法见 [Shadowrocket 使用手册](https://github.com/LOWERTOP/Shadowrocket/wiki#url-schemes)。
+
 订阅只提供节点，不修改客户端 DNS 或分流策略。要让进入小火箭隧道的公网业务和 DNS 都使用首页所选节点，把首页“全局路由”设为“代理”，再在当前启用配置的 `[General]` 中修改下列字段。已有同名字段时替换原值；保留其他字段和全部规则，不要把这个片段作为完整配置导入：
 
 ```ini
@@ -96,7 +102,7 @@ udp-policy-not-supported-behaviour = REJECT
 
 `#proxy` 表示默认选中的节点，而不是固定节点名称，见 [Shadowrocket 官方说明](https://t.me/ShadowrocketNews/874)。主、备用列表中均不要混入 `system` 或普通 DNS 地址。默认局域网和系统绕过设置仍然保留；这些隧道外的流量不属于上述覆盖范围。
 
-如果还要避免连接节点前对节点域名进行本地解析，将 WebSocket 和 Hysteria 2 节点的服务器地址改为服务器公网 IP，同时保留面板域名作为 TLS SNI；WebSocket 的 Host 和路径也保留原值，继续验证证书。REALITY 已使用公网 IP，其 SNI 保留原来的目标域名。订阅更新后需检查手动修改是否被覆盖。
+为避免连接节点前对节点域名进行本地解析，可在模块的 `[Host]` 中为面板域名设置实际服务器公网 IP。或者将 WebSocket 和 Hysteria 2 节点的服务器地址改为服务器公网 IP，同时保留面板域名作为 TLS SNI；WebSocket 的 Host 和路径也保留原值，继续验证证书。REALITY 已使用公网 IP，其 SNI 保留原来的目标域名。服务器 IP 变化时需更新映射；订阅更新后需检查手动修改的节点地址是否被覆盖。
 
 服务器可单独启用公网系统 DNS 的 DoH 转发。以下命令在已部署服务器的源码目录中执行，要求 `/etc/resolv.conf` 已使用 systemd-resolved 的本机 stub，且没有运行中的 DNSCrypt 服务；备份目录必须不存在：
 

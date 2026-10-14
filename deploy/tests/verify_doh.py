@@ -63,7 +63,9 @@ def verify(binary):
             def log_message(self, *args):
                 pass
 
-        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        # Match production's fixed-address, standard-port stamps. Older
+        # DNSCrypt releases cache provider names with a port incorrectly.
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 443), Handler)
         server.daemon_threads = True
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(cert, key)
@@ -92,12 +94,12 @@ def verify(binary):
         try:
             for valid_tls in (True, False):
                 observed['fail'] = False
-                host = ('localhost' if valid_tls else 'wrong.test') + ':' + str(server.server_port)
+                host = 'localhost' if valid_tls else 'wrong.test'
                 config = root / 'doh.toml'
-                address = '127.0.0.1:' + str(server.server_port)
+                address = '127.0.0.1'
                 config.write_text(doh.configuration_for(binary, [('fixture', address, host)])
                     .replace('cache = true', 'cache = false')
-                    .replace("netprobe_address = '1.1.1.1:443'", "netprobe_address = '" + address + "'"))
+                    .replace("netprobe_address = '1.1.1.1:443'", "netprobe_address = '127.0.0.1:443'"))
                 log = (root / 'proxy.log').open('w')
                 process = subprocess.Popen([binary, '-config', str(config)], stdout=log, stderr=log,
                     env={**os.environ, 'SSL_CERT_FILE': str(cert), 'SSL_CERT_DIR': str(root / 'empty')})

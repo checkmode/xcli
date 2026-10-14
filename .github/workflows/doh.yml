@@ -28,8 +28,11 @@ jobs:
       - name: Exercise encrypted queries and failure paths in an isolated network
         run: sudo unshare --net python3 deploy/tests/verify_doh.py /usr/sbin/dnscrypt-proxy
       - name: Restore the previous system resolver
+        if: always()
         run: |
-          sudo /root/xcli-doh-ci/rollback.sh
+          if sudo test -f /root/xcli-doh-ci/rollback.sh; then
+            sudo /root/xcli-doh-ci/rollback.sh
+          fi
           resolvectl dns > /tmp/dns-after.txt
           readlink -f /etc/resolv.conf > /tmp/resolv-after.txt
           diff -u /tmp/dns-before.txt /tmp/dns-after.txt
