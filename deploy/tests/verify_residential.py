@@ -65,7 +65,16 @@ def main():
     for sock in reservations:
         sock.close()
     process = subprocess.Popen(['/usr/local/lib/xray-gateway/xray', 'run', '-config', str(upstream)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    exceptions = []
     try:
+        # The disposable fixture uses this VM's public IP on loopback. The
+        # gateway deliberately rejects LOCAL destinations; allow only these
+        # authenticated test ports, and remove every exception afterwards.
+        for port in ports:
+            rule = ['-d', settings['public_ip'] + '/32', '-p', 'tcp', '--dport', str(port),
+                    '-m', 'comment', '--comment', 'xcli-residential-ci', '-j', 'RETURN']
+            subprocess.run(['iptables', '-w', '-I', 'XG_OUT', '1', *rule], check=True)
+            exceptions.append(rule)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             try:
@@ -104,6 +113,8 @@ def main():
         assert not Path('/etc/xray-gateway/residential-proxies.json').exists()
         print('Real residential installation, private credentials, fixed exit, DoH, user preservation and rollback verified.')
     finally:
+        for rule in exceptions:
+            subprocess.run(['iptables', '-w', '-D', 'XG_OUT', *rule], check=True)
         api('logout', {}, auth['csrf'])
         process.terminate()
         process.wait(timeout=10)
