@@ -83,6 +83,22 @@ sudo nginx -t && sudo systemctl reload nginx
 
 设备活动以用户凭据的流量变化为依据，不等于实时在线设备清单。多个设备共用一个用户时无法区分；需要逐台识别时，为每台设备建立独立用户。采样中断超过 30 秒显示未知，避免将旧数据视为在线状态。
 
+## 运行信息、入口状态与诊断
+
+概览页每个采集周期显示服务器实际采样时间、面板构建版本、面板与系统运行时长、主机 CPU、内存、Swap 和数据目录所在文件系统的用量。CPU 按相邻两次 `/proc/stat` 的差值计算，首次采样显示未知；内存使用量按 `MemTotal - MemAvailable` 计算。磁盘同时显示普通用户可用空间，不将根用户预留空间算作可用。流量采样时间与运行信息采样时间分别显示，刷新网页不会改变服务器采样时间。
+
+运行中的 Xray 版本来自已核对身份的 `/proc/<PID>/exe version`，并随进程代次重新读取。不会使用 `settings.json` 的版本字段或磁盘上的新二进制替代运行版本。系统可能禁止无特权面板读取带 capability 的核心进程镜像；此时进程身份仍可按现有服务 cgroup 校验，但版本显示未知并说明读取限制。未能确定源码提交的归档构建显示“构建提交未知”。
+
+接入节点页分别展示三个证据来源：
+
+- **配置文件摘要**：读取核心启动参数指向的单一配置文件当前内容，列出监听地址、端口、协议、传输、安全类型及必要的 REALITY / WebSocket / TLS 参数；不返回用户凭据、私钥或完整配置。显示文件路径、摘要和修改时间。文件在核心启动后修改时提示可能尚未生效；文件未修改也不能单独证明运行配置完全一致。无法读取、多文件或目录配置时显示未知。
+- **进程监听状态**：按核心进程文件描述符中的 socket inode 匹配 Linux 端口表，避免将其他进程占用同一端口当作核心正常监听。无权确认套接字归属时显示未知。WebSocket 显示核心内部监听，公网 HTTPS 的 TLS 由前置服务处理。
+- **公网入口自检**：显示各入口最近的 HTTPS / UDP 探测结果、采样时间、最近成功时间及失败原因。探测点仍为服务器自身，不能证明手机所在网络或 DNS 路径正常。读取到的 TLS 证书只检查文件有效期，不代表核心已加载该证书或证书链验证通过。
+
+“运行诊断”区分核心进程、gRPC 管理接口、访问权限同步和公网入口探测。管理接口结果与进程代次关联，核心重启后不会沿用上一代进程的成功状态。运行采样超过 `max(30 秒, 3 × 采集周期)` 时标记过期，自检继续使用原有的 180 秒有效期。
+
+诊断页提供本次面板运行期间最近 50 条状态变化，以及数据库中最近 20 条由控制器发起的核心重连原因。外部进程重启的具体原因仍需查看服务日志；诊断页不会推断重启原因，也不采集访问网站或原始访问日志。新接口 `/api/runtime` 与 `/api/diagnostics` 均要求管理员登录，只读操作不改变配置或重启服务。
+
 ## DNS 与小火箭默认配置
 
 防止手机 DNS 从本地网络漏出，关键是客户端的解析路径和失败回退策略。代理服务器使用普通 DNS，并不等于手机发生 DNS 泄漏；服务器 DoH 保护的是服务器到解析器这一段，属于独立的可选设置。
@@ -228,7 +244,7 @@ HTTP 兼容性测试还需要 Python 的 pytest、FastAPI、Pydantic 和二维�
 XG_LEGACY_APP="$PWD/app.py" \
 XG_TEST_BINARY="$PWD/build/xray-gateway-panel" \
   python3 -m pytest -q cpp/tests/test_http.py cpp/tests/test_features.py cpp/tests/test_operations.py \
-  cpp/tests/test_core_integration.py
+  cpp/tests/test_core_integration.py cpp/tests/test_runtime.py
 
 cmake -S cpp -B build-asan -G Ninja -DXG_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-asan -j2

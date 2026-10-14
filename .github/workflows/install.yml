@@ -45,7 +45,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-pytest zbar-tools
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
-              cpp/tests/test_features.py cpp/tests/test_operations.py
+              cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py
       - name: Verify login and safe repeat refusal
         run: sudo python3 deploy/tests/verify_install.py
       - name: Installation diagnostics on failure

@@ -222,7 +222,7 @@ def test_login_rate_limit_and_proxy_address(fixture):
 
 def test_static_and_error_security_headers(fixture):
     c = fixture['client']
-    for path in ('/', '/static/app.js', '/static/style.css', '/client/shadowrocket',
+    for path in ('/', '/static/app.js', '/static/runtime.js', '/static/style.css', '/client/shadowrocket',
                  '/static/shadowrocket.js', '/static/shadowrocket.css', '/shadowrocket-dns.sgmodule',
                  '/healthz', '/docs', '/api/overview', '/static/../app.py'):
         status, headers, body = c.call(path)

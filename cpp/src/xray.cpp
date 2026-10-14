@@ -118,11 +118,27 @@ class XrayCore final : public Core {
     } catch (...) {::close(fd);throw;}
     ::close(fd);
   }
+  Json runtime() override {
+    auto gen=generation();const bool changed=gen!=runtime_generation_;
+    auto result=inspect_core_process(options_,gen,changed);
+    if(generation()!=gen)return {{"state","unknown"},{"reason","采集期间核心进程发生变化"}};
+    if(changed) {
+      runtime_generation_=gen;runtime_version_=result.value("version",Json(nullptr));
+      runtime_version_reason_=result.value("version_reason",std::string());
+    } else {
+      result["version"]=runtime_version_;
+      if(!runtime_version_.is_null())result["version_source"]="running_process_executable";
+      if(!runtime_version_reason_.empty())result["version_reason"]=runtime_version_reason_;
+    }
+    return result;
+  }
  private:
   Options options_;
   std::shared_ptr<grpc::Channel> channel_;
   std::unique_ptr<handler::HandlerService::Stub> handler_;
   std::unique_ptr<stats::StatsService::Stub> stats_;
+  std::string runtime_generation_,runtime_version_reason_;
+  Json runtime_version_=nullptr;
   static void deadline(grpc::ClientContext& context) {context.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(3));}
   static void require(const grpc::Status& status,const char* operation) {
     if(!status.ok())throw std::runtime_error(std::string("Xray API unavailable: ")+operation+" ("+std::to_string(status.error_code())+")");

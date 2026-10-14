@@ -129,8 +129,11 @@ class Core {
   virtual std::map<std::string, std::string> users(const std::string& tag) = 0;
   virtual void add_user(const std::string& tag, const User& user) = 0;
   virtual void restart(const std::string& expected_generation) = 0;
+  virtual Json runtime() { return {{"state","unknown"},{"reason","未提供运行进程信息"}}; }
 };
 std::unique_ptr<Core> make_core(const Options& options);
+Json linux_host_sample(const fs::path& proc, const fs::path& disk);
+Json inspect_core_process(const Options& options, const std::string& generation, bool read_version);
 
 class Backend {
  public:
@@ -150,6 +153,9 @@ class Backend {
   Json session(const std::string& token, const std::string& csrf = "", bool write = false);
   void logout(const std::string& token, const std::string& csrf);
   Json overview(const std::string& token);
+  Json runtime(const std::string& token);
+  Json diagnostics(const std::string& token);
+  void sample_runtime();
   Json create_user(const std::string& token, const std::string& csrf, const Json& input);
   void update_user(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
   void delete_user(const std::string& token, const std::string& csrf, const std::string& id);
@@ -192,7 +198,14 @@ class Backend {
   WebhookSender webhook_sender_;
   std::recursive_mutex mutation_mutex_;
   std::mutex health_mutex_, worker_mutex_;
-  Json health_ = {{"core",false},{"updated",0},{"error","等待连接"},{"version","26.3.27"}};
+  Json health_ = {{"core",false},{"updated",0},{"attempted",0},{"last_success",0},{"error","等待连接"},{"version",nullptr}};
+  Json runtime_ = {{"sampled",0},{"host",Json::object()},{"process",{{"state","unknown"},{"reason","等待采集"}}}};
+  Json diagnostic_events_ = Json::array();
+  std::mutex runtime_mutex_;
+  std::optional<std::pair<Int,Int>> cpu_previous_;
+  std::string diagnostic_state_;
+  std::chrono::steady_clock::time_point panel_started_ = std::chrono::steady_clock::now();
+  Int panel_started_at_ = now();
   std::map<std::string, std::deque<std::chrono::steady_clock::time_point>> rate_;
   std::condition_variable worker_cv_;
   std::thread worker_, operations_worker_;

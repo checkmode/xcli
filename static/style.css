@@ -17,3 +17,9 @@
 
 /* The shared import page preserves the client's existing configuration. */
 #connect-dialog{width:min(560px,calc(100vw - 32px))}#connect-dialog .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}#qr-description{font-size:12px;line-height:1.8;margin:14px 0 0}#connect-note{margin:18px 0 0}.connect-actions{flex-wrap:wrap}.connect-actions>a{display:inline-flex;align-items:center;justify-content:center}.connect-actions .primary{margin-left:auto}@media(max-width:450px){#connect-dialog{padding:22px 18px}.connect-actions{gap:8px}.connect-actions .primary{width:100%;order:-1}.connect-actions button{flex:1}}
+
+.runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:16px}.runtime-tile{padding:17px;background:#f7fafb;border:1px solid var(--line);border-radius:8px;min-width:0}.runtime-tile>span{display:block;color:var(--muted);font-size:12px}.runtime-tile strong{display:block;font-size:18px;margin:10px 0;overflow-wrap:anywhere}.runtime-tile small{color:var(--muted);display:block;overflow-wrap:anywhere}.runtime-tile p{margin:12px 0}.node-card dd{text-align:right;overflow-wrap:anywhere;max-width:65%}.node-card p{overflow-wrap:anywhere}#diagnostics-config code{overflow-wrap:anywhere}#diagnostics-transitions table{min-width:580px}.sidebar-bottom{padding-top:12px}.nav-label{margin-top:30px}.nav-item{padding-top:10px;padding-bottom:10px}@media(max-width:600px){.runtime-grid{grid-template-columns:1fr}.runtime-tile strong{font-size:17px}}
+
+aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
+
+#page-diagnostics .page-heading>.secondary{white-space:nowrap;flex-shrink:0}

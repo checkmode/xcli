@@ -125,7 +125,7 @@ Json Backend::overview(const std::string& token) {
   auto totals=database.one("SELECT COALESCE(SUM(upload),0) AS upload,COALESCE(SUM(download),0) AS download FROM users");
   auto samples=database.all("SELECT (ts/60)*60 AS ts,SUM(upload) AS upload,SUM(download) AS download FROM samples WHERE ts>? GROUP BY ts/60 ORDER BY ts/60",{now()-3600});
   auto events=database.all("SELECT ts,action,detail FROM events ORDER BY id DESC LIMIT 30");database.exec("COMMIT");
-  return {{"health",health()},{"activity",activity_status(database)},{"monitor",monitor_status()},{"users",users},{"totals",*totals},{"samples",samples},{"events",events},
+  return {{"health",health()},{"runtime",runtime(token)},{"activity",activity_status(database)},{"monitor",monitor_status()},{"users",users},{"totals",*totals},{"samples",samples},{"events",events},
     {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]},{"transports",transports()},{"hysteria2_port",settings_.value("hysteria2_port",0)}}}};
 }
 Json Backend::create_user(const std::string& token,const std::string& csrf,const Json& input) {
@@ -265,7 +265,18 @@ Json Backend::preflight() {
 void Backend::poll_once() {
   if(!core_)throw std::runtime_error("Xray API disabled");
   // Serialize against reset/rotation so each generation is accounted for once.
-  std::lock_guard guard(mutation_mutex_);auto gen=core_->generation();auto counters=core_->counters();
+  std::lock_guard guard(mutation_mutex_);auto gen=core_->generation();std::vector<Counter> counters;
+  {
+    std::lock_guard health_guard(health_mutex_);
+    if(health_.value("sync_generation",std::string())!=gen)health_["sync_state"]="unknown";
+    health_["sync_generation"]=gen;health_["attempted"]=now();
+  }
+  try {
+    counters=core_->counters();
+    std::lock_guard health_guard(health_mutex_);health_["api_state"]="reachable";health_["api_generation"]=gen;health_["api_sampled"]=now();health_["api_last_success"]=now();
+  } catch (...) {
+    std::lock_guard health_guard(health_mutex_);health_["api_state"]="unavailable";health_["api_sampled"]=now();throw;
+  }
   std::map<std::string,std::map<std::string,std::string>> current;
   for(const auto& tag:transports())current[tag]=core_->users(tag);
   if(core_->generation()!=gen)throw std::runtime_error("Core changed while sampling");
@@ -283,8 +294,10 @@ void Backend::poll_once() {
     core_->restart(gen);auto event_db=db();audit(event_db,"core_restart","凭据撤销、停用、到期或配额触发；现有连接将重新建立");
   } else for(const auto& [tag,user]:additions)core_->add_user(tag,user);
   std::lock_guard health_guard(health_mutex_);
-  health_={{"core",!revoke},{"updated",now()},{"error",revoke?"正在应用访问权限":""},{"version",settings_.value("xray_version","26.3.27")},
-    {"upload_rate",static_cast<double>(up)/options_.poll_seconds},{"download_rate",static_cast<double>(down)/options_.poll_seconds}};
+  const auto stamp=now();
+  health_["core"]=!revoke;health_["updated"]=stamp;health_["attempted"]=stamp;health_["last_success"]=stamp;
+  health_["error"]=revoke?"正在应用访问权限":"";health_["sync_state"]=revoke?"reconnecting":"ready";
+  health_["upload_rate"]=static_cast<double>(up)/options_.poll_seconds;health_["download_rate"]=static_cast<double>(down)/options_.poll_seconds;
 }
 void Backend::start_worker() {
   if(worker_.joinable())throw std::runtime_error("Controller already started");
@@ -299,9 +312,15 @@ void Backend::start_worker() {
     while(true) {
       try {if(!options_.offline)poll_once();}
       catch(const std::exception& error) {
-        {std::lock_guard guard(health_mutex_);health_["core"]=false;health_["error"]="管理接口暂时不可用";}
+        std::string message="管理接口或访问权限同步异常";std::smatch match;const std::string detail=error.what();
+        if(std::regex_match(detail,match,std::regex("Xray API unavailable: (QueryStats|GetInboundUsers|AddUser) \\(([0-9]{1,2})\\)")))
+          message="管理接口调用失败："+match[1].str()+"（gRPC 状态 "+match[2].str()+"）";
+        else if(detail=="Xray core is not running")message="核心进程未运行或无法确认身份";
+        else if(detail=="Core changed while sampling")message="采集期间核心进程已改变，等待重试";
+        {std::lock_guard guard(health_mutex_);health_["core"]=false;health_["sync_state"]="error";health_["attempted"]=now();health_["error"]=message;}
         std::cerr<<"Controller: "<<error.what()<<'\n';
       }
+      try {sample_runtime();}catch(...){std::cerr<<"Runtime sampling unavailable; previous snapshot will expire\n";}
       try {scheduled_backup();}catch(const std::exception&){std::cerr<<"Automatic backup failed; will retry\n";}
       std::unique_lock guard(worker_mutex_);
       if(worker_cv_.wait_for(guard,std::chrono::seconds(options_.poll_seconds),[this]{return stop_;}))break;
