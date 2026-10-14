@@ -168,6 +168,8 @@ class Backend {
   std::string qr(const std::string& token, const std::string& id, const std::string& kind);
   void change_password(const std::string& token, const std::string& csrf, const Json& input);
   std::pair<std::string, std::string> subscription(const std::string& token);
+  Json clash_configuration(const User& user) const;
+  std::pair<std::string, std::string> clash_subscription(const std::string& token);
   Json links_for(const User& user) const;
   Json shadowrocket_links_for(const User& user) const;
   std::pair<Int,Int> apply_stats(Database& db, const std::string& generation, const std::vector<Counter>& counters);

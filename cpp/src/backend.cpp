@@ -194,9 +194,11 @@ Json Backend::links(const std::string& token,const std::string& id) {session(tok
 Json Backend::shadowrocket_links_for(const User& user) const {
   auto origin=settings_.at("origin").get<std::string>();
   auto module=origin+"/shadowrocket-dns.sgmodule";
+  auto clash=origin+"/s/"+user.token+"/clash.yaml";
   // A fragment keeps the subscription credential out of landing-page requests.
   return {{"shadowrocket",origin+"/client/shadowrocket#"+user.token},
-    {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)}};
+    {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)},
+    {"clash",clash},{"clash_install","clash://install-config?url="+url_quote(clash)+"&name="+url_quote("Xdistribute · "+user.name)}};
 }
 Json Backend::shadowrocket_links(const std::string& token,const std::string& id) {
   session(token);auto database=db();return shadowrocket_links_for(get_user(database,id));
@@ -218,9 +220,9 @@ std::string Backend::shadowrocket_dns() const {
 }
 std::string Backend::qr(const std::string& token,const std::string& id,const std::string& kind) {
   session(token);auto database=db();auto user=get_user(database,id);
-  if(kind=="shadowrocket"||kind=="dns") {
+  if(kind=="shadowrocket"||kind=="dns"||kind=="clash") {
     auto client=shadowrocket_links_for(user);
-    return qr_png(client.at(kind=="dns"?"dns_install":"shadowrocket").get<std::string>());
+    return qr_png(client.at(kind=="dns"?"dns_install":kind=="clash"?"clash":"shadowrocket").get<std::string>());
   }
   auto node=links_for(user);
   if(!node.contains(kind))throw HttpError(404,"Not Found");

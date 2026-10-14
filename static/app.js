@@ -44,12 +44,12 @@ function selectQR(kind){
   $$('[data-kind]').forEach(b=>{b.classList.toggle('active',b.dataset.kind===kind);b.setAttribute('aria-pressed',String(b.dataset.kind===kind))});
   $('#qr-image').src='/api/users/'+connectUser.id+'/qr/'+kind;
   $('#node-link').value=connectLinks[kind];
-  const descriptions={shadowrocket:`用 iPhone 系统相机扫码，在引导页依次确认导入 ${count} 个节点和 DNS 模块。其他默认设置保留，无需再次扫码。`,dns:'已有节点时，可扫码安装 DNS 模块，再到「配置 → 模块」确认启用。首页全局路由选择「代理」。',subscription:`订阅包含 ${count} 个节点；客户端的 DNS 设置需另外安装模块。`};
+  const descriptions={clash:'复制下面的 Clash 订阅地址，在 Clash Verge Rev 的订阅页面导入并启用，再从 PROXY 组选择节点。DNS 已配置为通过所选代理的 DoH。',shadowrocket:`用 iPhone 系统相机扫码，在引导页依次确认导入 ${count} 个节点和 DNS 模块。其他默认设置保留，无需再次扫码。`,dns:'已有节点时，可扫码安装 DNS 模块，再到「配置 → 模块」确认启用。首页全局路由选择「代理」。',subscription:`订阅包含 ${count} 个节点；客户端的 DNS 设置需另外安装模块。`};
   $('#qr-description').textContent=descriptions[kind]||'打开小火箭扫描二维码，导入此节点。';
   $('#connection-label').textContent=kind==='shadowrocket'?'手机引导地址':kind==='dns'?'DNS 模块地址':'连接地址';
   $('#connect-note').textContent=kind==='dns'?'模块不含节点凭据。停用模块即可撤销 DNS 覆盖。':'二维码和地址包含此用户的订阅或节点凭据，请只交给对应用户。重置凭据后旧地址失效。';
-  const open=$('#open-client');open.hidden=!['shadowrocket','dns'].includes(kind);
-  if(!open.hidden){open.href=kind==='dns'?connectLinks.dns_install:connectLinks.shadowrocket;open.textContent=kind==='dns'?'安装 DNS 模块':'打开手机引导';open.target=kind==='dns'?'_self':'_blank'}else open.removeAttribute('href');
+  const open=$('#open-client');open.hidden=!['shadowrocket','dns','clash'].includes(kind);
+  if(!open.hidden){open.href=kind==='dns'?connectLinks.dns_install:kind==='clash'?connectLinks.clash_install:connectLinks.shadowrocket;open.textContent=kind==='dns'?'安装 DNS 模块':kind==='clash'?'导入 Clash Verge':'打开手机引导';open.target=kind==='dns'||kind==='clash'?'_self':'_blank'}else open.removeAttribute('href');
 }
 $$('[data-kind]').forEach(b=>b.onclick=()=>selectQR(b.dataset.kind));
 $('#connect-dialog').addEventListener('close',()=>{connectUser=null;connectLinks=null;$('#qr-image').removeAttribute('src');$('#node-link').value='';$('#open-client').removeAttribute('href')});

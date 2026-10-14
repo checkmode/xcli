@@ -125,6 +125,12 @@ int main() {
       const auto links=panel.links(session,uid);const auto subscription=unbase64(panel.subscription(u.token).first);
       check(std::count(subscription.begin(),subscription.end(),'\n')==13,"Residential subscription must contain thirteen nodes");
       for(const auto& tag:panel.inbound_tags())check(subscription.find(links.at(tag).get<std::string>()+"\n")!=std::string::npos,"Residential subscription omitted an entry");
+      const auto clash=panel.clash_configuration(u);
+      check(clash.at("proxies").size()==13,"Clash export omitted nodes");
+      check(clash.at("proxies")[0].at("reality-opts").at("public-key")==settings.at("reality_public"),"Wrong REALITY key");
+      check(clash.at("proxies")[2].at("type")=="hysteria2","Missing Hysteria 2");
+      for(int i=3;i<13;++i)check(clash.at("proxies")[i].at("udp")==false,"Residential UDP enabled");
+      check(clash.at("proxy-groups")[0].at("proxies").size()==13,"Clash group omitted nodes");
       panel.poll_once();check(live->live.size()==13,"Not every residential inbound was reconciled");
       for(const auto& tag:panel.inbound_tags())check(live->live.at(tag).at(u.email(tag))==u.uuid,"Residential identity differs from its owner");
       check(panel.preflight().at("pending_additions")==0,"Residential preflight incomplete");

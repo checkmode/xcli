@@ -109,6 +109,10 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.Get(R"(/api/backups/([^/]+)/inspect)",wrap([this](const Request& r,Response& s){json(s,backend_.inspect_backup(cookie(r),r.matches[1].str()));}));
   server_.Get(R"(/api/backups/([^/]+)/download)",wrap([this](const Request& r,Response& s){auto id=r.matches[1].str();auto content=backend_.download_backup(cookie(r),id);s.set_header("Content-Disposition","attachment; filename=\""+id+"\"");s.set_content(content,"application/octet-stream");}));
   server_.Post("/api/backups/restore",wrap([this](const Request& r,Response& s){backend_.restore_backup(cookie(r),r.get_header_value("X-CSRF-Token"),body(r));json(s,{{"ok",true}});}));
+  server_.Get(R"(/s/([^/]+)/clash\.yaml)",wrap([this](const Request& request,Response& response) {
+    auto [content,info]=backend_.clash_subscription(request.matches[1].str());response.set_content(content,"application/yaml; charset=utf-8");
+    response.set_header("subscription-userinfo",info);response.set_header("profile-update-interval","6");response.set_header("Content-Disposition","attachment; filename=\"xdistribute-clash.yaml\"");
+  }));
   server_.Get(R"(/s/([^/]+))",wrap([this](const Request& request,Response& response) {
     auto [content,info]=backend_.subscription(request.matches[1].str());response.set_content(content,"text/plain; charset=utf-8");
     response.set_header("subscription-userinfo",info);response.set_header("profile-update-interval","6");response.set_header("Content-Disposition","attachment; filename=\"xdistribute.txt\"");
