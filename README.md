@@ -82,6 +82,36 @@ sudo nginx -t && sudo systemctl reload nginx
 
 设备活动以用户凭据的流量变化为依据，不等于实时在线设备清单。多个设备共用一个用户时无法区分；需要逐台识别时，为每台设备建立独立用户。采样中断超过 30 秒显示未知，避免将旧数据视为在线状态。
 
+## DNS 与小火箭默认配置
+
+订阅只提供节点，不修改客户端 DNS 或分流策略。要让进入小火箭隧道的公网业务和 DNS 都使用首页所选节点，把首页“全局路由”设为“代理”，再在当前启用配置的 `[General]` 中修改下列字段。已有同名字段时替换原值；保留其他字段和全部规则，不要把这个片段作为完整配置导入：
+
+```ini
+dns-server = https://1.1.1.1/dns-query#proxy
+fallback-dns-server = https://1.0.0.1/dns-query#proxy
+dns-direct-system = false
+hijack-dns = :53
+udp-policy-not-supported-behaviour = REJECT
+```
+
+`#proxy` 表示默认选中的节点，而不是固定节点名称，见 [Shadowrocket 官方说明](https://t.me/ShadowrocketNews/874)。主、备用列表中均不要混入 `system` 或普通 DNS 地址。默认局域网和系统绕过设置仍然保留；这些隧道外的流量不属于上述覆盖范围。
+
+如果还要避免连接节点前对节点域名进行本地解析，将 WebSocket 和 Hysteria 2 节点的服务器地址改为服务器公网 IP，同时保留面板域名作为 TLS SNI；WebSocket 的 Host 和路径也保留原值，继续验证证书。REALITY 已使用公网 IP，其 SNI 保留原来的目标域名。订阅更新后需检查手动修改是否被覆盖。
+
+服务器可单独启用公网系统 DNS 的 DoH 转发。以下命令在已部署服务器的源码目录中执行，要求 `/etc/resolv.conf` 已使用 systemd-resolved 的本机 stub，且没有运行中的 DNSCrypt 服务；备份目录必须不存在：
+
+```sh
+sudo python3 deploy/doh.py apply /root/xcli-doh-new
+```
+
+脚本从发行版软件仓库安装 `dnscrypt-proxy`，建立只监听 `127.0.0.1:5053` 的独立服务，使用固定 IP 的 `1.1.1.1` 与 `1.0.0.1` DoH 上游并验证 TLS 证书。上游地址无需明文 DNS 引导，也不配置普通 DNS 回退。系统公网解析经过 `systemd-resolved → 本机转发服务 → HTTPS 443`，同时覆盖 Xray 调用系统解析器的路径；更具体的云内网域名规则继续使用原有链路 DNS。该选项不拦截应用显式指定的其他 DNS 服务器，现有 UDP DNS 健康探测仍测试 UDP 转发能力。
+
+脚本先验证 DoH，再切换系统解析器，不重启代理入口、面板或 Nginx。失败会撤销新增解析配置；也可执行 `/root/xcli-doh-new/rollback.sh` 回退。回退保留已安装的软件包并停用新增服务，用户、订阅、代理配置和证书不变。此选项不由一键安装自动启用。隔离测试使用真实转发程序验证 HTTPS 解析、上游失败及证书名称错误，并检查是否尝试普通 DNS 回退：
+
+```sh
+sudo unshare --net python3 deploy/tests/verify_doh.py /usr/sbin/dnscrypt-proxy
+```
+
 ## 使用面板
 
 登录后在“用户管理”中创建用户，再点击“连接”获取订阅地址或二维码。配额使用十进制 GB，0 表示不限；到期时间留空表示不过期。订阅返回 Base64 编码的两个 VLESS URI 和一个 `hysteria2://` URI，并附带 `subscription-userinfo` 用量信息。三个入口共享同一用户的配额和到期限制；Hysteria 2 使用该用户 UUID 作为认证密码，轮换凭据时一并替换。旧的双入口配置仍可使用，只有启用 Hysteria 2 后才增加第三个节点。

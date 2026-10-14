@@ -1,0 +1,45 @@
+name: System DNS over HTTPS
+on:
+  push:
+    branches: [main]
+    paths: ['deploy/doh.py', 'deploy/tests/verify_doh.py', '.github/workflows/doh.yml']
+  pull_request:
+    paths: ['deploy/doh.py', 'deploy/tests/verify_doh.py', '.github/workflows/doh.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  doh:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - name: Apply public system DoH and verify real resolution
+        run: |
+          resolvectl dns > /tmp/dns-before.txt
+          readlink -f /etc/resolv.conf > /tmp/resolv-before.txt
+          sudo python3 deploy/doh.py apply /root/xcli-doh-ci
+          resolvectl query example.com
+          systemctl is-active --quiet xcli-doh
+      - name: Exercise encrypted queries and failure paths in an isolated network
+        run: sudo unshare --net python3 deploy/tests/verify_doh.py /usr/sbin/dnscrypt-proxy
+      - name: Restore the previous system resolver
+        run: |
+          sudo /root/xcli-doh-ci/rollback.sh
+          resolvectl dns > /tmp/dns-after.txt
+          readlink -f /etc/resolv.conf > /tmp/resolv-after.txt
+          diff -u /tmp/dns-before.txt /tmp/dns-after.txt
+          diff -u /tmp/resolv-before.txt /tmp/resolv-after.txt
+          test ! -e /etc/xcli-doh.toml
+          test ! -e /etc/systemd/resolved.conf.d/90-xcli-doh.conf
+          ! systemctl is-active --quiet xcli-doh
+          resolvectl query example.com
+      - name: DNS diagnostics on failure
+        if: failure()
+        run: |
+          sudo journalctl --no-pager -n 80 -u xcli-doh -u systemd-resolved
+          resolvectl status
