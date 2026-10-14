@@ -260,6 +260,10 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         uid = client.json('/api/users', 'POST', {'name': 'integration-one'})['id']
         uid2 = client.json('/api/users', 'POST', {'name': 'integration-two'})['id']
         eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2', 'residential-01', 'residential-02')))
+        expected = {'reality', 'websocket', 'hysteria2', 'residential-01', 'residential-02'}
+        eventually(lambda: {entry['tag'] for entry in client.json('/api/runtime')['process']['inbounds']} == expected)
+        visible = json.dumps(client.json('/api/runtime'))
+        assert 'fixture-password' not in visible and 'fixture-user' not in visible
         user = db_user(uid)
         proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2', 'residential-01')}
         for proxy in proxies.values():

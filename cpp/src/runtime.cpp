@@ -186,7 +186,9 @@ Json inspect_core_process(const Options&,const std::string& generation,bool read
     }
     if(error)ownership_known=false;
     for(const auto& inbound:data.value("inbounds",Json::array())) {
-      const std::string tag=inbound.value("tag",std::string());if(tag!="reality"&&tag!="websocket"&&tag!="hysteria2")continue;
+      const std::string tag=inbound.value("tag",std::string());
+      const bool residential=tag.size()==14&&tag.starts_with("residential-")&&tag[12]>='0'&&tag[12]<='9'&&tag[13]>='0'&&tag[13]<='9';
+      if(tag!="reality"&&tag!="websocket"&&tag!="hysteria2"&&!residential)continue;
       auto stream=inbound.value("streamSettings",Json::object());
       Json entry={{"tag",tag},{"listen",inbound.value("listen",Json(nullptr))},{"port",inbound.value("port",Json(nullptr))},{"protocol",inbound.value("protocol",Json(nullptr))},{"network",stream.value("network",Json(nullptr))},{"security",stream.value("security",Json("none"))},{"listener",port_state(proc,inbound,sockets,ownership_known)}};
       // Strict allowlist: no users, UUIDs, private keys, short IDs, or raw config.
