@@ -17,7 +17,7 @@ previous=$(readlink -f "$current")
 printf '%s\n' "$previous" > "$backup/previous-target.txt"
 [[ ! -e "$dropin" ]] || cp -a "$dropin" "$backup/previous-update.conf"
 systemctl show xray-gateway-core xray-gateway-monitor nginx -p Id -p MainPID -p NRestarts > "$backup/processes-before.txt"
-packages=(g++ cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc)
+packages=(g++ cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc python3-cryptography)
 missing=()
 for package in "${packages[@]}"; do
     [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) == 'install ok installed' ]] || missing+=("$package")
@@ -46,6 +46,18 @@ PY
         cp -a /etc/systemd/system/xray-gateway-webshare.service "$backup/previous-webshare.service"
         webshare_update=1
     fi
+fi
+# Refuse to replace an importer while it is applying a configuration transaction.
+python3 - <<'PYIMPORT'
+import json,pathlib
+root=pathlib.Path('/var/lib/xray-gateway-import')
+if (root/'transaction.json').exists():raise SystemExit('导入事务尚未完成，请先检查恢复状态。')
+if (root/'report.json').exists() and json.loads((root/'report.json').read_text()).get('status') in ('verifying','applying'):
+    raise SystemExit('正在导入代理，请等待完成后更新。')
+PYIMPORT
+if [[ -f /etc/systemd/system/xray-gateway-import.service ]]; then
+    cp -a /etc/systemd/system/xray-gateway-import.service "$backup/previous-import.service"
+    cp -a /opt/xray-gateway/scripts/proxy_import.py "$backup/previous-proxy_import.py"
 fi
 runuser -u xgateway -g xgateway -G xgmonitor -- "$candidate" \
     --secret-key /etc/xray-gateway/security.key --monitor-config /etc/xcli-monitor/monitor.json \
@@ -84,7 +96,16 @@ if [[ -f "$backup/previous-webshare.py" ]]; then
     cp -a "$backup/previous-webshare.py" /opt/xray-gateway/scripts/webshare.py
     cp -a "$backup/previous-webshare.service" /etc/systemd/system/xray-gateway-webshare.service
 fi
+systemctl stop xray-gateway-import 2>/dev/null || true
+if [[ -f "$backup/previous-import.service" ]]; then
+    cp -a "$backup/previous-import.service" /etc/systemd/system/xray-gateway-import.service
+    cp -a "$backup/previous-proxy_import.py" /opt/xray-gateway/scripts/proxy_import.py
+else
+    systemctl disable xray-gateway-import 2>/dev/null || true
+    rm -f /etc/systemd/system/xray-gateway-import.service /opt/xray-gateway/scripts/proxy_import.py
+fi
 systemctl daemon-reload
+if [[ -f "$backup/previous-import.service" ]]; then systemctl start xray-gateway-import; fi
 if [[ -f "$backup/previous-webshare.py" ]]; then systemctl restart xray-gateway-webshare; fi
 systemctl restart xray-gateway-panel
 curl --noproxy '*' -fsS --retry 15 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:8080/healthz >/dev/null
@@ -110,7 +131,13 @@ if [[ $webshare_update == 1 ]]; then
     install -m644 "$source_dir/scripts/webshare.py" /opt/xray-gateway/scripts/webshare.py
     install -m644 "$source_dir/deploy/xray-gateway-webshare.service" /etc/systemd/system/xray-gateway-webshare.service
 fi
+systemctl stop xray-gateway-import 2>/dev/null || true
+install -d -o root -g xgateway -m750 /var/lib/xray-gateway-import
+install -m644 "$source_dir/scripts/proxy_import.py" /opt/xray-gateway/scripts/proxy_import.py
+install -m644 "$source_dir/deploy/xray-gateway-import.service" /etc/systemd/system/xray-gateway-import.service
 systemctl daemon-reload
+systemctl enable --now xray-gateway-import
+systemctl is-active --quiet xray-gateway-import
 if [[ $webshare_update == 1 ]]; then
     systemctl restart xray-gateway-webshare
     systemctl is-active --quiet xray-gateway-webshare

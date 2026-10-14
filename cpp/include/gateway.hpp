@@ -197,6 +197,8 @@ class Backend {
   void configure_webshare(const std::string& token, const std::string& csrf, const Json& input);
   void request_webshare(const std::string& token, const std::string& csrf, const Json& input);
   bool dynamic_residential_enabled() const;
+  Json proxy_import_status(const std::string& token);
+  Json request_proxy_import(const std::string& token, const std::string& csrf, const Json& input);
  private:
   Options options_;
   Json settings_;

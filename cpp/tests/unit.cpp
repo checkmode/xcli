@@ -55,6 +55,29 @@ int main() {
     check(url_quote("名 / +",true)=="%E5%90%8D+%2F+%2B","URL query encoding");
     std::string token;auto logged=backend.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",token);auto csrf=logged["csrf"].get<std::string>();
     status(401,[&]{backend.session("bad");});status(403,[&]{backend.create_user(token,"bad",{{"name","test"}});});
+    {
+      status(401,[&]{backend.proxy_import_status("bad");});
+      status(403,[&]{backend.request_proxy_import(token,"bad",{{"action","preview"}});});
+      const auto import_state=opts.state.parent_path()/"xray-gateway-import";fs::create_directories(import_state);
+      auto report=[&](const Json& value){write_private_file(import_state/"report.json",value.dump(),true);};
+      report({{"id",""},{"updated",now()},{"status","idle"},{"rows",Json::array({{{"address","1.1.1.1"},{"password","must-not-leak"}}})}});
+      check(backend.proxy_import_status(token).dump().find("must-not-leak")==std::string::npos,"Import status leaked credentials");
+      Json input={{"action","preview"},{"protocol","socks"},{"label","IPRoyal ISP"},{"text","1.1.1.1:12324:fixture:secret-password"}};
+      for(const auto& bad:std::vector<std::string>{"127.0.0.1:1080:u:p","169.254.169.254:80:u:p","1.1.1.1:70000:u:p","1.1.1.1:80:u:p\n1.1.1.1:80:u:p"}) {
+        auto invalid=input;invalid["text"]=bad;status(422,[&]{backend.request_proxy_import(token,csrf,invalid);});
+      }
+      auto queued=backend.request_proxy_import(token,csrf,input);auto job=queued["id"].get<std::string>();
+      auto ciphertext=read_file(opts.state/"proxy-import/request.xgb");check(ciphertext.find("secret-password")==std::string::npos,"Import queue stored plaintext password");
+      auto decoded=Json::parse(unseal(ciphertext,key,"xcli:proxy-import:request:v1"));check(decoded["proxies"][0]["port"]==12324,"Import parser port");
+      status(409,[&]{backend.request_proxy_import(token,csrf,input);});
+      report({{"id",job},{"updated",now()},{"status","ready"},{"expires",now()+900}});
+      status(409,[&]{backend.request_proxy_import(token,csrf,{{"action","apply"},{"preview_id",std::string(32,'a')}});});
+      auto applied=backend.request_proxy_import(token,csrf,{{"action","apply"},{"preview_id",job}});
+      report({{"id",applied["id"]},{"updated",now()},{"status","applying"}});
+      status(409,[&]{backend.request_proxy_import(token,csrf,input);});
+      report({{"id",applied["id"]},{"updated",now()-60},{"status","complete"}});
+      status(503,[&]{backend.request_proxy_import(token,csrf,input);});
+    }
     auto id=backend.create_user(token,csrf,{{"name","测试 / A"}})["id"].get<std::string>();
     User user;{Database db(opts.state/"gateway.sqlite");user=User::from(*db.one("SELECT * FROM users WHERE id=?",{id}));}
     auto links=backend.links(token,id);check(links["subscription"]=="https://testserver/s/"+user.token,"Subscription address");

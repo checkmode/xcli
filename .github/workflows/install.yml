@@ -106,6 +106,8 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends python3-cryptography
           sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_webshare.py
+      - name: Import fixed SOCKS5 and HTTP proxies through the Web API and roll back
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_proxy_import.py
       - name: Roll back while retaining users created after the upgrade
         run: |
           sudo /root/xcli-upgrade-ci/rollback.sh

@@ -24,9 +24,9 @@ from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
 from certificate import install_tls
 
 Path = pathlib.Path
-SERVICES = ('xray-gateway-firewall', 'xray-gateway-core', 'xray-gateway-panel', 'xray-gateway-monitor')
+SERVICES = ('xray-gateway-firewall', 'xray-gateway-core', 'xray-gateway-panel', 'xray-gateway-monitor', 'xray-gateway-import')
 OWNED_PATHS = ('/etc/xray-gateway', '/etc/xcli-monitor', '/var/lib/xray-gateway',
-               '/var/lib/xray-gateway-monitor', '/usr/local/lib/xray-gateway',
+               '/var/lib/xray-gateway-monitor', '/var/lib/xray-gateway-import', '/usr/local/lib/xray-gateway',
                '/opt/xray-gateway', '/root/xray-gateway-admin.txt', '/etc/nginx',
                '/etc/sysctl.d/91-xray-gateway-network.conf', '/etc/modules-load.d/xray-gateway-network.conf',
                '/etc/systemd/system/xray-gateway-network.service')
@@ -35,7 +35,7 @@ PACKAGES = ('g++ cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-
             'libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev '
             'libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc '
             'nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod '
-            'python3-fastapi python3-qrcode python3-pil').split()
+            'python3-fastapi python3-qrcode python3-pil python3-cryptography').split()
 
 
 def arguments(argv=None):
@@ -238,7 +238,7 @@ class Installer:
         private_file(self.backup / 'rollback.sh', '''#!/bin/sh
 # Stops only this new installation; keeps credentials, database, packages and logs.
 set -u
-systemctl disable --now xray-gateway-monitor xray-gateway-panel xray-gateway-core 2>/dev/null || true
+systemctl disable --now xray-gateway-import xray-gateway-monitor xray-gateway-panel xray-gateway-core 2>/dev/null || true
 systemctl disable --now xray-gateway-firewall 2>/dev/null || true
 if [ -x /opt/xray-gateway/deploy/firewall.sh ]; then /opt/xray-gateway/deploy/firewall.sh stop; fi
 systemctl disable --now nginx 2>/dev/null || true
@@ -293,12 +293,13 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         (app / 'static').symlink_to(self.release / 'static')
         for directory in ('scripts', 'deploy'):
             self.directory(app / directory)
-        for name in ('probe.py', 'gatewayctl.py'):
+        for name in ('probe.py', 'gatewayctl.py', 'proxy_import.py'):
             self.copy(self.args.source / 'scripts' / name, app / 'scripts' / name)
         self.copy(self.args.source / 'deploy/certificate.py', app / 'deploy/certificate.py')
         self.copy(self.args.source / 'deploy/network.py', app / 'deploy/network.py')
         config = self.directory('/etc/xray-gateway', 0o750, group='xgateway')
         state = self.directory('/var/lib/xray-gateway', 0o700, 'xgateway', 'xgateway')
+        self.directory('/var/lib/xray-gateway-import', 0o750, group='xgateway')
         monitor = self.directory('/etc/xcli-monitor', 0o750, group='xgmonitor')
         self.directory('/var/lib/xray-gateway-monitor', 0o750, 'xgprobe', 'xgmonitor')
         key_output = self.run([base / 'xray', 'x25519'], capture=True).decode()
@@ -399,7 +400,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             time.sleep(1)
         else:
             raise RuntimeError('管理服务未完成探测账号同步')
-        self.run(['systemctl', 'enable', '--now', 'xray-gateway-monitor'])
+        self.run(['systemctl', 'enable', '--now', 'xray-gateway-monitor', 'xray-gateway-import'])
         for service in (*SERVICES, 'nginx'):
             self.run(['systemctl', 'is-active', '--quiet', service])
         probe = Path('/var/lib/xray-gateway-monitor/report.json')

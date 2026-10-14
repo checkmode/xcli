@@ -1,0 +1,28 @@
+[Unit]
+Description=Xdistribute fixed proxy import worker
+After=network-online.target xray-gateway-panel.service
+Wants=network-online.target
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/xray-gateway
+ExecStart=/usr/bin/python3 /opt/xray-gateway/scripts/proxy_import.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/xray-gateway /var/lib/xray-gateway-import /etc/xray-gateway /etc/xcli-monitor /etc/nginx /run /var/log/nginx
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+LimitNOFILE=512
+MemoryMax=256M
+[Install]
+WantedBy=multi-user.target

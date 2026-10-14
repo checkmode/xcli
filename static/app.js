@@ -5,7 +5,7 @@ const transportNames={reality:'REALITY',websocket:'WebSocket / TLS',hysteria2:'H
 const transportLabel=kind=>transportNames[kind]||state?.server?.residential_exits?.find(e=>e.tag===kind)?.label||kind;
 const enabledTransports=()=>state?.server?.transports||['reality','websocket'];
 const labels={active:'可用',disabled:'已停用',expired:'已到期',exhausted:'配额用尽'};
-const events={login:'管理员登录',login_failed:'登录失败',user_created:'新建用户',user_updated:'更新用户',user_deleted:'删除用户',credentials_rotated:'重置凭据',traffic_reset:'重置流量',password_changed:'修改密码',core_restart:'更新访问权限',mfa_setup:'准备绑定二次验证',mfa_enabled:'启用二次验证',mfa_disabled:'关闭二次验证',recovery_regenerated:'重新生成恢复码',backup_created:'创建加密备份',backup_restored:'恢复备份',notifications_configured:'通知配置变更',notification_test:'发送测试通知',fault_detected:'检测到持续故障',fault_recovered:'故障已恢复'};
+const events={proxy_import_requested:'固定代理导入',login:'管理员登录',login_failed:'登录失败',user_created:'新建用户',user_updated:'更新用户',user_deleted:'删除用户',credentials_rotated:'重置凭据',traffic_reset:'重置流量',password_changed:'修改密码',core_restart:'更新访问权限',mfa_setup:'准备绑定二次验证',mfa_enabled:'启用二次验证',mfa_disabled:'关闭二次验证',recovery_regenerated:'重新生成恢复码',backup_created:'创建加密备份',backup_restored:'恢复备份',notifications_configured:'通知配置变更',notification_test:'发送测试通知',fault_detected:'检测到持续故障',fault_recovered:'故障已恢复'};
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bytes(n){if(!n)return '0 B';const i=Math.min(4,Math.floor(Math.log(Math.max(1,n))/Math.log(1000)));return (n/1000**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]}
 function date(n){return n?new Date(n*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'不过期'}
@@ -22,7 +22,7 @@ async function api(path,method='GET',body){
   }catch(error){if(error.name==='AbortError')throw new Error('读取运行状态超时，请检查管理服务');throw error}
   finally{if(timer)clearTimeout(timer)}
 }
-function showLogin(){if(typeof clearWebshareSecrets==='function')clearWebshareSecrets();clearSecuritySecrets();if(typeof clearOperationsSecrets==='function')clearOperationsSecrets();csrf='';$('#app-view').hidden=true;$('#login-view').hidden=false;$$('dialog[open]').forEach(d=>d.close())}
+function showLogin(){if(typeof clearProxyImportSecrets==='function')clearProxyImportSecrets();if(typeof clearWebshareSecrets==='function')clearWebshareSecrets();clearSecuritySecrets();if(typeof clearOperationsSecrets==='function')clearOperationsSecrets();csrf='';$('#app-view').hidden=true;$('#login-view').hidden=false;$$('dialog[open]').forEach(d=>d.close())}
 async function enter(data){csrf=data.csrf;$('#login-view').hidden=true;$('#app-view').hidden=false;await refresh()}
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;$('#login-error').textContent='';try{const data=await api('login','POST',Object.fromEntries(new FormData(form)));form.password.value='';form.code.value='';await enter(data)}catch(err){$('#login-error').textContent=err.message}finally{button.disabled=false}});
 $('#logout-button').onclick=async()=>{try{await api('logout','POST',{});showLogin()}catch(err){toast(err.message)}};
