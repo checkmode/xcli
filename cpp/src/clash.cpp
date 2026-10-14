@@ -33,6 +33,8 @@ Json Backend::clash_configuration(const User& user) const {
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     websocket(exit.at("label").get<std::string>()+" · "+exit.at("exit_ip").get<std::string>(),exit.at("ws_path").get<std::string>(),false);
   }
+  // Prefer the HTTPS transport for interoperability with current Mihomo clients.
+  std::swap(names[0],names[1]);
   return {{"mixed-port",7890},{"allow-lan",false},{"mode","rule"},{"log-level","warning"},{"ipv6",false},
     {"profile",{{"store-selected",true}}},{"hosts",{{domain,address}}},
     {"dns",{{"enable",true},{"ipv6",false},{"enhanced-mode","fake-ip"},{"fake-ip-range","198.18.0.1/16"},

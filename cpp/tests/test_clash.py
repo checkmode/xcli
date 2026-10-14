@@ -18,6 +18,7 @@ def test_clash_export_and_revocation(fixture):
     value = yaml.safe_load(content)
     assert len(value['proxies']) == 2
     assert value['proxy-groups'][0]['type'] == 'select'
+    assert value['proxy-groups'][0]['proxies'][0] == 'HTTPS'
     assert value['rules'][-1] == 'MATCH,PROXY'
     assert value['proxies'][1]['ws-opts'] == {'path': '/connect/test', 'headers': {'Host': 'testserver'}}
     assert value['proxies'][1]['skip-cert-verify'] is False
