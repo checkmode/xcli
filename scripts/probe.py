@@ -6,6 +6,7 @@ Run this same tool on an external machine to test its actual access network.
 Configuration contains a dedicated probe credential: keep it private.
 """
 import argparse
+import base64
 import concurrent.futures
 import contextlib
 import json
@@ -74,27 +75,50 @@ def available_port():
         return sock.getsockname()[1]
 
 
+def doh_dns(port):
+    """Verify encrypted DNS through the selected TCP-only residential node."""
+    started = time.monotonic()
+    ident = secrets.randbits(16)
+    packet = struct.pack('!HHHHHH', ident, 0x0100, 1, 0, 0, 0) + b'\x07example\x03com\x00\x00\x01\x00\x01'
+    query = base64.urlsafe_b64encode(packet).decode().rstrip('=')
+    response = subprocess.run(['curl', '-q', '-fsS', '--max-time', '15', '--connect-timeout', '8',
+        '--noproxy', '', '--proxy', f'socks5h://127.0.0.1:{port}', '-H', 'Accept: application/dns-message',
+        'https://1.1.1.1/dns-query?dns=' + query], capture_output=True, timeout=18)
+    if response.returncode or len(response.stdout) < 12:
+        raise RuntimeError('DoH connection failed')
+    reply_id, flags, _, answers, _, _ = struct.unpack('!HHHHHH', response.stdout[:12])
+    if reply_id != ident or not flags & 0x8000 or flags & 0xf or not answers:
+        raise RuntimeError('DoH response invalid')
+    return round((time.monotonic() - started) * 1000)
+
+
+def residential_exit(config, kind):
+    return next((entry for entry in config.get('residential_exits', []) if entry['tag'] == kind), None)
+
+
 def client_config(config, kind, port):
+    exit = residential_exit(config, kind)
+    transport = 'websocket' if exit else kind
     user = {'id': config['uuid'], 'encryption': 'none'}
-    if kind == 'reality':
+    if transport == 'reality':
         user['flow'] = 'xtls-rprx-vision'
         host = config['public_ip']
         stream = {'network': 'tcp', 'security': 'reality', 'realitySettings': {
             'serverName': config['reality_sni'], 'fingerprint': 'chrome',
             'publicKey': config['reality_public'], 'shortId': config['short_id']}}
-    elif kind == 'websocket':
+    elif transport == 'websocket':
         host = config['domain']
         stream = {'network': 'ws', 'security': 'tls',
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'useSystemCA': True},
-            'wsSettings': {'path': config['ws_path'], 'headers': {'Host': config['domain']}}}
-    if kind == 'hysteria2':
+            'wsSettings': {'path': exit['ws_path'] if exit else config['ws_path'], 'headers': {'Host': config['domain']}}}
+    if transport == 'hysteria2':
         outbound = {'protocol': 'hysteria', 'settings': {'version': 2, 'address': config['public_ip'],
             'port': config['hysteria2_port']}, 'streamSettings': {'network': 'hysteria', 'security': 'tls',
             'hysteriaSettings': {'version': 2, 'auth': config['uuid']},
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False,
                 'useSystemCA': True, 'alpn': ['h3']},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
-    elif kind in ('reality', 'websocket'):
+    elif transport in ('reality', 'websocket'):
         outbound = {'protocol': 'vless', 'settings': {'vnext': [
             {'address': host, 'port': 443, 'users': [user]}]}, 'streamSettings': stream}
     else:
@@ -105,8 +129,9 @@ def client_config(config, kind, port):
 
 
 def check(config, kind, port):
+    exit = residential_exit(config, kind)
     result = {'transport': kind, 'status': 'failed', 'https_ms': None, 'udp_ms': None,
-              'error': '', 'last_success': 0}
+              'error': '', 'last_success': 0, 'udp_supported': not bool(exit), 'doh_ms': None}
     errors = []
     started = time.monotonic()
     try:
@@ -116,16 +141,19 @@ def check(config, kind, port):
         fields = dict(line.split('=', 1) for line in response.stdout.decode('ascii', errors='ignore').splitlines() if '=' in line)
         if response.returncode != 0:
             errors.append('HTTPS connection failed')
-        elif fields.get('ip') != config['public_ip']:
+        elif fields.get('ip') != (exit['exit_ip'] if exit else config['public_ip']):
             errors.append('Unexpected egress IP')
         else:
             result['https_ms'] = round((time.monotonic() - started) * 1000)
     except (OSError, subprocess.TimeoutExpired):
         errors.append('HTTPS probe unavailable')
     try:
-        result['udp_ms'] = udp_dns(port)
-    except (OSError, RuntimeError, ValueError, struct.error):
-        errors.append('UDP DNS probe failed')
+        if exit:
+            result['doh_ms'] = doh_dns(port)
+        else:
+            result['udp_ms'] = udp_dns(port)
+    except (OSError, RuntimeError, ValueError, struct.error, subprocess.TimeoutExpired):
+        errors.append('DoH probe failed' if exit else 'UDP DNS probe failed')
     result['error'] = '; '.join(errors)
     if not errors:
         result['status'] = 'healthy'
@@ -160,7 +188,7 @@ def main():
     if not 30 <= args.interval <= 3600:
         parser.error('interval must be 30..3600 seconds')
     config = json.loads(args.config.read_text())
-    kinds = ['reality', 'websocket'] + (['hysteria2'] if config.get('hysteria2_port', 0) else [])
+    kinds = ['reality', 'websocket'] + (['hysteria2'] if config.get('hysteria2_port', 0) else []) + [e['tag'] for e in config.get('residential_exits', [])]
     if args.config.stat().st_mode & 0o007:
         parser.error('configuration must not be world-readable')
     stopped = False

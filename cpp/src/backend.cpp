@@ -46,6 +46,20 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
   auto hy2=settings_.value("hysteria2_port",Json(0));
   if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
+  auto exits=settings_.value("residential_exits",Json::array());
+  if(!exits.is_array()||exits.size()>20)throw std::runtime_error("Invalid residential exit registry");
+  std::set<std::string> exit_tags,exit_paths;std::set<Int> exit_ports;
+  for(const auto& exit:exits) {
+    fields(exit,{"tag","label","exit_ip","country","ws_path","port"},{"tag","label","exit_ip","country","ws_path","port"});
+    auto tag=checked_string(exit.at("tag"),14,14),path=checked_string(exit.at("ws_path"),1,256);
+    auto address=checked_string(exit.at("exit_ip"),7,15),country=checked_string(exit.at("country"),2,2);
+    auto port=integer(exit.at("port"),65535);
+    if(!std::regex_match(tag,std::regex("residential-[0-9]{2}"))||path!=settings_.at("ws_path").get<std::string>()+"/"+tag||
+       !public_webhook_address(address)||!std::regex_match(country,std::regex("[A-Z]{2}"))||port<1024||
+       !exit_tags.insert(tag).second||!exit_paths.insert(path).second||!exit_ports.insert(port).second)
+      throw std::runtime_error("Invalid residential exit metadata");
+    (void)user_name(exit.at("label"));
+  }
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
   {auto database=db();database.initialize();}
   if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";
@@ -62,6 +76,11 @@ Backend::~Backend() {stop_worker();}
 std::vector<std::string> Backend::transports() const {
   std::vector<std::string> result={"reality","websocket"};
   if(settings_.value("hysteria2_port",0)>0)result.push_back("hysteria2");
+  return result;
+}
+std::vector<std::string> Backend::inbound_tags() const {
+  auto result=transports();
+  for(const auto& exit:settings_.value("residential_exits",Json::array()))result.push_back(exit.at("tag").get<std::string>());
   return result;
 }
 User Backend::get_user(Database& database,const std::string& id) {
@@ -126,7 +145,7 @@ Json Backend::overview(const std::string& token) {
   auto samples=database.all("SELECT (ts/60)*60 AS ts,SUM(upload) AS upload,SUM(download) AS download FROM samples WHERE ts>? GROUP BY ts/60 ORDER BY ts/60",{now()-3600});
   auto events=database.all("SELECT ts,action,detail FROM events ORDER BY id DESC LIMIT 30");database.exec("COMMIT");
   return {{"health",health()},{"runtime",runtime(token)},{"activity",activity_status(database)},{"monitor",monitor_status()},{"users",users},{"totals",*totals},{"samples",samples},{"events",events},
-    {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]},{"transports",transports()},{"hysteria2_port",settings_.value("hysteria2_port",0)}}}};
+    {"server",{{"domain",settings_["domain"]},{"public_ip",settings_["public_ip"]},{"reality_sni",settings_["reality_sni"]},{"transports",transports()},{"residential_exits",settings_.value("residential_exits",Json::array())},{"hysteria2_port",settings_.value("hysteria2_port",0)}}}};
 }
 Json Backend::create_user(const std::string& token,const std::string& csrf,const Json& input) {
   auto values=validated_user(input);std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
@@ -167,6 +186,8 @@ Json Backend::links_for(const User& user) const {
   Json result={{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
   if(auto port=settings_.value("hysteria2_port",0);port>0)
     result["hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+s("domain")+":"+std::to_string(port)+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · Hysteria 2",false,true);
+  for(const auto& exit:settings_.value("residential_exits",Json::array()))
+    result[exit.at("tag").get<std::string>()]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+" · "+exit.at("exit_ip").get<std::string>(),false,true);
   return result;
 }
 Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
@@ -216,12 +237,12 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
   static const std::regex format("[A-Za-z0-9_-]{43}");if(!std::regex_match(token,format))throw HttpError(404,"Not Found");
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");auto node=links_for(user);
-  std::string body;for(const auto& kind:transports())body+=node.at(kind).get<std::string>()+"\n";
+  std::string body;for(const auto& kind:inbound_tags())body+=node.at(kind).get<std::string>()+"\n";
   return {base64(body),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& generation,const std::vector<Counter>& counters) {
-  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2)>>>traffic>>>(uplink|downlink))");
+  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|residential-[0-9]{2})>>>traffic>>>(uplink|downlink))");
   Int up=0,down=0;auto stamp=now();
   auto previous_sample=database.one("SELECT value FROM metadata WHERE key='activity_sample'");
   Int interval=previous_sample?std::clamp<Int>(stamp-std::stoll(previous_sample->at("value").get<std::string>()),1,300):options_.poll_seconds;
@@ -238,8 +259,9 @@ std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& ge
       database.run("UPDATE users SET "+column+"=? WHERE id=?",{sum_checked(existing->at("value").get<Int>(),delta),match[1].str()});
       // A first observation establishes a baseline; historical bytes are not current activity.
       Int activity_delta=previous_sample&&previous?delta:0;
-      database.run("INSERT OR IGNORE INTO device_activity(user_id,transport,sampled,interval_seconds) VALUES(?,?,?,?)",{match[1].str(),match[3].str(),stamp,interval});
-      database.run("UPDATE device_activity SET "+column+"_delta="+column+"_delta+?,last_seen=CASE WHEN ?>0 THEN ? ELSE last_seen END WHERE user_id=? AND transport=?",{activity_delta,activity_delta,stamp,match[1].str(),match[3].str()});
+      const std::string transport=match[3].str().starts_with("residential-")?"websocket":match[3].str();
+      database.run("INSERT OR IGNORE INTO device_activity(user_id,transport,sampled,interval_seconds) VALUES(?,?,?,?)",{match[1].str(),transport,stamp,interval});
+      database.run("UPDATE device_activity SET "+column+"_delta="+column+"_delta+?,last_seen=CASE WHEN ?>0 THEN ? ELSE last_seen END WHERE user_id=? AND transport=?",{activity_delta,activity_delta,stamp,match[1].str(),transport});
     }
     if(column=="upload")up=sum_checked(up,delta);else down=sum_checked(down,delta);
   }
@@ -252,7 +274,7 @@ Json Backend::preflight() {
   std::lock_guard guard(mutation_mutex_);auto database=db();auto all=desired_users(database);auto gen=core_->generation();
   Json result={{"generation",gen},{"active_users",0},{"pending_additions",0},{"pending_revocations",0},{"database_integrity",database.one("PRAGMA quick_check")->begin().value()}};
   for(const auto& user:all)if(user.active()&&user.id!="health-probe")result["active_users"]=result["active_users"].get<int>()+1;
-  for(const auto& tag:transports()) {
+  for(const auto& tag:inbound_tags()) {
     auto current=core_->users(tag);std::map<std::string,std::string> desired;
     for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user.uuid);
     for(const auto& [email,id]:current)if(!desired.contains(email)||desired[email]!=id)result["pending_revocations"]=result["pending_revocations"].get<int>()+1;
@@ -278,11 +300,11 @@ void Backend::poll_once() {
     std::lock_guard health_guard(health_mutex_);health_["api_state"]="unavailable";health_["api_sampled"]=now();throw;
   }
   std::map<std::string,std::map<std::string,std::string>> current;
-  for(const auto& tag:transports())current[tag]=core_->users(tag);
+  for(const auto& tag:inbound_tags())current[tag]=core_->users(tag);
   if(core_->generation()!=gen)throw std::runtime_error("Core changed while sampling");
   auto database=db();Transaction transaction(database);auto [up,down]=apply_stats(database,gen,counters);auto all=desired_users(database);
   bool revoke=false;std::vector<std::pair<std::string,User>> additions;
-  for(const auto& tag:transports()) {
+  for(const auto& tag:inbound_tags()) {
     std::map<std::string,User> desired;
     for(const auto& user:all)if(user.active())desired.emplace(user.email(tag),user);
     for(const auto& [email,id]:current[tag])if(!desired.contains(email)||desired.at(email).uuid!=id)revoke=true;

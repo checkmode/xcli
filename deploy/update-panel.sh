@@ -49,6 +49,13 @@ cat > "$backup/rollback.sh" <<'SH'
 set -euo pipefail
 [[ $EUID == 0 ]] || exit 1
 backup=$(cd -- "$(dirname -- "$0")" && pwd)
+python3 - "$backup/state.json" <<'PY'
+import hashlib,json,pathlib,sys
+expected=json.load(open(sys.argv[1]))['settings_digest']
+actual=hashlib.sha256(pathlib.Path('/etc/xray-gateway/settings.json').read_bytes()).hexdigest()
+if actual!=expected:
+    raise SystemExit('服务器配置已变化；请先回退对应功能配置，再回退旧面板。当前服务保持原状。')
+PY
 current=/usr/local/lib/xray-gateway/panel-current
 dropin=/etc/systemd/system/xray-gateway-panel.service.d/70-update.conf
 previous=$(cat "$backup/previous-target.txt")

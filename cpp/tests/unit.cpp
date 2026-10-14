@@ -1,4 +1,5 @@
 #include "gateway.hpp"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -109,7 +110,33 @@ int main() {
         {"checks",Json::array({Json{{"transport","reality"},{"status","healthy"}},Json{{"transport","websocket"},{"status","healthy"}}})}}).dump();
       Backend missing(config);check(missing.monitor_status().at("status")=="unknown","Missing Hy2 probe claimed healthy");
     }
-    std::cout<<"PASS: crypto, Unicode, authentication, CSRF, subscriptions, QR, accounting, reset, RPC reconciliation, quota, rotation, deletion, retry, rollback, backup, 2000 DB lifetimes, login throttling, session revocation\n";
+    {
+      Temp residence;Options config;config.state=residence.path/"state";config.settings=residence.path/"settings.json";config.offline=true;
+      settings["residential_exits"]=Json::array();
+      for(int i=1;i<=10;++i) {
+        const std::string tag="residential-"+(i<10?std::string("0"):std::string())+std::to_string(i);
+        settings["residential_exits"].push_back({{"tag",tag},{"label","住宅 "+std::to_string(i)},{"exit_ip","8.8.4.4"},{"country","US"},{"ws_path","/connect/test/"+tag},{"port",10100+i}});
+      }
+      std::ofstream(config.settings)<<settings.dump();auto adapter=std::make_unique<FakeCore>();auto live=adapter.get();Backend panel(config,std::move(adapter));
+      {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+      std::string session;auto auth=panel.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",session);
+      auto guard=auth.at("csrf").get<std::string>();auto uid=panel.create_user(session,guard,{{"name","住宅测试"},{"quota",1000}}).at("id").get<std::string>();
+      User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
+      const auto links=panel.links(session,uid);const auto subscription=unbase64(panel.subscription(u.token).first);
+      check(std::count(subscription.begin(),subscription.end(),'\n')==13,"Residential subscription must contain thirteen nodes");
+      for(const auto& tag:panel.inbound_tags())check(subscription.find(links.at(tag).get<std::string>()+"\n")!=std::string::npos,"Residential subscription omitted an entry");
+      panel.poll_once();check(live->live.size()==13,"Not every residential inbound was reconciled");
+      for(const auto& tag:panel.inbound_tags())check(live->live.at(tag).at(u.email(tag))==u.uuid,"Residential identity differs from its owner");
+      check(panel.preflight().at("pending_additions")==0,"Residential preflight incomplete");
+      panel.rotate_user(session,guard,uid);panel.poll_once();check(live->restarts==1,"Rotation did not revoke residential connections");status(404,[&]{panel.subscription(u.token);});panel.poll_once();
+      {Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
+      live->values.clear();for(const auto& exit:settings["residential_exits"])live->values.push_back({"user>>>"+u.email(exit.at("tag").get<std::string>())+">>>traffic>>>downlink",100});
+      panel.poll_once();check(live->restarts==2,"Shared residential quota did not revoke all accounts");status(403,[&]{panel.subscription(u.token);});
+      {Database db(config.state/"gateway.sqlite");check(db.one("SELECT download FROM users WHERE id=?",{uid})->at("download")==1000,"Residential traffic was not charged to its owner");}
+      settings["residential_exits"][0]["password"]="fixture-secret";std::ofstream(config.settings)<<settings.dump();
+      bool denied=false;try{Backend invalid(config);}catch(const HttpError&){denied=true;}check(denied,"Provider credentials accepted in public exit metadata");
+    }
+    std::cout<<"PASS: crypto, Unicode, authentication, CSRF, subscriptions, QR, accounting, reset, RPC reconciliation, quota, rotation, deletion, retry, rollback, backup, residential subscriptions and shared quota, 2000 DB lifetimes, login throttling, session revocation\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}
 }

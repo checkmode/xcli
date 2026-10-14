@@ -43,7 +43,7 @@ Json Backend::history(const std::string& token,const std::string& range) {
   auto first=database.one("SELECT MIN(ts) AS ts FROM probe_history");
   database.exec("COMMIT");
   for(auto& row:summary){auto known=row.at("healthy").get<Int>()+row.at("failed").get<Int>();row["success_percent"]=known?Json(100.0*row.at("healthy").get<double>()/static_cast<double>(known)):Json(nullptr);}
-  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"transports",transports()},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
+  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"transports",inbound_tags()},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
 }
 Json Backend::webhook_configuration(Database& database) {
   auto value=*database.one("SELECT * FROM notification_config WHERE id=1");
@@ -126,7 +126,7 @@ void Backend::collect_operations(Int timestamp) {
   std::lock_guard guard(mutation_mutex_);auto database=db();Transaction transaction(database);
   auto cfg=*database.one("SELECT failures,recoveries FROM notification_config WHERE id=1");int failures=cfg.at("failures"),recoveries=cfg.at("recoveries");
   auto status=monitor.value("status",std::string("unknown"));bool fresh=status=="healthy"||status=="failed";
-  auto enabled=transports();
+  auto enabled=inbound_tags();
   Json checks=Json::object();
   if(fresh)for(const auto& check:monitor.value("checks",Json::array())) {
     auto transport=check.value("transport",std::string());auto state=check.value("status",std::string());

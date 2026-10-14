@@ -144,6 +144,7 @@ class Backend {
   const Options& options() const { return options_; }
   const Json& settings() const { return settings_; }
   std::vector<std::string> transports() const;
+  std::vector<std::string> inbound_tags() const;
   void start_worker();
   void stop_worker();
   void poll_once();

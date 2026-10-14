@@ -40,12 +40,12 @@ Json Backend::monitor_status(Int timestamp) {
     auto age=timestamp-report.at("updated").get<Int>();
     if(age>180||age< -60){result["status"]="stale";result["message"]="自检结果已过期，请检查探测服务";}
     for(const auto& check:report.value("checks",Json::array())) {
-      if(result["checks"].size()>=8)break;
+      if(result["checks"].size()>=32)break;
       result["checks"].push_back({{"transport",check.value("transport",std::string("unknown"))},{"status",check.value("status",std::string("unknown"))},
-        {"https_ms",check.value("https_ms",Json(nullptr))},{"udp_ms",check.value("udp_ms",Json(nullptr))},
+        {"https_ms",check.value("https_ms",Json(nullptr))},{"udp_ms",check.value("udp_ms",Json(nullptr))},{"udp_supported",check.value("udp_supported",true)},{"doh_ms",check.value("doh_ms",Json(nullptr))},
         {"last_success",check.value("last_success",Int(0))},{"error",check.value("error",std::string(""))}});
     }
-    if(result["status"]!="stale")for(const auto& kind:transports()) {
+    if(result["status"]!="stale")for(const auto& kind:inbound_tags()) {
       bool found=false;for(const auto& check:result["checks"])if(check["transport"]==kind)found=true;
       if(!found){result["status"]="unknown";result["message"]="等待全部入口的自检结果";}
     }

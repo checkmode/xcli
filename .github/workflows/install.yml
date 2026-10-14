@@ -98,6 +98,8 @@ jobs:
             --backup /root/xcli-upgrade-ci --certificate /etc/xray-gateway/tls/fullchain.pem \
             --private-key /etc/xray-gateway/tls/privkey.pem
           sudo python3 deploy/tests/verify_upgrade.py upgraded
+      - name: Add a fixed residential fixture and roll back its configuration
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_residential.py
       - name: Roll back while retaining users created after the upgrade
         run: |
           sudo /root/xcli-upgrade-ci/rollback.sh

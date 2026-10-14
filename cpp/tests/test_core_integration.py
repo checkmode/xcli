@@ -11,6 +11,7 @@ import struct
 import subprocess
 import threading
 import time
+import pytest
 
 from test_http import BINARY, LEGACY, PASSWORD, ORIGIN, Client, available_port
 
@@ -87,11 +88,29 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         'streamSettings': {'network': 'hysteria', 'security': 'tls', 'hysteriaSettings': {'version': 2},
             'tlsSettings': {'alpn': ['h3'], 'certificates': [{'certificateFile': str(cert), 'keyFile': str(key)}]},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}})
+    residence_ports = {tag: available_port() for tag in ('residential-01', 'residential-02')}
+    upstream_port, broken_port = available_port(), available_port()
+    config['outbounds'][0]['tag'] = 'direct'
+    config['outbounds'].append({'tag': 'blocked', 'protocol': 'blackhole'})
+    config['routing'] = {'rules': []}
+    residence = []
+    for index, (tag, port) in enumerate(residence_ports.items()):
+        path = '/isolated-test/' + tag
+        residence.append({'tag': tag, 'label': tag, 'exit_ip': '8.8.4.4', 'country': 'US', 'ws_path': path, 'port': port})
+        config['inbounds'].append({'tag': tag, 'listen': '127.0.0.1', 'port': port, 'protocol': 'vless',
+            'settings': {'clients': [], 'decryption': 'none'}, 'streamSettings': {'network': 'ws', 'wsSettings': {'path': path}}})
+        config['outbounds'].append({'tag': tag + '-exit', 'protocol': 'socks', 'settings': {'servers': [
+            {'address': '127.0.0.1', 'port': upstream_port if index == 0 else broken_port,
+             'users': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}]}})
+        config['routing']['rules'].extend([
+            {'type': 'field', 'inboundTag': [tag], 'network': 'udp', 'outboundTag': 'blocked'},
+            {'type': 'field', 'inboundTag': [tag], 'network': 'tcp', 'outboundTag': tag + '-exit'}])
     core_config = tmp_path / 'core.json'
     core_config.write_text(json.dumps(config));core_config.chmod(0o600)
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'origin': ORIGIN, 'domain': 'testserver', 'public_ip': '127.0.0.1',
-        'reality_sni': 'www.bing.com', 'reality_public': public, 'short_id': short_id, 'ws_path': '/isolated-test', 'hysteria2_port': hy2_port}))
+        'reality_sni': 'www.bing.com', 'reality_public': public, 'short_id': short_id, 'ws_path': '/isolated-test', 'hysteria2_port': hy2_port,
+        'residential_exits': residence}))
     settings.chmod(0o600)
     spec = importlib.util.spec_from_file_location('legacy_core_test', LEGACY)
     legacy = importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
@@ -104,6 +123,14 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     core_log = (tmp_path / 'core.log').open('wb')
     panel_log = (tmp_path / 'panel.log').open('wb')
     core_error = []
+    upstream_cfg = tmp_path / 'upstream.json'
+    upstream_cfg.write_text(json.dumps({'log': {'loglevel': 'none'},
+        'inbounds': [{'listen': '127.0.0.1', 'port': upstream_port, 'protocol': 'socks',
+                      'settings': {'auth': 'password', 'accounts': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}}],
+        'outbounds': [config['outbounds'][0]]}))
+    upstream_cfg.chmod(0o600)
+    upstream = subprocess.Popen([str(XRAY), 'run', '-config', str(upstream_cfg)], stdout=core_log, stderr=core_log)
+    processes.append(upstream)
     def supervise():
         try:
             while not stop.is_set():
@@ -158,6 +185,10 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
     def db_user(uid):
         with legacy.db() as db:
             return dict(legacy.get_user(db, uid))
+    def counter_value(pattern):
+        with legacy.db() as db:
+            row = db.execute('SELECT value FROM counters WHERE name LIKE ?', (pattern,)).fetchone()
+            return row[0] if row else 0
     def live_count(tag):
         response = subprocess.run([str(XRAY), 'api', 'inbounduser', '--server=127.0.0.1:' + str(api_port), '--timeout=2', '-tag=' + tag], capture_output=True)
         if response.returncode:
@@ -171,10 +202,10 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
             stream = {'network': 'tcp', 'security': 'reality', 'realitySettings':
                       {'serverName': 'www.bing.com', 'fingerprint': 'chrome', 'publicKey': public, 'shortId': short_id}}
         else:
-            stream = {'network': 'ws', 'security': 'none', 'wsSettings': {'path': '/isolated-test'}}
+            stream = {'network': 'ws', 'security': 'none', 'wsSettings': {'path': '/isolated-test' + ('/' + kind if kind in residence_ports else '')}}
         cfg = {'log': {'loglevel': 'warning'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port, 'protocol': 'socks', 'settings': {'auth': 'noauth', 'udp': True}}],
             'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': '127.0.0.1',
-                'port': reality_port if kind == 'reality' else ws_port, 'users': [account]}]}, 'streamSettings': stream}]}
+                'port': reality_port if kind == 'reality' else residence_ports.get(kind, ws_port), 'users': [account]}]}, 'streamSettings': stream}]}
         if kind == 'hysteria2':
             cfg['outbounds'] = [{'protocol': 'hysteria', 'settings': {'version': 2, 'address': '127.0.0.1', 'port': hy2_port},
                 'streamSettings': {'network': 'hysteria', 'security': 'tls',
@@ -203,19 +234,26 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         client.login()
         uid = client.json('/api/users', 'POST', {'name': 'integration-one'})['id']
         uid2 = client.json('/api/users', 'POST', {'name': 'integration-two'})['id']
-        eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2')))
+        eventually(lambda: all(live_count(kind) == 2 for kind in ('reality', 'websocket', 'hysteria2', 'residential-01', 'residential-02')))
         user = db_user(uid)
-        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2')}
+        proxies = {kind: start_client(user, kind) for kind in ('reality', 'websocket', 'hysteria2', 'residential-01')}
         for proxy in proxies.values():
             reply = fetch(proxy)
             assert reply.returncode == 0 and reply.stdout == payload, reply.stderr.decode()[:100]
+        broken = start_client(user, 'residential-02')
+        assert fetch(broken, timeout=3).returncode != 0, 'Unavailable residential upstream fell back to direct'
+        with pytest.raises((OSError, AssertionError)):
+            udp_roundtrip(proxies['residential-01'], echo.getsockname(), os.urandom(64))
         sizes = (64, 1200, 1400, 2000, 4096)
         for size in sizes:
             udp_roundtrip(proxies['hysteria2'], echo.getsockname(), os.urandom(size))
-        eventually(lambda: db_user(uid)['download'] >= len(payload) * 3)
+        eventually(lambda: db_user(uid)['download'] >= len(payload) * 4)
+        eventually(lambda: counter_value('user>>>' + uid + '.%@hysteria2>>>traffic>>>downlink') >= len(payload) + sum(sizes))
         with legacy.db() as db:
             hy2_count = db.execute("SELECT value FROM counters WHERE name LIKE ?", ('user>>>' + uid + '.%@hysteria2>>>traffic>>>downlink',)).fetchone()
             assert hy2_count and hy2_count[0] >= len(payload) + sum(sizes), 'Hy2 TCP and native UDP were not both counted'
+            res_count = db.execute("SELECT value FROM counters WHERE name LIKE ?", ('user>>>' + uid + '.%@residential-01>>>traffic>>>downlink',)).fetchone()
+            assert res_count and res_count[0] >= len(payload), 'Residential TCP was not charged to its owner'
         core_pid = core_pid_file.read_text()
         before = db_user(uid)['download']
         panel.terminate();panel.wait(timeout=15)
@@ -246,6 +284,9 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         eventually(lambda: all(live_count(kind) == 1 for kind in ('reality', 'websocket', 'hysteria2')))
         disabled_proxy = start_client(user, 'hysteria2')
         assert fetch(disabled_proxy, timeout=3).returncode != 0, 'Disabled credentials still connected'
+        assert fetch(proxies['residential-01'], timeout=3).returncode != 0, 'Disabled residential credentials still connected'
+        other_residential = start_client(db_user(uid2), 'residential-01')
+        assert fetch(other_residential).stdout == payload, 'Other residential user did not recover'
         other = start_client(db_user(uid2), 'hysteria2')
         assert fetch(other).stdout == payload, 'Other user did not recover after revocation'
         assert stream.wait(timeout=20) != 0, 'Revoked transfer reported success'
@@ -259,6 +300,7 @@ def test_real_grpc_accounting_and_live_revocation(tmp_path):
         client.json('/api/users/' + uid + '/rotate', 'POST', {})
         eventually(lambda: core_pid_file.read_text() != old_pid and live_count('hysteria2') == 2)
         assert fetch(proxies['hysteria2'], timeout=3).returncode != 0
+        assert fetch(proxies['residential-01'], timeout=3).returncode != 0, 'Rotated residential credentials still connected'
         new_proxy = start_client(db_user(uid), 'hysteria2')
         assert fetch(new_proxy).stdout == payload
         assert client.call(old_links['subscription'].replace(ORIGIN, ''))[0] == 404

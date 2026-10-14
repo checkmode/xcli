@@ -18,14 +18,14 @@ function renderHistory(){
   const h=historyData,kinds=h.transports||enabledTransports(),totals=h.traffic.reduce((sum,p)=>({up:sum.up+p.upload,down:sum.down+p.download}),{up:0,down:0});
   $('#history-summary').innerHTML=kinds.map(kind=>{
     const s=h.summary.find(row=>row.transport===kind),known=s?(s.healthy+s.failed):0;
-    return `<article><span>${esc(serviceNames[kind])} 探测成功率</span><strong>${known?s.success_percent.toFixed(2)+'%':'—'}</strong><small>${known?'成功 '+s.healthy+' / 已知 '+known:'暂无有效探测'}${s?.unknown?' · 未知 '+s.unknown:''}</small></article>`;
+    return `<article><span>${esc(serviceNames[kind]||transportLabel(kind))} 探测成功率</span><strong>${known?s.success_percent.toFixed(2)+'%':'—'}</strong><small>${known?'成功 '+s.healthy+' / 已知 '+known:'暂无有效探测'}${s?.unknown?' · 未知 '+s.unknown:''}</small></article>`;
   }).join('')+`<article><span>所选范围下载</span><strong>${h.traffic.length?bytes(totals.down):'—'}</strong><small>已采集流量合计</small></article><article><span>所选范围上传</span><strong>${h.traffic.length?bytes(totals.up):'—'}</strong><small>缺测时段不计入</small></article>`;
   $('#history-traffic-note').textContent=`每 ${h.bucket_seconds/60} 分钟流量；当前时间档可能尚未结束。`;
   $('#history-probe-note').textContent=`成功率按已知探测计算，未知和缺测不算成功。${h.first_probe?'开始记录于 '+date(h.first_probe)+'。':'升级后首次探测完成时开始记录。'}探测点为服务器自身。`;
   const grouped=new Map();for(const row of h.probes){if(!grouped.has(row.ts))grouped.set(row.ts,{});grouped.get(row.ts)[row.transport]=row}
   const rows=[...grouped.entries()].sort((a,b)=>b[0]-a[0]).slice(0,12);
   function cell(row){return row?`${row.healthy} 成功 / ${row.failed} 失败${row.unknown?' / '+row.unknown+' 未知':''}<br><small class="muted">HTTPS ${milliseconds(row.https_ms)} · UDP ${milliseconds(row.udp_ms)}</small>`:'<span class="muted">无采样</span>'}
-  $('#history-table').innerHTML=rows.length?'<table><thead><tr><th>时间档起点</th>'+kinds.map(kind=>`<th>${esc(transportNames[kind])}</th>`).join('')+'</tr></thead><tbody>'+rows.map(([ts,row])=>`<tr><td>${date(ts)}</td>${kinds.map(kind=>`<td>${cell(row[kind])}</td>`).join('')}</tr>`).join('')+'</tbody></table>':'<div class="empty">此范围内还没有探测记录。</div>';
+  $('#history-table').innerHTML=rows.length?'<table><thead><tr><th>时间档起点</th>'+kinds.map(kind=>`<th>${esc(transportLabel(kind))}</th>`).join('')+'</tr></thead><tbody>'+rows.map(([ts,row])=>`<tr><td>${date(ts)}</td>${kinds.map(kind=>`<td>${cell(row[kind])}</td>`).join('')}</tr>`).join('')+'</tbody></table>':'<div class="empty">此范围内还没有探测记录。</div>';
   drawHistoryCharts();
 }
 function drawHistoryCharts(){
