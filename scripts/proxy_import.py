@@ -361,7 +361,8 @@ class Worker:
         if not re.fullmatch('[0-9a-f]{32}',request.get('id','')):return
         if request['id'] in self.processed:return
         self.processed=(self.processed+[request['id']])[-64:];atomic(ROOT/'processed.json',json.dumps(self.processed))
-        self.publish(id=request['id'],rows=[],expires=0,added=0)
+        self.publish(id=request['id'],status='verifying' if request.get('action')=='preview' else 'applying',
+                     message='正在处理导入请求',rows=[],expires=0,added=0)
         try:
             if type(request.get('requested_at')) is not int or not 0<=stamp()-request['requested_at']<=TTL:raise ImportErrorSafe('请求已过期，请重新检测')
             action=request.get('action')

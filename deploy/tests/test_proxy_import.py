@@ -99,6 +99,20 @@ class ProxyImportTests(unittest.TestCase):
         self.assertEqual(imp.unseal(blob,key),{'id':'test'})
         with self.assertRaises(Exception):imp.unseal(blob[:-1]+bytes([blob[-1]^1]),key)
 
+    def test_new_job_never_exposes_previous_terminal_state(self):
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        for action in ('preview','apply'):
+            with tempfile.TemporaryDirectory() as tmp:
+                directory=Path(tmp);inbox=directory/'request.xgb';key=b'k'*32;nonce=b'n'*12
+                request={'id':'a'*32,'action':action,'requested_at':imp.stamp()}
+                encrypted=AESGCM(key).encrypt(nonce,json.dumps(request).encode(),imp.CONTEXT)
+                inbox.write_bytes(b'XGB1'+nonce+encrypted[-16:]+encrypted[:-16])
+                worker=imp.Worker.__new__(imp.Worker);worker.key=key;worker.processed=[]
+                with patch.object(imp,'ROOT',directory),patch.object(imp,'INBOX',inbox),patch.object(imp,'atomic'),patch.object(worker,'publish') as publish,patch.object(worker,'preview'),patch.object(worker,'apply'):
+                    worker.process()
+                    self.assertEqual(publish.call_args_list[0].kwargs['status'],'verifying' if action=='preview' else 'applying')
+                    self.assertEqual(publish.call_args_list[0].kwargs['id'],request['id'])
+
     def test_rollback_keeps_original_pool_and_refuses_changed_config(self):
         new,_=imp.configure(self.old,self.proxies,'socks','label',self.rows)
         with tempfile.TemporaryDirectory() as tmp:
