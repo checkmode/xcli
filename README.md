@@ -70,6 +70,7 @@ sudo nginx -t && sudo systemctl reload nginx
 | 功能 | 行为 |
 | --- | --- |
 | 用户与订阅 | 每位用户独立 UUID、订阅令牌、二维码、配额和到期时间；支持停用、删除、流量清零和凭据轮换 |
+| 小火箭导入 | 一次扫码打开手机引导页，依次导入节点、安装 DNS 模块和切换全局代理；保留其他默认设置，另提供独立模块二维码 |
 | 健康监测 | 每分钟通过三个真实公网入口验证 HTTPS 出口 IP 和 SOCKS5 UDP DNS；失败、未知及过期结果分别显示 |
 | 历史趋势 | 保留最近 30 天的流量、探测成功率和 HTTPS / UDP 延迟，支持 1 小时、24 小时、7 天和 30 天范围 |
 | 故障通知 | 通用 HTTPS JSON Webhook，覆盖入口探测、探测结果中断、核心管理接口及本地自动备份；支持恢复通知、重试、Bearer Token 和消息签名 |
@@ -86,11 +87,15 @@ sudo nginx -t && sudo systemctl reload nginx
 
 防止手机 DNS 从本地网络漏出，关键是客户端的解析路径和失败回退策略。代理服务器使用普通 DNS，并不等于手机发生 DNS 泄漏；服务器 DoH 保护的是服务器到解析器这一段，属于独立的可选设置。
 
-已提供仅覆盖下列五项参数的 [小火箭 DNS 模块](clients/shadowrocket-dns.sgmodule)。在小火箭“配置 → 模块 → ＋”中填入 `https://raw.githubusercontent.com/checkmode/xcli/main/clients/shadowrocket-dns.sgmodule`，下载并启用，再把首页“全局路由”设为“代理”。模块保留原配置的其他字段和规则，不包含节点凭据、脚本或解密证书；停用模块即可撤销覆盖。节点域名的引导解析还需按下文配置。
+在面板“用户管理 → 连接 → 小火箭”中，用 iPhone 系统相机扫描二维码。手机引导页依次提供“导入节点”“安装 DNS 模块”“切换为全局代理”三个入口；每一步都需要在小火箭中确认后返回引导页继续，最后选择节点并打开连接。整个过程只需扫码一次。网页无法读取小火箭的安装结果，请在“配置 → 模块”确认“Xcli DNS 随所选节点”已启用。
 
-也可以把 `shadowrocket://install?module=` 加上经过 URL 编码的模块 HTTPS 地址生成二维码，用 iPhone 系统相机扫描后在小火箭中确认安装。模块安装不会同时导入节点或切换全局路由；已有节点无需重复导入。URL 方案和模块用法见 [Shadowrocket 使用手册](https://github.com/LOWERTOP/Shadowrocket/wiki#url-schemes)。
+已有节点时可直接选择连接窗口中的“DNS 模块”页签，扫码安装，或复制模块地址到小火箭“配置 → 模块 → ＋”。面板提供的 `/shadowrocket-dns.sgmodule` 根据本服务器设置生成，只覆盖下列五项参数及本服务器域名的 `[Host]` 映射；其他字段和规则保留。模块不含节点凭据、脚本或解密证书，停用模块即可撤销覆盖。
 
-订阅只提供节点，不修改客户端 DNS 或分流策略。要让进入小火箭隧道的公网业务和 DNS 都使用首页所选节点，把首页“全局路由”设为“代理”，再在当前启用配置的 `[General]` 中修改下列字段。已有同名字段时替换原值；保留其他字段和全部规则，不要把这个片段作为完整配置导入：
+引导地址的片段部分包含该用户的订阅令牌，应按订阅凭据保管；重置凭据后旧地址失效。引导页检查订阅是否仍可用，不要求接收者登录管理面板，也不加载第三方资源。节点订阅、模块安装与路由切换分别使用小火箭已公开的 URL 方案，见 [Shadowrocket 使用手册](https://github.com/LOWERTOP/Shadowrocket/wiki#url-schemes)。
+
+仓库另提供不含服务器映射的 [通用 DNS 模块](clients/shadowrocket-dns.sgmodule)，下载地址为 `https://raw.githubusercontent.com/checkmode/xcli/main/clients/shadowrocket-dns.sgmodule`。使用通用模块时，还需按下文处理节点域名的引导解析。
+
+节点订阅本身只提供节点，不修改客户端 DNS 或分流策略。也可手动把首页“全局路由”设为“代理”，再在当前启用配置的 `[General]` 中修改下列字段。已有同名字段时替换原值；保留其他字段和全部规则，不要把这个片段作为完整配置导入：
 
 ```ini
 dns-server = https://1.1.1.1/dns-query#proxy

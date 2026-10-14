@@ -1,6 +1,6 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-let csrf='', state=null, page='overview', connectUser=null, connectLinks=null, qrKind='subscription', busy=false;
+let csrf='', state=null, page='overview', connectUser=null, connectLinks=null, qrKind='shadowrocket', busy=false;
 const transportNames={reality:'REALITY',websocket:'WebSocket / TLS',hysteria2:'Hysteria 2'};
 const enabledTransports=()=>state?.server?.transports||['reality','websocket'];
 const labels={active:'可用',disabled:'已停用',expired:'已到期',exhausted:'配额用尽'};
@@ -26,9 +26,21 @@ function editUser(u){const f=$('#user-form');f.reset();f.elements.id.value=u?.id
 $('#new-user').onclick=()=>editUser(null);
 $('#user-form').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,b=f.querySelector('button.primary');b.disabled=true;try{const data={name:f.elements.name.value,quota:Math.round(Number(f.elements.quota.value)*1e9),enabled:f.elements.enabled.checked,expires:f.elements.expires.value?Math.floor(new Date(f.elements.expires.value).getTime()/1000):0};await api('users'+(f.elements.id.value?'/'+f.elements.id.value:''),f.elements.id.value?'PUT':'POST',data);$('#user-dialog').close();toast('已保存，访问权限将在几秒内更新');await refresh()}catch(err){$('#user-error').textContent=err.message}finally{b.disabled=false}};
 $('#user-table').onclick=async e=>{const b=e.target.closest('[data-action]');if(!b)return;const u=state.users.find(u=>u.id===b.dataset.id),action=b.dataset.action;try{if(action==='edit')return editUser(u);if(action==='connect')return await showConnect(u);if(action==='delete'&&!confirm(`删除「${u.name}」？其节点和订阅将立即失效，其他设备会短暂重连。`))return;if(action==='rotate'&&!confirm(`重置「${u.name}」的所有凭据？旧节点和订阅将失效，需要重新导入；其他设备会短暂重连。`))return;if(action==='reset'&&!confirm(`将「${u.name}」的累计流量归零？已用尽配额的用户可能恢复连接。`))return;await api('users/'+u.id+(action==='rotate'?'/rotate':action==='reset'?'/reset-traffic':''),action==='delete'?'DELETE':'POST',action==='delete'?undefined:{});toast('操作已保存');await refresh()}catch(err){toast(err.message)}};
-async function showConnect(u){connectUser=u;connectLinks=await api('users/'+u.id+'/links');$('#connect-title').textContent=u.name;$$('[data-kind]').forEach(b=>b.hidden=!connectLinks[b.dataset.kind]);$('#connect-dialog').showModal();selectQR('subscription')}
-function selectQR(kind){qrKind=kind;$$('[data-kind]').forEach(b=>b.classList.toggle('active',b.dataset.kind===kind));$('#qr-image').src='/api/users/'+connectUser.id+'/qr/'+kind;$('#node-link').value=connectLinks[kind];$('#qr-description').textContent=kind==='subscription'?`订阅包含 ${Object.keys(connectLinks).length-1} 个节点，可在支持对应协议的客户端中添加。`:'打开小火箭扫描二维码，导入此节点。'}
+async function showConnect(u){const [nodes,client]=await Promise.all([api('users/'+u.id+'/links'),api('users/'+u.id+'/shadowrocket')]);connectUser=u;connectLinks={...nodes,...client};$('#connect-title').textContent=u.name;$$('[data-kind]').forEach(b=>b.hidden=!connectLinks[b.dataset.kind]);$('#connect-dialog').showModal();selectQR('shadowrocket')}
+function selectQR(kind){
+  qrKind=kind;const count=Object.keys(transportNames).filter(k=>connectLinks[k]).length;
+  $$('[data-kind]').forEach(b=>{b.classList.toggle('active',b.dataset.kind===kind);b.setAttribute('aria-pressed',String(b.dataset.kind===kind))});
+  $('#qr-image').src='/api/users/'+connectUser.id+'/qr/'+kind;
+  $('#node-link').value=connectLinks[kind];
+  const descriptions={shadowrocket:`用 iPhone 系统相机扫码，在引导页依次确认导入 ${count} 个节点和 DNS 模块。其他默认设置保留，无需再次扫码。`,dns:'已有节点时，可扫码安装 DNS 模块，再到「配置 → 模块」确认启用。首页全局路由选择「代理」。',subscription:`订阅包含 ${count} 个节点；客户端的 DNS 设置需另外安装模块。`};
+  $('#qr-description').textContent=descriptions[kind]||'打开小火箭扫描二维码，导入此节点。';
+  $('#connection-label').textContent=kind==='shadowrocket'?'手机引导地址':kind==='dns'?'DNS 模块地址':'连接地址';
+  $('#connect-note').textContent=kind==='dns'?'模块不含节点凭据。停用模块即可撤销 DNS 覆盖。':'二维码和地址包含此用户的订阅或节点凭据，请只交给对应用户。重置凭据后旧地址失效。';
+  const open=$('#open-client');open.hidden=!['shadowrocket','dns'].includes(kind);
+  if(!open.hidden){open.href=kind==='dns'?connectLinks.dns_install:connectLinks.shadowrocket;open.textContent=kind==='dns'?'安装 DNS 模块':'打开手机引导';open.target=kind==='dns'?'_self':'_blank'}else open.removeAttribute('href');
+}
 $$('[data-kind]').forEach(b=>b.onclick=()=>selectQR(b.dataset.kind));
+$('#connect-dialog').addEventListener('close',()=>{connectUser=null;connectLinks=null;$('#qr-image').removeAttribute('src');$('#node-link').value='';$('#open-client').removeAttribute('href')});
 $('#copy-link').onclick=async()=>{try{await navigator.clipboard.writeText($('#node-link').value);toast('地址已复制')}catch{$('#node-link').select();toast('请手动复制已选中的地址')}};
 $('#download-qr').onclick=async()=>{try{const r=await fetch($('#qr-image').src);if(!r.ok)throw new Error('下载失败');const url=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=url;a.download=connectUser.name+'-'+qrKind+'.png';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)}catch(err){toast(err.message)}};
 $('#password-button').onclick=()=>{$('#password-form').reset();$('#password-error').textContent='';$('#password-dialog').showModal()};

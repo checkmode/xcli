@@ -156,10 +156,13 @@ class Backend {
   void rotate_user(const std::string& token, const std::string& csrf, const std::string& id);
   void reset_traffic(const std::string& token, const std::string& csrf, const std::string& id);
   Json links(const std::string& token, const std::string& id);
+  Json shadowrocket_links(const std::string& token, const std::string& id);
+  std::string shadowrocket_dns() const;
   std::string qr(const std::string& token, const std::string& id, const std::string& kind);
   void change_password(const std::string& token, const std::string& csrf, const Json& input);
   std::pair<std::string, std::string> subscription(const std::string& token);
   Json links_for(const User& user) const;
+  Json shadowrocket_links_for(const User& user) const;
   std::pair<Int,Int> apply_stats(Database& db, const std::string& generation, const std::vector<Counter>& counters);
   Json security_status(const std::string& token);
   Json setup_totp(const std::string& token, const std::string& csrf, const Json& input);

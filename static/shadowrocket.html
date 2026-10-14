@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <title>导入小火箭 · Xdistribute</title>
+  <link rel="stylesheet" href="/static/shadowrocket.css">
+  <script src="/static/shadowrocket.js" defer></script>
+</head>
+<body>
+<main class="setup-shell">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">X</span> Xdistribute</div>
+  <p class="eyebrow">SHADOWROCKET SETUP</p>
+  <h1>一次扫码，<br>连接你的小火箭。</h1>
+  <p class="intro">按顺序导入节点与 DNS 模块。<br>保留小火箭的其他默认设置。</p>
+  <p id="setup-status" class="status" role="status" aria-live="polite" data-state="loading">正在检查连接地址…</p>
+  <button id="retry-check" class="secondary" type="button" hidden>重新检查</button>
+  <noscript><p class="status">请在 Safari 中打开此页面并启用 JavaScript，再继续导入。</p></noscript>
+
+  <ol id="setup-steps" class="steps" hidden>
+    <li class="step">
+      <span class="step-number" aria-hidden="true">1</span>
+      <div class="step-content">
+        <h2>导入节点</h2>
+        <p>在小火箭中确认添加订阅。完成后返回此页，继续安装 DNS 模块。</p>
+        <a id="import-nodes" class="primary">导入节点 <span aria-hidden="true">↗</span></a>
+        <button id="copy-subscription" class="text-button" type="button">复制订阅地址</button>
+      </div>
+    </li>
+    <li class="step">
+      <span class="step-number" aria-hidden="true">2</span>
+      <div class="step-content">
+        <h2>安装 DNS 模块</h2>
+        <p>确认安装后，在「配置 → 模块」启用「Xcli DNS 随所选节点」，然后返回此页。</p>
+        <a id="install-dns" class="primary">安装 DNS 模块 <span aria-hidden="true">↗</span></a>
+        <button id="copy-module" class="text-button" type="button">复制模块地址</button>
+      </div>
+    </li>
+    <li class="step">
+      <span class="step-number" aria-hidden="true">3</span>
+      <div class="step-content">
+        <h2>使用首页所选节点</h2>
+        <p>将「全局路由」切换为「代理」，再选择一个节点并打开连接。</p>
+        <a id="set-proxy" class="primary">切换为全局代理 <span aria-hidden="true">↗</span></a>
+      </div>
+    </li>
+  </ol>
+
+  <section id="copy-fallback" class="copy-fallback" hidden>
+    <label for="copy-value">未能自动复制，请长按下方地址复制</label>
+    <textarea id="copy-value" readonly rows="3"></textarea>
+  </section>
+  <p id="action-status" class="action-status" role="status" aria-live="polite"></p>
+  <details class="explanation">
+    <summary>哪些设置会改变？</summary>
+    <p>DNS 随首页所选节点转发，关闭系统 DNS 与不支持 UDP 时的直连回退，并固定本服务器节点域名的解析地址。其他配置字段和规则保留。</p>
+    <p>这三步需要分别在小火箭中确认。页面无法读取安装结果；请确认模块已启用。停用模块即可撤销 DNS 覆盖。</p>
+  </details>
+  <footer>连接地址仅供对应用户使用。<br>如果按钮没有打开小火箭，请先确认已安装该 App；也可复制地址后手动添加。</footer>
+</main>
+</body>
+</html>

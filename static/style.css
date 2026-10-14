@@ -14,3 +14,6 @@
 @media(max-width:760px){#page-history .page-heading{align-items:flex-start;gap:15px}.range-label{min-width:120px}.latency-legend{justify-content:flex-start}.latency-legend span{font-size:10px}#page-history .chart-panel .panel-heading{flex-wrap:wrap;gap:12px}}
 
 .node-grid,.monitor-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}#history-summary{grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}.rose{color:#b55e85}.olive{color:#68823c}.latency-legend{flex-wrap:wrap}.tabs{flex-wrap:wrap}
+
+/* The shared import page preserves the client's existing configuration. */
+#connect-dialog{width:min(560px,calc(100vw - 32px))}#connect-dialog .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}#qr-description{font-size:12px;line-height:1.8;margin:14px 0 0}#connect-note{margin:18px 0 0}.connect-actions{flex-wrap:wrap}.connect-actions>a{display:inline-flex;align-items:center;justify-content:center}.connect-actions .primary{margin-left:auto}@media(max-width:450px){#connect-dialog{padding:22px 18px}.connect-actions{gap:8px}.connect-actions .primary{width:100%;order:-1}.connect-actions button{flex:1}}

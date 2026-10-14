@@ -67,7 +67,9 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.set_post_routing_handler([](const Request&,Response& response){security_headers(response);});
   server_.Get("/healthz",wrap([](const Request&,Response& response){json(response,{{"status","ok"}});}));
   server_.Get("/",wrap([this](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/"index.html"),"text/html; charset=utf-8");}));
-  for(const auto& [name,type]:std::vector<std::pair<std::string,std::string>>{{"index.html","text/html; charset=utf-8"},{"app.js","text/javascript; charset=utf-8"},{"operations.js","text/javascript; charset=utf-8"},{"style.css","text/css; charset=utf-8"}})
+  server_.Get("/client/shadowrocket",wrap([this](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/"shadowrocket.html"),"text/html; charset=utf-8");}));
+  server_.Get("/shadowrocket-dns.sgmodule",wrap([this](const Request&,Response& response){response.set_content(backend_.shadowrocket_dns(),"text/plain; charset=utf-8");}));
+  for(const auto& [name,type]:std::vector<std::pair<std::string,std::string>>{{"index.html","text/html; charset=utf-8"},{"app.js","text/javascript; charset=utf-8"},{"operations.js","text/javascript; charset=utf-8"},{"style.css","text/css; charset=utf-8"},{"shadowrocket.js","text/javascript; charset=utf-8"},{"shadowrocket.css","text/css; charset=utf-8"}})
     server_.Get("/static/"+name,wrap([this,name,type](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/name),type);}));
   server_.Post("/api/login",wrap([this](const Request& request,Response& response) {
     std::string token;auto result=backend_.login(body(request),client_ip(request),token);
@@ -89,6 +91,7 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.Post(R"(/api/users/([^/]+)/rotate)",wrap([this](const Request& request,Response& response){backend_.rotate_user(cookie(request),request.get_header_value("X-CSRF-Token"),request.matches[1].str());json(response,{{"ok",true}});}));
   server_.Post(R"(/api/users/([^/]+)/reset-traffic)",wrap([this](const Request& request,Response& response){backend_.reset_traffic(cookie(request),request.get_header_value("X-CSRF-Token"),request.matches[1].str());json(response,{{"ok",true}});}));
   server_.Get(R"(/api/users/([^/]+)/links)",wrap([this](const Request& request,Response& response){json(response,backend_.links(cookie(request),request.matches[1].str()));}));
+  server_.Get(R"(/api/users/([^/]+)/shadowrocket)",wrap([this](const Request& request,Response& response){json(response,backend_.shadowrocket_links(cookie(request),request.matches[1].str()));}));
   server_.Get(R"(/api/users/([^/]+)/qr/([^/]+))",wrap([this](const Request& request,Response& response){response.set_content(backend_.qr(cookie(request),request.matches[1].str(),request.matches[2].str()),"image/png");}));
   server_.Post("/api/password",wrap([this](const Request& request,Response& response) {
     backend_.change_password(cookie(request),request.get_header_value("X-CSRF-Token"),body(request));

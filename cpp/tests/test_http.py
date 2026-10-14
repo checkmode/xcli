@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -221,7 +222,9 @@ def test_login_rate_limit_and_proxy_address(fixture):
 
 def test_static_and_error_security_headers(fixture):
     c = fixture['client']
-    for path in ('/', '/static/app.js', '/static/style.css', '/healthz', '/docs', '/api/overview', '/static/../app.py'):
+    for path in ('/', '/static/app.js', '/static/style.css', '/client/shadowrocket',
+                 '/static/shadowrocket.js', '/static/shadowrocket.css', '/shadowrocket-dns.sgmodule',
+                 '/healthz', '/docs', '/api/overview', '/static/../app.py'):
         status, headers, body = c.call(path)
         assert headers['x-frame-options'] == 'DENY'
         assert headers['x-content-type-options'] == 'nosniff'
@@ -245,6 +248,63 @@ def test_qr_png_decodes_to_existing_links(fixture):
         path.write_bytes(png)
         decoded = subprocess.check_output([decoder, '--quiet', '--raw', str(path)], stderr=subprocess.DEVNULL)
         assert decoded.decode().rstrip('\n') == link
+
+
+def test_shadowrocket_import_qr_preserves_subscription_and_hides_token_from_page_request(fixture):
+    c = fixture['client']
+    path = '/api/users/' + fixture['uid']
+    c.json(path + '/shadowrocket', expected=401)
+    c.json(path + '/qr/shadowrocket', expected=401)
+    c.json(path + '/qr/dns', expected=401)
+    c.login()
+    links = c.json(path + '/shadowrocket')
+    page = urlsplit(links['shadowrocket'])
+    assert page.scheme == 'https' and page.netloc == 'testserver'
+    assert page.path == '/client/shadowrocket' and page.query == ''
+    assert page.fragment == fixture['token']
+    assert links['dns'] == ORIGIN + '/shadowrocket-dns.sgmodule'
+    assert parse_qs(urlsplit(links['dns_install']).query)['module'] == [links['dns']]
+    assert c.json(path + '/links') == fixture['links']
+    decoder = shutil.which('zbarimg')
+    assert decoder, 'Install zbar-tools for QR interoperability verification'
+    for kind, expected in (('shadowrocket', links['shadowrocket']), ('dns', links['dns_install'])):
+        status, headers, png = c.call(path + '/qr/' + kind)
+        assert status == 200 and headers['content-type'] == 'image/png'
+        image = fixture['tmp'] / (kind + '.png')
+        image.write_bytes(png)
+        decoded = subprocess.check_output([decoder, '--quiet', '--raw', str(image)], stderr=subprocess.DEVNULL)
+        assert decoded.decode().rstrip('\n') == expected
+    c.json(path + '/rotate', 'POST', {})
+    c.json('/s/' + page.fragment, expected=404)
+    assert c.json(path + '/shadowrocket')['shadowrocket'] != links['shadowrocket']
+
+
+def test_public_shadowrocket_module_only_overrides_dns_and_this_server_host(fixture):
+    c = fixture['client']
+    status, _, page = c.call('/client/shadowrocket')
+    assert status == 200 and '安装 DNS 模块' in page.decode()
+    assert fixture['token'].encode() not in page
+    status, headers, content = c.call('/shadowrocket-dns.sgmodule')
+    assert status == 200 and headers['content-type'] == 'text/plain; charset=utf-8'
+    assert fixture['token'].encode() not in content
+    assert fixture['uid'].encode() not in content
+    sections = {}
+    for line in content.decode().splitlines():
+        if line.startswith('['):
+            section = line[1:-1]
+            assert section not in sections
+            sections[section] = {}
+        elif line and not line.startswith('#'):
+            key, value = line.split('=', 1)
+            assert key.strip() not in sections[section]
+            sections[section][key.strip()] = value.strip()
+    assert set(sections) == {'General', 'Host'}
+    assert sections['General'] == {
+        'dns-server': 'https://1.1.1.1/dns-query#proxy',
+        'fallback-dns-server': 'https://1.0.0.1/dns-query#proxy',
+        'dns-direct-system': 'false', 'hijack-dns': ':53',
+        'udp-policy-not-supported-behaviour': 'REJECT'}
+    assert sections['Host'] == {'testserver': '203.0.113.2'}
 
 
 def test_no_descriptor_growth_after_2000_http_queries(fixture):

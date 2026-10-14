@@ -170,8 +170,38 @@ Json Backend::links_for(const User& user) const {
   return result;
 }
 Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
+Json Backend::shadowrocket_links_for(const User& user) const {
+  auto origin=settings_.at("origin").get<std::string>();
+  auto module=origin+"/shadowrocket-dns.sgmodule";
+  // A fragment keeps the subscription credential out of landing-page requests.
+  return {{"shadowrocket",origin+"/client/shadowrocket#"+user.token},
+    {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)}};
+}
+Json Backend::shadowrocket_links(const std::string& token,const std::string& id) {
+  session(token);auto database=db();return shadowrocket_links_for(get_user(database,id));
+}
+std::string Backend::shadowrocket_dns() const {
+  auto domain=settings_.at("domain").get<std::string>(),address=settings_.at("public_ip").get<std::string>();
+  if(domain.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")!=std::string::npos||
+     address.find_first_not_of("0123456789abcdefABCDEF.:")!=std::string::npos||domain.empty()||address.empty())
+    throw std::runtime_error("Invalid DNS module host mapping");
+  return "#!name=Xcli DNS 随所选节点\n"
+    "#!desc=DNS 通过首页所选节点；关闭系统 DNS 与不支持 UDP 时的直连回退。启用后将首页全局路由设为代理。已包含本服务器节点域名的 IP 映射。\n\n"
+    "[General]\n"
+    "dns-server = https://1.1.1.1/dns-query#proxy\n"
+    "fallback-dns-server = https://1.0.0.1/dns-query#proxy\n"
+    "dns-direct-system = false\n"
+    "hijack-dns = :53\n"
+    "udp-policy-not-supported-behaviour = REJECT\n\n"
+    "[Host]\n"+domain+" = "+address+"\n";
+}
 std::string Backend::qr(const std::string& token,const std::string& id,const std::string& kind) {
-  session(token);auto database=db();auto node=links_for(get_user(database,id));
+  session(token);auto database=db();auto user=get_user(database,id);
+  if(kind=="shadowrocket"||kind=="dns") {
+    auto client=shadowrocket_links_for(user);
+    return qr_png(client.at(kind=="dns"?"dns_install":"shadowrocket").get<std::string>());
+  }
+  auto node=links_for(user);
   if(!node.contains(kind))throw HttpError(404,"Not Found");
   return qr_png(node.at(kind).get<std::string>());
 }
