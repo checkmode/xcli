@@ -12,7 +12,7 @@ def main():
     release = (base / 'panel-current').resolve().parent
     assert (release / 'revision.txt').read_text().strip()
     client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with client.open('http://127.0.0.1:8080/runtime.js', timeout=5) as response:
+    with client.open('http://127.0.0.1:8080/static/runtime.js', timeout=5) as response:
         served = response.read()
         assert hashlib.sha256(served).digest() == hashlib.sha256((release / 'static/runtime.js').read_bytes()).digest()
     for path in ('runtime', 'diagnostics'):
