@@ -434,6 +434,10 @@ python3 scripts/probe.py \
 
 成功时返回 `status: healthy` 和所有已启用入口的 HTTPS、UDP 延迟，退出码为 0；失败为非零退出码。探测配置包含 `hysteria2_port: 443` 时检查三个入口，旧配置仍检查两个。去掉 `--once` 可持续探测，通过 `--output /existing/private/directory/report.json` 写入结果。输出不包含节点凭据或访问内容。
 
+## Clash 分流日志审计
+
+使用 `python3 scripts/routing_audit_oracle.py` 手动提取本机 Clash Verge 的目标与命中规则，在 Oracle 查询 DNS、IP/ASN 并比对域名规则库。结果仅写入私有报告和待审批规则，不改订阅或客户端配置，不创建定时任务。详细步骤、数据范围和判断限制见 [分流审计说明](docs/routing-audit.md)。
+
 ## 可回退网络调优
 
 TCP 使用 Linux 内核 BBR，Hysteria 2 使用 Xray 的 QUIC 用户态 BBR；`net.ipv4.tcp_congestion_control` 只控制 TCP。可选调优会把新建队列默认值设置为 `fq`，将 UDP 收发缓冲上限提高至至少 16 MiB，并为可完整恢复的简单 `pfifo_fast` / `fq_codel` 实际网卡队列切换为 `fq`。已有更大的缓冲上限和复杂队列结构保留；不修改 MTU 或 TCP 自动调节范围，也不替换内核。
