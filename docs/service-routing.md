@@ -83,3 +83,25 @@
 这不是强制的服务器路由边界。应用流量必须进入 Clash；当前关闭 TUN 时，Git SSH 等连接需要应用自身的代理配置。已建立的连接也不会仅因更新订阅就重新选择出口。
 
 回退时恢复部署前的设置和管理服务二进制，再让目标客户端更新订阅。不要回滚数据库或累计流量，也不要重置其他用户设置。
+
+## Shadowrocket 专属远程配置
+
+为已配置业务路由的用户显式启用 `shadowrocket_service_users`：
+
+```json
+{"shadowrocket_service_users": ["0123456789abcdef0123456789abcdef"]}
+```
+
+该列表默认为空；其中每个用户必须已有 `clash_service_routes` 策略。当前导出支持普通 Hysteria 2 和以 Hysteria 2 接入的住宅出口，复用同一份业务域名与出口配置。其他用户保持原导入流程；普通节点订阅和 Clash 订阅内容不变。
+
+启用后，面板的小火箭二维码直接指向 `shadowrocket://config/add/https://<domain>/s/<token>/shadowrocket.conf`。该远程配置包含业务节点、固定策略组、规则和自己的 `update-url`；客户端一次更新即可同时获得新的业务节点与分流，不需要编辑规则或单独维护模块。导入页也提供一个安装/更新按钮。
+
+远程配置通过 `include = default.conf` 继承手机已有的完整默认配置，必须保留该文件。它不增加 `FINAL`，不修改原有 DNS、Host、重写或解密设置。首次导入后使用该配置，并保持全局路由为「配置」。后续点击「更新配置」或再次扫码即可更新；可在「设置 → 配置」启用自动后台更新。iOS 后台调度不保证立即刷新，需要立即生效时使用手动更新入口。只刷新首页节点订阅不会更新远程配置。
+
+节点采用包含用户标识的固定内部名称；`XCLI-CLAUDE`、`XCLI-GITHUB` 各只有一个成员，不引用首页 `PROXY`，也不使用自动测速或故障切换。出口缺失时生成 `REJECT`。Claude 使用 `udp=0`，在域名代理规则前加入 `AND,((DOMAIN-SUFFIX,...),(PROTOCOL,UDP)),REJECT`，同时设置 `udp-policy-not-supported-behaviour = REJECT`。此配置保留用户原有 DNS 行为，与 Clash 的专用 DNS 策略不同；不承诺 DNS 随业务组固定出口。
+
+`/s/<token>/shadowrocket.json` 返回导入方式，`/s/<token>/shadowrocket.conf` 返回私有配置。两个接口都检查用户有效状态；未启用用户不能下载专属配置。模块或配置包含的个人节点凭据必须按订阅一样保密，不可发送到第三方转换服务。凭据轮换后旧地址失效，需要重新扫码导入。
+
+切回原 `default.conf` 可撤销本次分流。验证应包含原配置继承、远程更新、客户端规则测试、实际连接日志，以及切换首页节点后固定业务出口不变。服务端测试不能替代手机验收。
+
+语法依据：[Shadowrocket 配置与扩展配置文档](https://github.com/LOWERTOP/Shadowrocket/wiki)、[该项目配置示例](https://github.com/LOWERTOP/Shadowrocket/blob/main/lazy_group.conf)。以实际安装版本的解析和连接结果作为最终依据。

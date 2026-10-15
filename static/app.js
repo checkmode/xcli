@@ -40,16 +40,18 @@ $('#user-form').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,b=
 $('#user-table').onclick=async e=>{const b=e.target.closest('[data-action]');if(!b)return;const u=state.users.find(u=>u.id===b.dataset.id),action=b.dataset.action;try{if(action==='edit')return editUser(u);if(action==='connect')return await showConnect(u);if(action==='delete'&&!confirm(`删除「${u.name}」？其节点和订阅将立即失效，其他设备会短暂重连。`))return;if(action==='rotate'&&!confirm(`重置「${u.name}」的所有凭据？旧节点和订阅将失效，需要重新导入；其他设备会短暂重连。`))return;if(action==='reset'&&!confirm(`将「${u.name}」的累计流量归零？已用尽配额的用户可能恢复连接。`))return;await api('users/'+u.id+(action==='rotate'?'/rotate':action==='reset'?'/reset-traffic':''),action==='delete'?'DELETE':'POST',action==='delete'?undefined:{});toast('操作已保存');await refresh()}catch(err){toast(err.message)}};
 async function showConnect(u){const [nodes,client]=await Promise.all([api('users/'+u.id+'/links'),api('users/'+u.id+'/shadowrocket')]);connectUser=u;connectLinks={...nodes,...client};$('#connect-title').textContent=u.name;$$('[data-kind]').forEach(b=>b.hidden=!connectLinks[b.dataset.kind]);$('#connect-dialog').showModal();selectQR('shadowrocket')}
 function selectQR(kind){
+  const managed=connectLinks.shadowrocket?.startsWith('shadowrocket://config/add/');
   qrKind=kind;const count=Object.keys(connectLinks).filter(k=>transportNames[k]||/^residential-[0-9]{2}$/.test(k)).length;
   $$('[data-kind]').forEach(b=>{b.classList.toggle('active',b.dataset.kind===kind);b.setAttribute('aria-pressed',String(b.dataset.kind===kind))});
   $('#qr-image').src='/api/users/'+connectUser.id+'/qr/'+kind;
   $('#node-link').value=connectLinks[kind];
   const descriptions={clash:'复制下面的 Clash 订阅地址，在 Clash Verge Rev 的订阅页面导入并启用，默认使用 HTTPS，也可从 PROXY 组选择节点。DNS 已配置为通过所选代理的 DoH。',shadowrocket:`用 iPhone 系统相机扫码，在引导页依次确认导入 ${count} 个节点和 DNS 模块。其他默认设置保留，无需再次扫码。`,dns:'已有节点时，可扫码安装 DNS 模块，再到「配置 → 模块」确认启用。首页全局路由选择「代理」。',subscription:`订阅包含 ${count} 个节点；客户端的 DNS 设置需另外安装模块。`};
+  if(managed)descriptions.shadowrocket='用小火箭扫码，或点击安装/更新专属配置。固定业务节点和规则一起更新，继承手机现有 default.conf。导入后使用该配置，并保持全局路由为配置；可启用配置自动更新。';
   $('#qr-description').textContent=descriptions[kind]||'打开小火箭扫描二维码，导入此节点。';
-  $('#connection-label').textContent=kind==='shadowrocket'?'手机引导地址':kind==='dns'?'DNS 模块地址':'连接地址';
+  $('#connection-label').textContent=kind==='shadowrocket'?(managed?'专属配置安装地址':'手机引导地址'):kind==='dns'?'DNS 模块地址':'连接地址';
   $('#connect-note').textContent=kind==='dns'?'模块不含节点凭据。停用模块即可撤销 DNS 覆盖。':'二维码和地址包含此用户的订阅或节点凭据，请只交给对应用户。重置凭据后旧地址失效。';
   const open=$('#open-client');open.hidden=!['shadowrocket','dns','clash'].includes(kind);
-  if(!open.hidden){open.href=kind==='dns'?connectLinks.dns_install:kind==='clash'?connectLinks.clash_install:connectLinks.shadowrocket;open.textContent=kind==='dns'?'安装 DNS 模块':kind==='clash'?'导入 Clash Verge':'打开手机引导';open.target=kind==='dns'||kind==='clash'?'_self':'_blank'}else open.removeAttribute('href');
+  if(!open.hidden){open.href=kind==='dns'?connectLinks.dns_install:kind==='clash'?connectLinks.clash_install:connectLinks.shadowrocket;open.textContent=kind==='dns'?'安装 DNS 模块':kind==='clash'?'导入 Clash Verge':managed?'安装 / 更新专属配置':'打开手机引导';open.target=kind==='dns'||kind==='clash'||managed?'_self':'_blank'}else open.removeAttribute('href');
 }
 $$('[data-kind]').forEach(b=>b.onclick=()=>selectQR(b.dataset.kind));
 $('#connect-dialog').addEventListener('close',()=>{connectUser=null;connectLinks=null;$('#qr-image').removeAttribute('src');$('#node-link').value='';$('#open-client').removeAttribute('href')});

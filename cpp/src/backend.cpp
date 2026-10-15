@@ -102,6 +102,22 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
       }
     }
   }
+  const auto shadow_users=settings_.value("shadowrocket_service_users",Json::array());
+  if(!shadow_users.is_array()||shadow_users.size()>1000)throw std::runtime_error("Invalid Shadowrocket service users");
+  std::set<std::string> shadow_ids;
+  for(const auto& entry:shadow_users) {
+    const auto id=checked_string(entry,32,32);
+    if(!routes.contains(id)||routes.at(id).empty()||!shadow_ids.insert(id).second)
+      throw std::runtime_error("Shadowrocket service user requires a unique existing policy");
+    for(const auto& service:routes.at(id)) {
+      const auto tag=service.at("outbound").get<std::string>();
+      if(tag!="hysteria2"&&!tag.starts_with("residential-"))
+        throw std::runtime_error("Shadowrocket service routing currently requires Hysteria 2");
+      for(const auto& exit:settings_.value("residential_exits",Json::array()))
+        if(exit.at("tag")==tag&&!exit.value("hysteria2",false))
+          throw std::runtime_error("Shadowrocket residential service requires Hysteria 2");
+    }
+  }
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
   {auto database=db();database.initialize();}
   if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";
@@ -255,7 +271,11 @@ Json Backend::shadowrocket_links_for(const User& user) const {
   auto module=origin+"/shadowrocket-dns.sgmodule";
   auto clash=origin+"/s/"+user.token+"/clash.yaml";
   // A fragment keeps the subscription credential out of landing-page requests.
-  return {{"shadowrocket",origin+"/client/shadowrocket#"+user.token},
+  auto entry=origin+"/client/shadowrocket#"+user.token;
+  const auto users=settings_.value("shadowrocket_service_users",Json::array());
+  if(std::find(users.begin(),users.end(),Json(user.id))!=users.end())
+    entry="shadowrocket://config/add/"+origin+"/s/"+user.token+"/shadowrocket.conf";
+  return {{"shadowrocket",entry},
     {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)},
     {"clash",clash},{"clash_install","clash://install-config?url="+url_quote(clash)+"&name="+url_quote("Xdistribute · "+user.name)}};
 }

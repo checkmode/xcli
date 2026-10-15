@@ -166,6 +166,8 @@ class Backend {
   Json links(const std::string& token, const std::string& id);
   Json shadowrocket_links(const std::string& token, const std::string& id);
   std::string shadowrocket_dns() const;
+  Json shadowrocket_setup(const std::string& token);
+  std::string shadowrocket_profile(const std::string& token);
   std::string qr(const std::string& token, const std::string& id, const std::string& kind);
   void change_password(const std::string& token, const std::string& csrf, const Json& input);
   std::pair<std::string, std::string> subscription(const std::string& token);
