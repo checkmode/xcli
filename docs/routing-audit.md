@@ -70,18 +70,58 @@ python3 -m unittest discover -s deploy/tests -p test_routing_audit.py -q
 
 ## 将 ww 策略同步到当前 Mac 的 Clash 扩展
 
-`sync_ww_clash.py` 使用 PyYAML，先生成候选，再备份并写入当前配置的 Merge 和 Rules 扩展；不修改订阅原文件、服务端订阅生成器、`.zprofile` 或 dnsmasq。它读取已生效的 `/etc/resolver`，保留 dnsmasq 对文档、邮件等域名的细粒度分流。
+`sync_ww_clash.py` 将 `ww` 策略生成到当前订阅专属的 Script 扩展。节点、代理组、公网 DNS 和通用分流规则由订阅维护；本地脚本只保存内网直连规则、内网 DNS 和 fake-IP 排除项。它读取已生效的 `/etc/resolver`，继续由 dnsmasq 处理文档、邮件等域名的细粒度分流。
+
+Clash Verge 在激活配置和更新当前订阅时重新执行脚本：先放入本地内网规则，再接上最新订阅规则，对完全相同的规则保留第一次出现。对于本地 IPv4 网段、域名和域名后缀规则，若订阅靠前的同动作规则已完整覆盖它，且中间没有不同动作、需要额外解析或无法判定的规则，则省略该本地规则。订阅更新后重新计算覆盖关系；覆盖消失或出现冲突时，本地规则自动恢复。IPv6 网段及无法证明等价的规则保留。DNS 策略、fake-IP 排除与路由规则承担不同职责，不做跨字段去重。明确的内网 DNS 域名放在通用 `geosite:cn` 之前，并启用 `direct-nameserver-follow-policy`；其他 DNS 字段继续继承订阅。
+
+### 同步与激活
+
+在仓库根目录执行，Python 环境需要 PyYAML，候选预检需要 Node.js：
 
 ```sh
 python3 scripts/sync_ww_clash.py
-# 先使用 Mihomo -t 检查 private/ww-clash/candidate.yaml
+# 使用本机 Mihomo -t -d <Clash 配置目录> -f private/ww-clash/candidate.yaml 检查候选
 python3 scripts/sync_ww_clash.py --apply
 ```
 
-随后在 Clash Verge 的 Profiles 中点击 Reactivate Profiles。将 `private/ww-clash/bypass.txt` 的条目与原系统代理绕过项合并，保存到 System Proxy Setting 的自定义列表，保留 Proxy Guard。同步脚本不会直接覆盖应用内存中的系统代理设置。
+生成阶段不改变正在使用的配置。`--apply` 在核对输入和候选均未变化后，备份并写入当前订阅的 Merge、Rules、Script 扩展；遇到共享扩展或非本工具生成的自定义脚本会停止，避免覆盖其他配置。候选从原始订阅构建，不从上一次运行配置累加。候选用于预检，Clash Verge 实际生成的配置仍须在激活后核验。
 
-DNS 策略必须把明确的公司域名放在通用 `geosite:cn` 之前，并启用 `direct-nameserver-follow-policy`。仅设置 DIRECT 不代表已经使用内网 DNS。同步后分别核验系统解析和 Clash 解析，再访问实际 HTTPS 服务。
+完成写入后：
 
-公司网络位置改变时，先运行既有 `ww` 更新路由和 resolver，再重新生成并应用本机扩展；审计工具每次运行都会重新读取策略。工具不监听网络位置变化，也不自动执行 `ww`。
+1. 在 Clash Verge 的 Profiles 中点击 **Reactivate Profiles**。
+2. 在 **System Proxy Setting** 中，将自定义绕过列表完整替换为生成的 `private/ww-clash/bypass.txt`。该文件已保留当前列表中不属于 ww 的项和原有公共基础项；不要再与旧列表追加合并，否则已删除条目会残留。保留 Proxy Guard，关闭 Always use Default Bypass。
+3. 验证内网域名的系统解析、Clash 解析和实际 HTTPS 访问，并确认公网直连与代理访问正常。
 
-回退时，从 `private/ww-clash/backup-*` 恢复本次改动前的两个扩展文件，再 Reactivate Profiles；系统代理例外在界面恢复原设置。包含节点凭据的候选配置与备份均留在被 Git 忽略的私有目录，不应分享。
+日常更新现有订阅时，无需重新运行同步命令：Clash Verge 自动将已保存的内网增量应用到最新订阅。删除后重新导入的订阅有新的配置关联，需要重新同步。
+
+### 修改或删除 ww 条目
+
+修改 `ww`，或切换网络位置导致 resolver 变化后，先按既有流程运行 `ww`，再执行上述同步与激活步骤。生成器每次完整替换自己负责的脚本数据，不与上一版内网规则取并集。因此删除的域名、网段、DNS 指向和 fake-IP 排除项会从本地增量中移除；绕过列表也会重新生成并清理。三个策略数组可以为空，支持删除最后一个条目。
+
+如果订阅本身也包含同一条规则，删除 ww 中的条目后，订阅规则仍然保留。系统绕过列表的公共基础项同理。工具不会修改 `.zprofile`、dnsmasq、原始订阅、服务器或其他设备，也不会监听文件变化或自动执行 `ww`。审计工具每次运行仍直接读取 ww 当前策略。
+
+### 从旧版 Merge / Rules 迁移
+
+旧版曾将内网策略写入 Merge 和 Rules。首次迁移时，通过 `--legacy-policy` 指定上次已应用的 `policy.json`，并使用不同的输出目录，保留旧记录：
+
+```sh
+python3 scripts/sync_ww_clash.py \
+  --legacy-policy private/ww-clash/policy.json \
+  --output private/ww-clash-v2
+# 检查 private/ww-clash-v2/candidate.yaml 后应用
+python3 scripts/sync_ww_clash.py --output private/ww-clash-v2 --apply
+```
+
+迁移会移除已记录的旧内网增量，以及与当前订阅完全相同的公网 DNS 和前置规则，保留其他自定义项。迁移完成后不再传 `--legacy-policy`；后续可以继续使用 `--output private/ww-clash-v2`。此次实际迁移后 Merge 为空，Rules 的 prepend、append、delete 均为空，内网增量集中在当前订阅的 Script 中。
+
+回退时，从对应输出目录的 `backup-*` 恢复三个扩展文件，再 Reactivate Profiles；如果修改过系统代理绕过列表，也在界面恢复。候选配置与备份可能包含节点凭据，均保存在 Git 忽略的私有目录中。
+
+相关测试：
+
+```sh
+python3 -m unittest discover -s deploy/tests -p test_sync_ww_clash.py -q
+python3 -m unittest discover -s deploy/tests -p test_local_network_policy.py -q
+python3 -m unittest discover -s deploy/tests -p test_routing_audit.py -q
+```
+
+测试包含订阅更新后的 DNS、节点和规则继承，规则顺序及去重，旧配置迁移，条目删除，空策略，自定义项保留，以及准备后输入发生变化时拒绝写入。

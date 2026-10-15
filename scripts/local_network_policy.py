@@ -21,7 +21,7 @@ def load(path=None, resolver_dir='/etc/resolver'):
         found=re.search(r'^\s*'+key+r'=\(\s*\n(.*?)^\s*\)',body,re.M|re.S)
         if not found:raise ValueError('Missing literal policy array: '+key)
         words=shlex.split(found[1],comments=True)
-        if not words or any(re.search(r'[$`\n;{}()]',word) for word in words):
+        if any(re.search(r'[$`\n;{}()]',word) for word in words):
             raise ValueError('Dynamic shell expressions are not supported in '+key)
         arrays[key]=words
     networks=set();suffixes=set();exact=set()

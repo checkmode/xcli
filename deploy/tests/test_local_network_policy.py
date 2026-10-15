@@ -34,6 +34,14 @@ class PolicyTests(unittest.TestCase):
    self.assertTrue(p.match('oa.corp.example.com',policy))
    self.assertFalse(p.match('notcorp.example.com',policy))
    self.assertTrue(p.match('10.40.2.3',policy))
+ def test_empty_arrays_allow_removing_last_entry(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);profile,resolvers=self.fixture(root)
+   profile.write_text("function ww() {\n local_ip_list=(\n )\n dns_routing_domains=(\n )\n proxy_bypass_domains=(\n )\n}\n")
+   policy=p.load(profile,resolvers)
+   self.assertEqual(p.rules(policy),[])
+   self.assertEqual(policy['dns'],{})
+   self.assertEqual(policy['system_bypass'],[])
  def test_dynamic_shell_is_rejected_without_execution(self):
   with tempfile.TemporaryDirectory() as d:
    profile,resolvers=self.fixture(pathlib.Path(d));profile.write_text(SOURCE.replace('10.40.0.0/16','$(touch /tmp/should-not-run)'))
