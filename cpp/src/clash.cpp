@@ -54,21 +54,25 @@ Json Backend::clash_configuration(const User& user) const {
     groups.push_back({{"name",name},{"type","select"},{"proxies",nodes}});
   }
   groups.insert(groups.begin(),Json{{"name","PROXY"},{"type","select"},{"proxies",names}});
+  const auto domestic_dns=Json::array({"https://223.5.5.5/dns-query#DIRECT","https://1.12.12.12/dns-query#DIRECT"});
   return {{"mixed-port",7890},{"allow-lan",false},{"mode","rule"},{"log-level","warning"},{"ipv6",false},
     {"profile",{{"store-selected",true}}},{"hosts",{{domain,address}}},
     {"dns",{{"enable",true},{"ipv6",false},{"enhanced-mode","fake-ip"},{"fake-ip-range","198.18.0.1/16"},
-      {"use-hosts",true},{"default-nameserver",Json::array({"https://1.1.1.1/dns-query"})},
-      {"proxy-server-nameserver",Json::array({"https://1.1.1.1/dns-query"})},
+      {"use-hosts",true},{"default-nameserver",Json::array({"223.5.5.5","119.29.29.29"})},
+      {"proxy-server-nameserver",domestic_dns},{"direct-nameserver",domestic_dns},
+      {"nameserver-policy",{{"geosite:cn,private",domestic_dns}}},
       {"nameserver",Json::array({"https://1.1.1.1/dns-query#PROXY","https://1.0.0.1/dns-query#PROXY"})}}},
     {"proxies",proxies},{"proxy-groups",groups},
     {"rules",Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
-      "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve","MATCH,PROXY"})}};
+      "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+      "GEOSITE,private,DIRECT","GEOSITE,cn,DIRECT","GEOSITE,geolocation-!cn,PROXY",
+      "GEOIP,private,DIRECT,no-resolve","GEOIP,CN,DIRECT","MATCH,PROXY"})}};
 }
 std::pair<std::string,std::string> Backend::clash_subscription(const std::string& token) {
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});
   if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
-  return {"# Xdistribute — Clash Verge Rev / Mihomo\n# Residential exits support TCP only. DNS follows PROXY via DoH.\n"+yaml(clash_configuration(user)),
+  return {"# Xdistribute — Clash Verge Rev / Mihomo\n# China/private destinations use DIRECT; other traffic uses PROXY.\n# Domestic DNS uses direct DoH; overseas DNS follows PROXY. Residential exits support TCP only.\n"+yaml(clash_configuration(user)),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 }

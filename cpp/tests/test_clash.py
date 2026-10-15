@@ -22,6 +22,12 @@ def test_clash_export_and_revocation(fixture):
     assert value['proxy-groups'][0]['proxies'][0] == 'HTTPS'
     assert value['rules'][-1] == 'MATCH,PROXY'
     assert value['rules'][0] == 'DOMAIN,testserver,DIRECT'
+    assert value['rules'][-6:] == ['GEOSITE,private,DIRECT','GEOSITE,cn,DIRECT',
+        'GEOSITE,geolocation-!cn,PROXY','GEOIP,private,DIRECT,no-resolve','GEOIP,CN,DIRECT','MATCH,PROXY']
+    domestic = ['https://223.5.5.5/dns-query#DIRECT','https://1.12.12.12/dns-query#DIRECT']
+    assert value['dns']['nameserver-policy']['geosite:cn,private'] == domestic
+    assert value['dns']['direct-nameserver'] == domestic
+    assert value['dns']['proxy-server-nameserver'] == domestic
     assert value['proxies'][1]['ws-opts'] == {'path': '/connect/test', 'headers': {'Host': 'testserver'}}
     assert value['proxies'][1]['skip-cert-verify'] is False
     assert value['dns']['nameserver'][0].endswith('#PROXY')
