@@ -55,9 +55,10 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
   if(!exits.is_array()||exits.size()>40)throw std::runtime_error("Invalid residential exit registry");
   std::set<std::string> exit_tags,exit_paths;std::set<Int> exit_ports;
   for(const auto& exit:exits) {
-    fields(exit,{"tag","label","exit_ip","country","ws_path","port","dynamic"},{"tag","label","exit_ip","country","ws_path","port"});
+    fields(exit,{"tag","label","exit_ip","country","ws_path","port","dynamic","hysteria2"},{"tag","label","exit_ip","country","ws_path","port"});
     auto tag=checked_string(exit.at("tag"),14,14),path=checked_string(exit.at("ws_path"),1,256);
     const bool dynamic=exit.value("dynamic",false);
+    if(exit.contains("hysteria2")&&(!exit["hysteria2"].is_boolean()||(exit["hysteria2"].get<bool>()&&(dynamic||hy2==0))))throw std::runtime_error("Invalid residential Hysteria settings");
     auto address=checked_string(exit.at("exit_ip"),dynamic?0:7,15),country=checked_string(exit.at("country"),2,2);
     auto port=integer(exit.at("port"),65535);
     if(!std::regex_match(tag,std::regex("residential-[0-9]{2}"))||path!=settings_.at("ws_path").get<std::string>()+"/"+tag||
@@ -91,7 +92,10 @@ std::vector<std::string> Backend::transports() const {
 }
 std::vector<std::string> Backend::inbound_tags() const {
   auto result=transports();
-  for(const auto& exit:settings_.value("residential_exits",Json::array()))result.push_back(exit.at("tag").get<std::string>());
+  for(const auto& exit:settings_.value("residential_exits",Json::array())) {
+    auto tag=exit.at("tag").get<std::string>();result.push_back(tag);
+    if(exit.value("hysteria2",false))result.push_back(tag+"-hy2");
+  }
   return result;
 }
 User Backend::get_user(Database& database,const std::string& id) {
@@ -205,6 +209,11 @@ Json Backend::links_for(const User& user) const {
   const bool dynamic_enabled=dynamic_residential_enabled();
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
+    if(exit.value("hysteria2",false)) {
+      const auto tag=exit.at("tag").get<std::string>();
+      result[tag]="hysteria2://"+url_quote(user.uuid+"."+tag+"-hy2")+"@"+s("domain")+":"+std::to_string(settings_.at("hysteria2_port").get<int>())+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+" · "+exit.at("exit_ip").get<std::string>(),false,true);
+      continue;
+    }
     result[exit.at("tag").get<std::string>()]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>()),false,true);
   }
   return result;
@@ -263,7 +272,7 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& generation,const std::vector<Counter>& counters) {
-  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|vmess|residential-[0-9]{2})>>>traffic>>>(uplink|downlink))");
+  static const std::regex format(R"(user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|vmess|residential-[0-9]{2}(?:-hy2)?)>>>traffic>>>(uplink|downlink))");
   Int up=0,down=0;auto stamp=now();
   auto previous_sample=database.one("SELECT value FROM metadata WHERE key='activity_sample'");
   Int interval=previous_sample?std::clamp<Int>(stamp-std::stoll(previous_sample->at("value").get<std::string>()),1,300):options_.poll_seconds;
@@ -280,7 +289,7 @@ std::pair<Int,Int> Backend::apply_stats(Database& database,const std::string& ge
       database.run("UPDATE users SET "+column+"=? WHERE id=?",{sum_checked(existing->at("value").get<Int>(),delta),match[1].str()});
       // A first observation establishes a baseline; historical bytes are not current activity.
       Int activity_delta=previous_sample&&previous?delta:0;
-      const std::string transport=match[3].str().starts_with("residential-")?"websocket":match[3].str();
+      const std::string transport=match[3].str().ends_with("-hy2")?"hysteria2":match[3].str().starts_with("residential-")?"websocket":match[3].str();
       database.run("INSERT OR IGNORE INTO device_activity(user_id,transport,sampled,interval_seconds) VALUES(?,?,?,?)",{match[1].str(),transport,stamp,interval});
       database.run("UPDATE device_activity SET "+column+"_delta="+column+"_delta+?,last_seen=CASE WHEN ?>0 THEN ? ELSE last_seen END WHERE user_id=? AND transport=?",{activity_delta,activity_delta,stamp,match[1].str(),transport});
     }

@@ -61,6 +61,23 @@ class ProxyImportTests(unittest.TestCase):
         self.assertEqual(second['nginx'],first['nginx'])
         self.assertEqual(len(json.loads(second['monitor'])['residential_exits']),2)
 
+    def test_residential_hysteria_management_preserves_legacy_entry(self):
+        first,_=imp.configure(self.old,self.proxies,'http','Fixture',self.rows)
+        settings=json.loads(first['settings']);settings['hysteria2_port']=443
+        core=json.loads(first['core']);core['inbounds'].append(provision.hysteria_inbound())
+        monitor=json.loads(first['monitor']);monitor['hysteria2_port']=443
+        first.update(settings=json.dumps(settings).encode(),core=json.dumps(core).encode(),monitor=json.dumps(monitor).encode())
+        updated,_=imp.enable_residential_hysteria(first,'residential-27')
+        self.assertEqual(json.loads(updated['core'])['inbounds'],core['inbounds'])
+        self.assertEqual(json.loads(updated['core'])['outbounds'],core['outbounds'])
+        self.assertEqual(updated['nginx'],first['nginx'])
+        self.assertTrue(json.loads(updated['settings'])['residential_exits'][0]['hysteria2'])
+        disabled,_,_=imp.manage_config(updated,{'operation':'disable','tag':'residential-27'})
+        self.assertFalse(any(r.get('ruleTag','').startswith('residential-27-hy2') for r in json.loads(disabled['core'])['routing']['rules']))
+        enabled,_,_=imp.manage_config(disabled,{'operation':'enable','tag':'residential-27'},self.rows[0])
+        self.assertEqual(json.loads(enabled['core'])['routing']['rules'][-2:],imp.residential_hysteria_rules('residential-27'))
+        self.assertEqual(imp.load_pool(enabled)['proxies'][0]['password'],'secret-fixture')
+
     def test_management_lifecycle_and_reserved_identity(self):
         first,entries=imp.configure(self.old,self.proxies,'socks','IPRoyal ISP',self.rows)
         tag=entries[0]['tag'];original=copy.deepcopy(entries[0])

@@ -39,7 +39,10 @@ Json Backend::clash_configuration(const User& user) const {
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
     const auto name=exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>());
-    websocket(name,exit.at("ws_path").get<std::string>(),false);
+    if(exit.value("hysteria2",false))
+      add({{"name",name},{"type","hysteria2"},{"server",address},{"port",settings_.at("hysteria2_port")},
+        {"password",user.uuid+"."+exit.at("tag").get<std::string>()+"-hy2"},{"sni",domain},{"skip-cert-verify",false},{"udp",false}});
+    else websocket(name,exit.at("ws_path").get<std::string>(),false);
     const auto country=exit.at("country").get<std::string>();
     if(!country_nodes.contains(country))country_nodes[country]=Json::array();
     if(dynamic)country_nodes[country].insert(country_nodes[country].begin(),Json(name));

@@ -294,6 +294,29 @@ def inventory(config):
              **({**{k:p[k] for k in proxy_vmess.PUBLIC_FIELDS},'tls':p['tls']} if p['protocol']=='vmess' else {})} for p in load_pool(config)['proxies']]
 
 
+def residential_hysteria_rules(tag):
+    if not re.fullmatch(r'residential-[0-9]{2}',tag):raise ImportErrorSafe('入口编号无效')
+    match={'type':'field','inboundTag':['hysteria2'],'user':['regexp:@'+tag+'-hy2$']}
+    return [{**match,'ruleTag':tag+'-hy2-udp','network':'udp','outboundTag':'blocked'},
+            {**match,'ruleTag':tag+'-hy2-tcp','network':'tcp','outboundTag':tag+'-exit'}]
+
+
+def enable_residential_hysteria(old,tag):
+    settings=json.loads(old['settings']);monitor=json.loads(old['monitor']);core=json.loads(old['core']);pool=load_pool(old)
+    target=next((p for p in pool['proxies'] if p['tag']==tag),None)
+    if not settings.get('hysteria2_port') or not any(i['tag']=='hysteria2' and i['protocol']=='hysteria' for i in core['inbounds']):
+        raise ImportErrorSafe('请先启用 Hysteria 2 基础入口')
+    if target is None or not target['enabled'] or target['deleted_at'] or target['entry'].get('hysteria2'):
+        raise ImportErrorSafe('请选择尚未启用 Hysteria 2 的有效手动代理')
+    target['entry']['hysteria2']=True
+    for config in (settings,monitor):
+        entry=next(e for e in config['residential_exits'] if e['tag']==tag);entry['hysteria2']=True
+    core['routing']['rules'].extend(residential_hysteria_rules(tag))
+    new={**old,'settings':json.dumps(settings).encode(),'monitor':json.dumps(monitor).encode(),
+         'core':json.dumps(core).encode(),'pool':json.dumps(pool).encode()}
+    return new,[]
+
+
 def manage_config(old,request,verified=None):
     operation=request.get('operation');tag=request.get('tag')
     if operation not in ('edit','enable','disable','delete','restore') or not isinstance(tag,str) or not re.fullmatch(r'residential-[0-9]{2}',tag):
@@ -338,6 +361,7 @@ def manage_config(old,request,verified=None):
     core['outbounds']=[e for e in core['outbounds'] if e['tag']!=tag+'-exit']
     rules=[]
     for r in core['routing']['rules']:
+        if r.get('ruleTag') in (tag+'-hy2-udp',tag+'-hy2-tcp'):continue
         if tag in r.get('inboundTag',[]):
             r={**r,'inboundTag':[t for t in r['inboundTag'] if t!=tag]}
             if not r['inboundTag']:continue
@@ -357,6 +381,7 @@ def manage_config(old,request,verified=None):
         core['outbounds'].append({'tag':tag+'-exit',**upstream(target,target['protocol'])})
         rules.extend([{'type':'field','inboundTag':[tag],'network':'udp','outboundTag':'blocked'},
                       {'type':'field','inboundTag':[tag],'network':'tcp','outboundTag':tag+'-exit'}])
+        if e.get('hysteria2'):rules.extend(residential_hysteria_rules(tag))
     locations=''
     for p in pool['proxies']:
         if not p['enabled'] or p['deleted_at']:continue
@@ -620,6 +645,15 @@ def main():
     if ROOT.is_symlink() or ROOT.stat().st_uid!=0:raise SystemExit('Unsafe service state directory')
     os.chown(ROOT,0,owner.pw_gid);os.chmod(ROOT,0o750)
     (ROOT/'backups').mkdir(mode=0o700,exist_ok=True)
+    if len(sys.argv)==3 and sys.argv[1]=='enable-residential-hysteria':
+        with open('/run/lock/xcli-update.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            if (ROOT/'transaction.json').exists():raise ImportErrorSafe('请先恢复未完成的事务')
+            if (ROOT/'report.json').exists() and json.loads(read_regular(ROOT/'report.json')).get('status') in ('verifying','applying','ready'):
+                raise ImportErrorSafe('请先完成正在进行的代理操作')
+            old=read_config();new,entries=enable_residential_hysteria(old,sys.argv[2]);job=secrets.token_hex(16)
+            apply_config(old,new,entries,job)
+        print('Residential Hysteria 2 enabled; upstream credentials remain on server. Rollback job: '+job);return
     if len(sys.argv)==2 and sys.argv[1]=='enable-vmess':
         with open('/run/lock/xcli-update.lock','a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

@@ -99,7 +99,7 @@ def residential_exit(config, kind):
 
 def client_config(config, kind, port):
     exit = residential_exit(config, kind)
-    transport = 'websocket' if exit else kind
+    transport = ('hysteria2' if exit.get('hysteria2') else 'websocket') if exit else kind
     user = {'id': config['uuid'], 'encryption': 'none'}
     if transport == 'reality':
         user['flow'] = 'xtls-rprx-vision'
@@ -115,7 +115,7 @@ def client_config(config, kind, port):
     if transport == 'hysteria2':
         outbound = {'protocol': 'hysteria', 'settings': {'version': 2, 'address': config['public_ip'],
             'port': config['hysteria2_port']}, 'streamSettings': {'network': 'hysteria', 'security': 'tls',
-            'hysteriaSettings': {'version': 2, 'auth': config['uuid']},
+            'hysteriaSettings': {'version': 2, 'auth': config['uuid']+('.'+kind+'-hy2' if exit else '')},
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False,
                 'useSystemCA': True, 'alpn': ['h3']},
             'finalmask': {'quicParams': {'congestion': 'bbr'}}}}
