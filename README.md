@@ -474,3 +474,7 @@ sudo python3 /opt/xray-gateway/scripts/gatewayctl.py reset-password
 如果验证器和所有恢复码均丢失，root 可执行同一工具的 `disable-mfa` 操作，输入明确确认短语后关闭二次验证并退出所有会话。此操作会记入管理日志，之后应重新绑定验证器。
 
 密码、UUID、订阅令牌、私钥、数据库、备份及真实探测配置都不应提交到仓库。`.gitignore` 已排除常见运行数据；提交前仍须检查实际文件清单。
+
+## 按订阅指定业务出口
+
+服务端支持为指定用户生成业务规则集和固定出口策略组，例如 Claude 使用指定住宅出口、GitHub 使用普通 Hysteria 2。采用内嵌 `rule-providers`，随订阅更新；未配置的用户保持原行为。配置格式、UDP 拒绝策略和验证步骤见 [业务分流说明](docs/service-routing.md)。

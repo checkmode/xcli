@@ -71,6 +71,37 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
     }
     (void)user_name(exit.at("label"));
   }
+  // Optional business routes are scoped to immutable user IDs, never global defaults.
+  const auto routes=settings_.value("clash_service_routes",Json::object());
+  if(!routes.is_object()||routes.size()>1000)throw std::runtime_error("Invalid Clash service routing registry");
+  for(const auto& [user_id,services]:routes.items()) {
+    if(!std::regex_match(user_id,std::regex("[0-9a-f]{32}"))||!services.is_array()||services.size()>32)
+      throw std::runtime_error("Invalid Clash service routing owner");
+    std::set<std::string> service_names,domains;
+    for(const auto& service:services) {
+      fields(service,{"name","outbound","domains","udp"},{"name","outbound","domains","udp"});
+      const auto name=checked_string(service.at("name"),1,32),outbound=checked_string(service.at("outbound"),1,32);
+      const auto udp=checked_string(service.at("udp"),5,6);
+      if(!std::regex_match(name,std::regex("[A-Z][A-Z0-9_-]*"))||
+         std::set<std::string>{"PROXY","DIRECT","REJECT","REJECT-DROP","PASS","COMPATIBLE","GLOBAL","REALITY","HTTPS"}.contains(name)||
+         !service_names.insert(name).second||
+         !(outbound=="hysteria2"||outbound=="reality"||outbound=="websocket"||outbound=="vmess"||std::regex_match(outbound,std::regex("residential-[0-9]{2}")))||
+         (udp!="reject"&&udp!="proxy"))throw std::runtime_error("Invalid Clash service route");
+      // Residential exits are TCP-only: never allow UDP to fall through to PROXY.
+      if(outbound.starts_with("residential-")&&udp!="reject")throw std::runtime_error("Residential service routes must reject UDP");
+      const auto& list=service.at("domains");
+      if(!list.is_array()||list.empty()||list.size()>128)throw std::runtime_error("Invalid Clash service domains");
+      for(const auto& item:list) {
+        const auto domain=checked_string(item,3,253);
+        if(!std::regex_match(domain,std::regex("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")))
+          throw std::runtime_error("Invalid Clash service domain");
+        for(const auto& previous:domains)
+          if(domain==previous||domain.ends_with("."+previous)||previous.ends_with("."+domain))
+            throw std::runtime_error("Overlapping Clash service domains");
+        domains.insert(domain);
+      }
+    }
+  }
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
   {auto database=db();database.initialize();}
   if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";

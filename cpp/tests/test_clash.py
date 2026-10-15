@@ -36,3 +36,82 @@ def test_clash_export_and_revocation(fixture):
     c.json('/api/users/' + fixture['uid'] + '/rotate', 'POST', {})
     assert c.call(path)[0] == 404
 
+
+
+import json
+import subprocess
+import pytest
+from test_http import BINARY
+
+SERVICE_SETTINGS = {
+    'hysteria2_port': 443,
+    'residential_exits': [{'tag': 'residential-28', 'label': 'IPRoyal ISP 28', 'exit_ip': '8.8.4.4',
+        'country': 'SG', 'ws_path': '/connect/test/residential-28', 'port': 12028, 'hysteria2': True}],
+    'clash_service_routes': {'__USER_ID__': [
+        {'name': 'CLAUDE', 'outbound': 'residential-28', 'domains': ['claude.ai', 'anthropic.com'], 'udp': 'reject'},
+        {'name': 'GITHUB', 'outbound': 'hysteria2', 'domains': ['github.com', 'githubusercontent.com'], 'udp': 'proxy'}]}}
+
+
+def subscription(fixture, token=None):
+    status, _, content = fixture['client'].call('/s/' + (token or fixture['token']) + '/clash.yaml')
+    assert status == 200
+    return yaml.safe_load(content)
+
+
+@pytest.mark.parametrize('fixture', [SERVICE_SETTINGS], indirect=True)
+def test_service_routes_are_user_scoped_and_follow_identity_rotation(fixture):
+    value = subscription(fixture)
+    groups = {g['name']: g for g in value['proxy-groups']}
+    assert groups['CLAUDE'] == {'name': 'CLAUDE', 'type': 'select', 'proxies': ['IPRoyal ISP 28 · 8.8.4.4']}
+    assert groups['GITHUB']['proxies'] == ['Hysteria 2']
+    assert 'CLAUDE' not in groups['PROXY']['proxies']
+    rule = 'AND,((RULE-SET,service-CLAUDE),(NETWORK,UDP)),REJECT'
+    assert value['rules'].index(rule) < value['rules'].index('RULE-SET,service-CLAUDE,CLAUDE')
+    assert value['rules'].index('RULE-SET,service-GITHUB,GITHUB') < value['rules'].index('GEOSITE,cn,DIRECT')
+    assert value['rule-providers']['service-CLAUDE'] == {
+        'type': 'inline', 'behavior': 'domain', 'payload': ['+.claude.ai', '+.anthropic.com']}
+    assert value['dns']['nameserver-policy']['+.claude.ai'][0].endswith('#CLAUDE')
+    assert value['dns']['nameserver-policy']['+.github.com'][0].endswith('#GITHUB')
+    c = fixture['client']; c.login()
+    other_id = c.json('/api/users', 'POST', {'name': 'unaffected-user'})['id']
+    with fixture['legacy'].db() as db:
+        other_token = db.execute('SELECT token FROM users WHERE id=?', (other_id,)).fetchone()[0]
+    other = subscription(fixture, other_token)
+    assert 'rule-providers' not in other
+    assert not any(g['name'] in ('CLAUDE', 'GITHUB') for g in other['proxy-groups'])
+    assert len(other['rules']) == 11
+    assert list(other['dns']['nameserver-policy']) == ['geosite:cn,private']
+    # Rotate credentials, preserving the same user's routing policy.
+    c.json('/api/users/' + fixture['uid'] + '/rotate', 'POST', {})
+    with fixture['legacy'].db() as db:
+        token = db.execute('SELECT token FROM users WHERE id=?', (fixture['uid'],)).fetchone()[0]
+    assert subscription(fixture, token)['rules'] == value['rules']
+
+
+@pytest.mark.parametrize('fixture', [{**SERVICE_SETTINGS, 'residential_exits': [], 'hysteria2_port': 0}], indirect=True)
+def test_missing_exit_rejects_instead_of_falling_back(fixture):
+    value = subscription(fixture)
+    for group in value['proxy-groups']:
+        if group['name'] in ('CLAUDE', 'GITHUB'):
+            assert group['proxies'] == ['REJECT']
+    assert 'RULE-SET,service-CLAUDE,CLAUDE' in value['rules']
+    assert 'AND,((RULE-SET,service-CLAUDE),(NETWORK,UDP)),REJECT' in value['rules']
+
+
+def test_invalid_service_routing_is_rejected_before_startup(fixture):
+    original = json.loads((fixture['tmp'] / 'settings.json').read_text())
+    service = {'name': 'CLAUDE', 'outbound': 'residential-28', 'domains': ['claude.ai'], 'udp': 'reject'}
+    bad_values = [
+        {**service, 'udp': 'proxy'},
+        {**service, 'domains': ['claude.ai,PROXY']},
+        {**service, 'name': 'PROXY'},
+        {**service, 'domains': ['claude.ai', 'api.claude.ai']},
+        {**service, 'outbound': 'arbitrary-display-name'},
+    ]
+    for index, bad in enumerate(bad_values):
+        settings = fixture['tmp'] / ('invalid-' + str(index) + '.json')
+        settings.write_text(json.dumps({**original, 'clash_service_routes': {fixture['uid']: [bad]}}))
+        result = subprocess.run([str(BINARY), '--state', str(fixture['tmp'] / ('invalid-state-' + str(index))),
+            '--settings', str(settings), '--offline', '--preflight'], capture_output=True, timeout=10)
+        assert result.returncode != 0
+        assert b'Clash service' in result.stderr or b'Residential service' in result.stderr

@@ -71,7 +71,7 @@ class Client:
 
 
 @pytest.fixture
-def fixture(tmp_path, monkeypatch):
+def fixture(tmp_path, monkeypatch, request):
     spec = importlib.util.spec_from_file_location('legacy_xg_test', LEGACY)
     legacy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(legacy)
@@ -94,6 +94,12 @@ def fixture(tmp_path, monkeypatch):
         db.execute('INSERT INTO sessions VALUES(?,?,?)', (hashlib.sha256(old_cookie.encode()).hexdigest(), old_csrf, int(time.time()) + 1000))
         old_user = legacy.get_user(db, uid)
         original_links = legacy.links(old_user)
+    settings_override = getattr(request, 'param', None)
+    if settings_override:
+        override = json.loads(json.dumps(settings_override).replace('__USER_ID__', uid))
+        current_settings = json.loads(settings.read_text())
+        current_settings.update(override)
+        settings.write_text(json.dumps(current_settings))
     port = available_port()
     log = (tmp_path / 'server.log').open('wb')
     process = subprocess.Popen([str(BINARY), '--state', str(state), '--settings', str(settings),

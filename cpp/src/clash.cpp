@@ -17,6 +17,7 @@ std::string yaml(const Json& value,int depth=0) {
 Json Backend::clash_configuration(const User& user) const {
   const auto address=settings_.at("public_ip").get<std::string>(),domain=settings_.at("domain").get<std::string>();
   Json proxies=Json::array(),names=Json::array();
+  std::map<std::string,std::string> outbound_names{{"reality","REALITY"},{"websocket","HTTPS"}};
   auto add=[&](Json proxy){names.push_back(proxy.at("name"));proxies.push_back(std::move(proxy));};
   add({{"name","REALITY"},{"type","vless"},{"server",address},{"port",443},{"uuid",user.uuid},
     {"udp",true},{"tls",true},{"network","tcp"},{"flow","xtls-rprx-vision"},{"packet-encoding","xudp"},
@@ -48,6 +49,13 @@ Json Backend::clash_configuration(const User& user) const {
     if(dynamic)country_nodes[country].insert(country_nodes[country].begin(),Json(name));
     else country_nodes[country].push_back(name);
   }
+  if(settings_.value("hysteria2_port",0)>0)outbound_names["hysteria2"]="Hysteria 2";
+  if(settings_.contains("vmess_ws_path"))outbound_names["vmess"]="VMess TLS";
+  for(const auto& exit:settings_.value("residential_exits",Json::array())) {
+    if(exit.value("dynamic",false)&&!dynamic_enabled)continue;
+    outbound_names[exit.at("tag").get<std::string>()]=exit.at("label").get<std::string>()+
+      (exit.value("dynamic",false)?"":" · "+exit.at("exit_ip").get<std::string>());
+  }
   // Prefer the HTTPS transport for interoperability with current Mihomo clients.
   std::swap(names[0],names[1]);
   Json groups=Json::array();
@@ -58,18 +66,43 @@ Json Backend::clash_configuration(const User& user) const {
   }
   groups.insert(groups.begin(),Json{{"name","PROXY"},{"type","select"},{"proxies",names}});
   const auto domestic_dns=Json::array({"https://223.5.5.5/dns-query#DIRECT","https://1.12.12.12/dns-query#DIRECT"});
-  return {{"mixed-port",7890},{"allow-lan",false},{"mode","rule"},{"log-level","warning"},{"ipv6",false},
+  Json rules=Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve","IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"});
+  Json dns_policy=Json::object(),rule_providers=Json::object();
+  const auto registry=settings_.value("clash_service_routes",Json::object());
+  if(registry.contains(user.id))for(const auto& service:registry.at(user.id)) {
+    const auto group=service.at("name").get<std::string>(),tag=service.at("outbound").get<std::string>();
+    for(const auto& proxy:proxies)if(proxy.at("name")==group)throw HttpError(503,"Service routing name conflict");
+    for(const auto& existing:groups)if(existing.at("name")==group)throw HttpError(503,"Service routing name conflict");
+    // A missing/disabled exit fails closed for this user's service only.
+    const auto found=outbound_names.find(tag);
+    const auto target=found==outbound_names.end()?"REJECT":found->second;
+    groups.push_back({{"name",group},{"type","select"},{"proxies",Json::array({target})}});
+    const auto provider="service-"+group;
+    Json payload=Json::array();
+    if(service.at("udp")=="reject")rules.push_back("AND,((RULE-SET,"+provider+"),(NETWORK,UDP)),REJECT");
+    rules.push_back("RULE-SET,"+provider+","+group);
+    for(const auto& entry:service.at("domains")) {
+      const auto host=entry.get<std::string>();
+      payload.push_back("+."+host);
+      dns_policy["+."+host]=Json::array({"https://1.1.1.1/dns-query#"+group,"https://1.0.0.1/dns-query#"+group});
+    }
+    rule_providers[provider]={{"type","inline"},{"behavior","domain"},{"payload",payload}};
+  }
+  for(const auto* rule:{"GEOSITE,private,DIRECT","GEOSITE,cn,DIRECT","GEOSITE,geolocation-!cn,PROXY",
+                       "GEOIP,private,DIRECT,no-resolve","GEOIP,CN,DIRECT","MATCH,PROXY"})rules.push_back(rule);
+  dns_policy["geosite:cn,private"]=domestic_dns;
+  Json result={{"mixed-port",7890},{"allow-lan",false},{"mode","rule"},{"log-level","warning"},{"ipv6",false},
     {"profile",{{"store-selected",true}}},{"hosts",{{domain,address}}},
     {"dns",{{"enable",true},{"ipv6",false},{"enhanced-mode","fake-ip"},{"fake-ip-range","198.18.0.1/16"},
       {"use-hosts",true},{"default-nameserver",Json::array({"223.5.5.5","119.29.29.29"})},
       {"proxy-server-nameserver",domestic_dns},{"direct-nameserver",domestic_dns},
-      {"nameserver-policy",{{"geosite:cn,private",domestic_dns}}},
+      {"nameserver-policy",dns_policy},
       {"nameserver",Json::array({"https://1.1.1.1/dns-query#PROXY","https://1.0.0.1/dns-query#PROXY"})}}},
     {"proxies",proxies},{"proxy-groups",groups},
-    {"rules",Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
-      "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
-      "GEOSITE,private,DIRECT","GEOSITE,cn,DIRECT","GEOSITE,geolocation-!cn,PROXY",
-      "GEOIP,private,DIRECT,no-resolve","GEOIP,CN,DIRECT","MATCH,PROXY"})}};
+    {"rules",rules}};
+  if(!rule_providers.empty())result["rule-providers"]=rule_providers;
+  return result;
 }
 std::pair<std::string,std::string> Backend::clash_subscription(const std::string& token) {
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});
