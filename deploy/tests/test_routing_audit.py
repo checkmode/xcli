@@ -2,6 +2,8 @@ import importlib.util
 import json
 import pathlib
 import tempfile
+import sys
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[2]/"scripts"))
 import unittest
 from unittest.mock import patch
 
@@ -19,7 +21,7 @@ class AuditTests(unittest.TestCase):
                 'msg="download https://example.com/s/SECRET_TOKEN"',
                 'msg="[TCP] 127.0.0.1:1234 --> invalid.example.com/path?token=SECRET:443 match Match using PROXY"']
             (logs/'a.log').write_text('\n'.join(lines))
-            value=m.collect(directory);encoded=json.dumps(value)
+            value=m.collect(directory,policy={});encoded=json.dumps(value)
             self.assertEqual(value['coverage']['events'],2)
             self.assertEqual(value['coverage']['first'],'2026-10-15T02:00:00+00:00')
             for secret in ('127.0.0.1','192.168.1.1','SECRET','secret-user'):

@@ -28,15 +28,15 @@ def now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
 
 
-def host(value):
+def host(value, allow_local=False):
     value = value.lower().rstrip('.')
     try:
         return str(ipaddress.ip_address(value))
     except ValueError:
         pass
-    if len(value) > 253 or '.' not in value or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', x) for x in value.split('.')):
+    if len(value) > 253 or ('.' not in value and not allow_local) or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', x) for x in value.split('.')):
         raise ValueError('Invalid public host')
-    if value.endswith(('.localhost', '.local', '.internal', '.invalid', '.test')):
+    if not allow_local and value.endswith(('.localhost', '.local', '.internal', '.invalid', '.test')):
         raise ValueError('Local-only host')
     return value
 
@@ -61,7 +61,11 @@ def atomic(path, value):
             os.unlink(temporary)
 
 
-def collect(directory):
+def collect(directory, policy=None):
+    import local_network_policy
+    if policy is None:
+        policy = local_network_policy.load()
+    local_counts = collections.Counter()
     counts = collections.Counter()
     first = last = None
     files = matched = skipped = 0
@@ -76,8 +80,10 @@ def collect(directory):
                     continue
                 endpoint, rule, chain = match.groups()
                 try:
-                    target = host(endpoint.rsplit(':', 1)[0].strip('[]'))
-                    if ':' in target or re.fullmatch(r'[0-9.]+', target):
+                    raw_target = endpoint.rsplit(':', 1)[0].strip('[]')
+                    local_reason = local_network_policy.match(raw_target, policy)
+                    target = host(raw_target, allow_local=bool(local_reason))
+                    if not local_reason and (':' in target or re.fullmatch(r'[0-9.]+', target)):
                         if not public_ip(target):
                             skipped += 1
                             continue
@@ -87,7 +93,10 @@ def collect(directory):
                 # Do not transmit arbitrary log payloads, proxy labels or source endpoints.
                 rule = rule if RULE.fullmatch(rule) else 'Other'
                 action = 'DIRECT' if chain == 'DIRECT' else 'REJECT' if chain.startswith('REJECT') else 'PROXY'
-                counts[(target, rule, action)] += 1
+                if local_reason:
+                    local_counts[(target, rule, action, local_reason)] += 1
+                else:
+                    counts[(target, rule, action)] += 1
                 matched += 1
                 stamp = STAMP.search(line)
                 if stamp:
@@ -98,6 +107,7 @@ def collect(directory):
                     except ValueError:
                         pass
     return {'schema': VERSION, 'collected_at': now(), 'coverage': {'files': files, 'events': matched, 'skipped': skipped, 'first': first, 'last': last},
+            'local_observations': [{'host': h, 'rule': r, 'action': a, 'reason': why, 'count': c} for (h, r, a, why), c in sorted(local_counts.items())],
             'observations': [{'host': h, 'rule': r, 'action': a, 'count': c} for (h, r, a), c in sorted(counts.items())]}
 
 

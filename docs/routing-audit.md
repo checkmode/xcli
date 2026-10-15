@@ -23,7 +23,9 @@ python3 scripts/routing_audit_oracle.py --logs /path/to/logs --output /path/to/p
 
 ## 数据与报告
 
-本地仅提取目标域名或公网 IP、规则类型、DIRECT/PROXY/REJECT、事件次数和样本时间范围。原始日志、请求路径、订阅凭据、代理节点名称和本地来源地址不上传。DNS 查询会将目标域名发送给 Cloudflare 和 AliDNS；IP 归属查询仅将公网 IP 发送给 ipwho.is。
+采集前先静态读取本机 `~/.zprofile` 中 `ww` 的三个策略数组及 `/etc/resolver`，不执行 shell。公司域名、明确绕过的主机和网段优先匹配；这些观测只保存到本地 `local-policy-report.json`，不会上传 Oracle。找不到策略或无法解析时停止采集，不退化为上传全部目标。可用 `--zprofile` 指定来源。
+
+其余公网目标仅提取目标域名或公网 IP、规则类型、DIRECT/PROXY/REJECT、事件次数和样本时间范围。原始日志、请求路径、订阅凭据、代理节点名称和本地来源地址不上传。DNS 查询会将目标域名发送给 Cloudflare 和 AliDNS；IP 归属查询仅将公网 IP 发送给 ipwho.is。
 
 日志轮转可能删除旧文件；报告只能说明当前保留样本中的行为。事件数不是字节数，也不是独立网页访问数。每次重新汇总当前文件，不把重叠窗口的次数累加到上一轮。
 
@@ -34,6 +36,7 @@ python3 scripts/routing_audit_oracle.py --logs /path/to/logs --output /path/to/p
 | `report.md` | 中文审计报告 |
 | `report.json` | 每个目标的规则、DNS、CNAME、IP、ASN 和查询状态 |
 | `proposal.json` | 等待用户确认的精确域名规则及配套 DNS 建议 |
+| `local-policy-report.json` | 本机明确直连目标及日志动作，不上传 Oracle |
 | `summary.json` | 分类统计与判断结果指纹 |
 | `history/` | 每次手动运行的报告副本 |
 
@@ -64,3 +67,21 @@ python3 -m unittest discover -s deploy/tests -p test_routing_audit.py -q
 ```
 
 测试覆盖日志数据最小化、私网目标过滤、纳秒时间戳、域名后缀边界、规则冲突、单靠地理定位不得产生直连规则、报告重复运行和输入校验。网络查询是否成功以每次报告中的证据状态为准。
+
+## 将 ww 策略同步到当前 Mac 的 Clash 扩展
+
+`sync_ww_clash.py` 使用 PyYAML，先生成候选，再备份并写入当前配置的 Merge 和 Rules 扩展；不修改订阅原文件、服务端订阅生成器、`.zprofile` 或 dnsmasq。它读取已生效的 `/etc/resolver`，保留 dnsmasq 对文档、邮件等域名的细粒度分流。
+
+```sh
+python3 scripts/sync_ww_clash.py
+# 先使用 Mihomo -t 检查 private/ww-clash/candidate.yaml
+python3 scripts/sync_ww_clash.py --apply
+```
+
+随后在 Clash Verge 的 Profiles 中点击 Reactivate Profiles。将 `private/ww-clash/bypass.txt` 的条目与原系统代理绕过项合并，保存到 System Proxy Setting 的自定义列表，保留 Proxy Guard。同步脚本不会直接覆盖应用内存中的系统代理设置。
+
+DNS 策略必须把明确的公司域名放在通用 `geosite:cn` 之前，并启用 `direct-nameserver-follow-policy`。仅设置 DIRECT 不代表已经使用内网 DNS。同步后分别核验系统解析和 Clash 解析，再访问实际 HTTPS 服务。
+
+公司网络位置改变时，先运行既有 `ww` 更新路由和 resolver，再重新生成并应用本机扩展；审计工具每次运行都会重新读取策略。工具不监听网络位置变化，也不自动执行 `ww`。
+
+回退时，从 `private/ww-clash/backup-*` 恢复本次改动前的两个扩展文件，再 Reactivate Profiles；系统代理例外在界面恢复原设置。包含节点凭据的候选配置与备份均留在被 Git 忽略的私有目录，不应分享。

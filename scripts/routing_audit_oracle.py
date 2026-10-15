@@ -8,6 +8,8 @@ import shlex
 import subprocess
 import tempfile
 import routing_audit
+import local_network_policy
+import json
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_LOGS = pathlib.Path.home()/'Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/logs'
@@ -20,6 +22,7 @@ def main():
     parser.add_argument('--ssh-alias',default='oracle')
     parser.add_argument('--host',default='161.153.70.208')
     parser.add_argument('--known-hosts',type=pathlib.Path,default=ROOT/'private/routing-audit/oracle-known-hosts')
+    parser.add_argument('--zprofile',type=pathlib.Path,default=pathlib.Path.home()/'.zprofile')
     parser.add_argument('--max-ips',type=int,default=160)
     args=parser.parse_args()
     if not 1 <= args.max_ips <= 500:parser.error('max-ips must be between 1 and 500')
@@ -33,7 +36,13 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='routing-audit-') as temporary:
             snapshot=pathlib.Path(temporary)/'observations.json'
-            value=routing_audit.collect(args.logs)
+            policy=local_network_policy.load(args.zprofile)
+            value=routing_audit.collect(args.logs,policy)
+            local_rows=value.pop('local_observations')
+            local_report={'policy_source_sha256':policy['source_sha256'],'observations':local_rows,'uploaded':False,
+                          'proxy_events':sum(r['count'] for r in local_rows if r['action']=='PROXY')}
+            routing_audit.atomic(args.output/'local-policy-report.json',json.dumps(local_report,ensure_ascii=False,indent=2))
+            assert all(not local_network_policy.match(r['host'],policy) for r in value['observations'])
             if not value['coverage']['events']:raise SystemExit('No routing events found; no upload performed')
             routing_audit.atomic(snapshot,__import__('json').dumps(value,ensure_ascii=False))
             print('Collected routing events:',value['coverage']['events'],flush=True)
@@ -56,10 +65,15 @@ with (state/'run.lock').open('a') as lock:
             ssh(command,input=code,text=True,timeout=1200)
             for name in ('report.md','report.json','proposal.json','summary.json'):
                 subprocess.run(['scp',*options,args.ssh_alias+':'+remote+'/'+name,str(args.output/name)],check=True)
+            local_text='\n## 本机明确直连策略（未上传 Oracle）\n\n| 目标 | 命中依据 | 日志动作 | 事件数 |\n|---|---|---|---:|\n'
+            for row in local_rows:
+                local_text+='| '+row['host']+' | '+row['reason']+' | '+row['action']+' | '+str(row['count'])+' |\n'
+            local_text+='\nPROXY 事件表示日志中曾违反本机策略，需结合记录时间判断是否发生在修复前。内网可达性应在本机验证。\n'
+            with (args.output/'report.md').open('a') as report:report.write(local_text)
             # Preserve reviewed outputs locally without committing browsing observations to Git.
             archive=args.output/'history'/datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
             archive.mkdir(parents=True,mode=0o700)
-            for name in ('report.md','report.json','proposal.json','summary.json'):
+            for name in ('report.md','report.json','proposal.json','summary.json','local-policy-report.json'):
                 __import__('shutil').copyfile(args.output/name,archive/name)
             print('Report: '+str(args.output/'report.md'))
             print('Review only: no subscription, DNS or routing configuration changed.')
