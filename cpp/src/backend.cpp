@@ -118,6 +118,18 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
           throw std::runtime_error("Shadowrocket residential service requires Hysteria 2");
     }
   }
+  const auto shadow_bases=settings_.value("shadowrocket_base_profiles",Json::object());
+  if(!shadow_bases.is_object()||shadow_bases.size()>16)
+    throw std::runtime_error("Invalid Shadowrocket base profile registry");
+  std::size_t shadow_base_bytes=0;
+  for(const auto& [id,base]:shadow_bases.items()) {
+    if(!shadow_ids.contains(id)||!base.is_string())
+      throw std::runtime_error("Shadowrocket base requires an enabled service user");
+    const auto& text=base.get_ref<const std::string&>();
+    shadow_base_bytes+=text.size();
+    if(text.empty()||shadow_base_bytes>512*1024||text.find('\0')!=std::string::npos)
+      throw std::runtime_error("Invalid Shadowrocket base profile size");
+  }
   if(!fs::is_directory(options_.state)) {fs::create_directories(options_.state);::chmod(options_.state.c_str(),0700);}
   {auto database=db();database.initialize();}
   if(options_.secret_key.empty())options_.secret_key=options_.state/"security.key";
