@@ -194,6 +194,18 @@ def rollback(backup):
     print('Previous entrances restored and healthy; current users, traffic and encrypted pool state retained.')
 
 
+def check_ports(ports):
+    for port in ports:
+        try:
+            with socket.socket() as listener:
+                # Match Xray/asyncio listeners: a closed connection in TIME_WAIT
+                # is reusable, but an active listening socket still conflicts.
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(('127.0.0.1', port))
+        except OSError as error:
+            raise ValueError(f'Pool port {port} is already in use') from error
+
+
 def install(args):
     managed = Path('/opt/xcli/current').is_symlink()
     if managed and FILES['webshare.py'].read_bytes() != (args.source / 'scripts/webshare.py').read_bytes():
@@ -218,9 +230,7 @@ def install(args):
     state = preflight()
     if state['database_integrity'] != 'ok' or state['pending_additions'] or state['pending_revocations']:
         raise ValueError('Existing core account synchronization is not settled')
-    for port in [p for row in (REGISTRY[4:] if expanding else REGISTRY) for p in row[4:6]]:
-        with socket.socket() as listener:
-            listener.bind(('127.0.0.1', port))
+    check_ports([p for row in (REGISTRY[4:] if expanding else REGISTRY) for p in row[4:6]])
     old = {name: path.read_bytes() for name, path in FILES.items() if path.exists()}
     if any(path.is_symlink() for path in FILES.values()):
         raise ValueError('Customized file symlinks require review')

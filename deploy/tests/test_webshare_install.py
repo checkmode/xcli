@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import socket
 import sys
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,20 @@ spec.loader.exec_module(installer)
 
 
 class WebshareInstallTest(unittest.TestCase):
+    def test_reinstall_accepts_closed_connections_but_rejects_live_listener(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            with self.assertRaises(ValueError):
+                installer.check_ports([port])
+            with socket.create_connection(('127.0.0.1', port), timeout=3) as client:
+                peer, _ = listener.accept()
+                peer.close()
+                self.assertEqual(client.recv(1), b'')
+        installer.check_ports([port])
+
     def setUp(self):
         self.settings = provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
             'PrivateKey: ' + 'a' * 43 + '\nPassword: ' + 'b' * 43)
