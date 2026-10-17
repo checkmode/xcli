@@ -13,6 +13,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 import release
+from build_environment import ensure_build_user
 
 
 def update(source, revision, bundle=None, sha256=None):
@@ -41,15 +42,16 @@ def update(source, revision, bundle=None, sha256=None):
                 if missing:
                     run(['apt-get', 'update'])
                     run(['apt-get', 'install', '-y', '--no-install-recommends', '--no-upgrade', *missing])
+                builder = ensure_build_user(run)
                 cache = Path('/var/cache/xcli/builds')
                 cache.mkdir(parents=True, exist_ok=True)
                 cache.chmod(0o755)
                 cache.parent.chmod(0o755)
                 work = Path(tempfile.mkdtemp(prefix='update-', dir=cache))
-                shutil.chown(work, 'xgateway', 'xgateway')
-                work.chmod(0o755)
+                shutil.chown(work, builder, builder)
+                work.chmod(0o700)
                 bundle = work / 'release.tar.gz'
-                run(['runuser', '-u', 'xgateway', '--', 'bash', source / 'deploy/build-source-release.sh',
+                run(['runuser', '-u', builder, '-g', builder, '--', 'bash', source / 'deploy/build-source-release.sh',
                      source, revision, bundle])
                 sha256 = release.digest(bundle)
             with manager.lock():

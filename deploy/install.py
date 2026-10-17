@@ -23,6 +23,7 @@ from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
                        initialize_admin, monitor_config, private_file, public_ipv4,
                        render_firewall, render_nginx, settings_for, write_json)
 from certificate import install_tls
+from build_environment import BUILD_USER, ensure_build_user
 import release
 
 Path = pathlib.Path
@@ -119,13 +120,13 @@ def preflight(args):
     found = existing_paths()
     if found:
         raise ValueError('拒绝覆盖已有配置：' + ', '.join(found))
-    for name in ('xgateway', 'xgprobe'):
+    for name in ('xgateway', 'xgprobe', BUILD_USER):
         try:
             pwd.getpwnam(name)
         except KeyError:
             continue
         raise ValueError(f'系统账户 {name} 已存在，请先人工核对旧安装')
-    for name in ('xgateway', 'xgmonitor'):
+    for name in ('xgateway', 'xgmonitor', BUILD_USER):
         try:
             grp.getgrnam(name)
         except KeyError:
@@ -266,10 +267,11 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         self.run(['useradd', '--system', '--no-create-home', '--home-dir', '/nonexistent',
                   '--shell', '/usr/sbin/nologin', '--gid', 'xgmonitor', 'xgprobe'])
         # Fresh install, source update and CI all use the same bundle builder.
+        builder = ensure_build_user(self.run)
         cache = self.directory('/var/cache/xcli/builds')
-        self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), user='xgateway', group='xgateway')
+        self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), 0o700, user=builder, group=builder)
         self.bundle = self.build / 'release.tar.gz'
-        self.run(['runuser', '-u', 'xgateway', '--', 'bash', self.args.source / 'deploy/build-source-release.sh',
+        self.run(['runuser', '-u', builder, '-g', builder, '--', 'bash', self.args.source / 'deploy/build-source-release.sh',
                   self.args.source, self.args.commit, self.bundle])
         version = re.search(r'project\([^\n]*VERSION\s+([0-9.]+)', (self.args.source / 'cpp/CMakeLists.txt').read_text())
         if not version:

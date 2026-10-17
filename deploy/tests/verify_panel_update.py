@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -14,6 +16,16 @@ import release
 
 
 def main():
+    # Real host policy: builders can run loopback fixtures, while the service
+    # identity remains restricted and build processes cannot read live secrets.
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        probe = 'import socket; socket.create_connection(("127.0.0.1", ' + str(listener.getsockname()[1]) + '), 2).close()'
+        for user, expected in (('xcli-build', 0), ('xgateway', 1)):
+            result = subprocess.run(['runuser', '-u', user, '-g', user, '--', 'python3', '-c', probe], capture_output=True)
+            assert result.returncode == expected, 'Unexpected loopback access for ' + user
+    assert subprocess.run(['runuser', '-u', 'xcli-build', '--', 'test', '-r', '/etc/xray-gateway/settings.json']).returncode == 1
     manager = release.Manager()
     status = manager.status()
     assert status['panel_matches_current'] and status['component_hashes_verified']
@@ -40,6 +52,18 @@ def main():
     subprocess.run(['bash', 'update.sh', '--yes', '--rollback'], check=True)
     assert manager.current.resolve() == previous
     subprocess.run(['python3', 'cpp/tests/migration_state.py', 'verify', '/root/xcli-before-update.json'], check=True)
+    root_backups = set(Path('/root').glob('xray-gateway-*.sqlite'))
+    manual = Path('/var/backups/xcli/manual')
+    before_backups = set(manual.glob('*.sqlite'))
+    subprocess.run(['xcli-admin', 'backup'], check=True)
+    backups = set(manual.glob('*.sqlite')) - before_backups
+    assert len(backups) == 1, 'Backup after rollback must use managed storage, including legacy baselines'
+    backup = backups.pop()
+    assert backup.stat().st_mode & 0o777 == 0o600
+    with sqlite3.connect('file:' + str(backup) + '?mode=ro', uri=True) as db:
+        assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
+    assert set(Path('/root').glob('xray-gateway-*.sqlite')) == root_backups
+    release.validate_manifest(previous)
     subprocess.run(['xcli-release', 'activate', current.name], check=True)
     assert manager.current.resolve() == current
     for unit, pid in record['retained_pids'].items():
