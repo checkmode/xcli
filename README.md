@@ -18,12 +18,12 @@
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash
 ```
 
-按提示填写面板域名、证书邮箱、公网 IPv4 并确认安装。**无需手动下载或克隆代码仓库**：脚本自动解析固定提交、下载源码包、安装依赖并编译 C++ 面板，再安装经过 SHA-256 校验的官方 Xray、Nginx、HTTPS 证书和探测服务。首次构建需要数分钟，耗时取决于服务器和网络。
+按提示填写面板域名、证书邮箱、公网 IPv4 并确认安装。**无需手动下载或克隆代码仓库**：脚本自动解析固定提交、下载源码包、安装依赖并编译 C++ 面板，生成完整版本包并安装到 `/opt/xcli/releases/`，再配置经过 SHA-256 校验的官方 Xray、Nginx、HTTPS 证书和探测服务。安装和后续更新使用同一套版本管理机制。首次构建需要数分钟，耗时取决于服务器和网络。
 
 安装完成后访问输出的 HTTPS 地址。管理员用户名为 `admin`；随机初始密码仅保存在服务器的 root 私有文件中，使用下面的命令查看：
 
 ```sh
-sudo cat /root/xray-gateway-admin.txt
+sudo cat /etc/xray-gateway/initial-admin.txt
 ```
 
 登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx，同时更新 Hysteria 2 专用证书副本；Xray 在证书重载周期内（最长约 1 小时）读取新文件。
@@ -61,7 +61,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 安装结束会验证管理服务、受信任的 HTTPS、核心账号同步，以及三个入口的 HTTPS / UDP 自检。若管理服务正常但节点自检尚未通过，保留已安装服务并返回退出码 `2`，请登录查看健康监测；这不表示完整节点验证成功。
 
-安装日志位于 `/root/xcli-install-时间/install.log`。中途失败会停用本次新增服务、撤销本次专属防火墙规则，保留凭据、数据库、证书和日志；已安装的系统软件包也会保留。该目录内的 `rollback.sh` 可手动停用本次安装。失败后先检查日志，不要删除配置后盲目重试；再次运行会拒绝覆盖保留的数据。
+安装日志位于 `/var/backups/xcli/install/<时间>/install.log`。中途失败会停用本次新增服务、撤销本次专属防火墙规则，保留凭据、数据库、证书和日志；已安装的系统软件包也会保留。该目录内的 `rollback.sh` 可手动停用本次安装。失败后先检查日志，不要删除配置后盲目重试；再次运行会拒绝覆盖保留的数据。
 
 安装测试覆盖 Ubuntu 24.04 / 26.04 与 AMD64 / ARM64 的临时机器，使用受测试系统信任的临时证书；公网 Let's Encrypt 签发仍取决于实际域名解析、80 端口可达性及签发方限制。
 
@@ -125,7 +125,7 @@ sudo python3 /opt/xray-gateway/scripts/proxy_import.py enable-vmess
 
 ```sh
 sudo python3 deploy/residential.py install --source "$PWD" \
-  --pool /root/residential-proxies.json --backup /root/xcli-residential-new
+  --pool /root/residential-proxies.json --backup /var/backups/xcli/configuration/residential-new
 ```
 
 备份目录必须尚不存在。脚本保存配置和数据库一致性快照，验证 Xray 与 Nginx 候选配置后，更新入口、固定出口路由、订阅元数据和探测配置。核心与管理面板会重启，已有连接短暂重连；Nginx 只重载。首次全量节点自检失败时自动回退；也可运行输出目录的 `rollback.sh` 手动回退。回退保留当前数据库及新产生的累计流量。
@@ -141,10 +141,10 @@ sudo python3 deploy/residential.py install --source "$PWD" \
 ```sh
 sudo apt-get install -y python3-cryptography curl
 sudo python3 deploy/webshare-pool.py install --source "$PWD" \
-  --backup /root/xcli-webshare-new
+  --backup /var/backups/xcli/configuration/webshare-new
 ```
 
-备份目录必须尚不存在。安装成功后，在面板「动态住宅池」中完成配置：
+备份目录必须尚不存在。已纳入版本管理的部署只修改入口配置；若源码中的动态池程序与当前版本不同，先运行一键更新。安装成功后，在面板「动态住宅池」中完成配置：
 
 1. 填写 Webshare API Key，点击「保存并读取套餐」。密钥保存后不回显。
 2. 选择已生效的动态住宅套餐，勾选「启用动态住宅入口」，点击「保存套餐与启用状态」。普通数据中心套餐和固定 ISP 套餐不可用于动态池。
@@ -168,11 +168,11 @@ sudo python3 deploy/webshare-pool.py install --source "$PWD" \
 
 API Key、上游凭据和会话缓存使用 AES-256-GCM 加密保存在 `/var/lib/xray-gateway/webshare/`；目录仅服务账号可读写。客户端订阅只包含用户自己的入口凭据。页面中的地区探测证明服务器到 Webshare 上游出口可达，不等同于客户端到公网入口的完整验证。状态超过 30 秒未更新时显示过期，可检查 `xray-gateway-webshare.service`。
 
-后续一键更新会同步已安装的动态池程序；仅程序或服务单元有变化时重启池服务，此时动态住宅连接需要重连。新增入口的首次部署仍使用上面的安装命令。已有四地区动态池先更新面板，再从同版本源码目录执行扩容，原有四个入口路径、API Key、套餐及用户保持不变：
+后续一键更新通过完整版本包同步动态池程序；仅程序变化时重启池服务，此时动态住宅连接需要重连。服务单元变化需要另行迁移。新增入口的首次部署仍使用上面的安装命令。已有四地区动态池先更新面板，再从同版本源码目录执行扩容，原有四个入口路径、API Key、套餐及用户保持不变：
 
 ```sh
 sudo python3 deploy/webshare-pool.py expand --source "$PWD" \
-  --backup /root/xcli-webshare-countries-new
+  --backup /var/backups/xcli/configuration/webshare-countries-new
 ```
 
 扩容会重启核心和动态池服务，已有连接需要重连。成功后更新客户端订阅以获取新增国家。手动回退入口时运行安装输出的 `rollback.sh`；如还要回退至不支持动态池的旧面板，先回退入口配置。
@@ -356,19 +356,32 @@ sudo bash cpp/tests/run-webhook-tests.sh "$PWD" "$PWD/build/xray-gateway-panel"
 
 ## 升级已有部署
 
-### 一键更新已有 1.3.0 面板
+### 一键更新与回退
 
-已运行 1.3.0、四个服务正常的 Ubuntu 24.04 / 26.04 主机，可直接执行：
+已有完整 1.3.0 部署的 Ubuntu 24.04 / 26.04 主机使用同一个更新入口：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/update.sh | sudo bash
 ```
 
-脚本解析固定提交、下载源码、安装缺少的编译依赖，并以服务账号编译、运行 C++ 单元测试。候选版本通过数据库和核心账号预检查后，脚本保存一致性备份，更新管理程序和静态页面并重启面板；已安装动态池时同步其程序，内容变化时重启池服务。更新期间管理页面短暂中断；现有用户、订阅、二次验证和累计流量保留，Xray 和 Nginx 不重启；探测脚本有变化时会更新并重启探测服务。脚本不会更新核心版本、证书、防火墙、系统 DNS 或网络参数。
+脚本固定源码提交、安装缺少的构建依赖，以服务账号构建并测试完整版本包，再交给 `xcli-release` 校验、预检查和原子切换。面板、静态页面、节点导入、监测和动态池程序保存在 `/opt/xcli/releases/<版本编号>/`，由 `current` 统一选择。首次更新旧布局时，会先封存实际运行文件、保存主机脚本并把旧路径改为兼容链接；后续更新直接使用相同流程。
 
-无人值守时添加 `-s -- --yes`；添加 `-s -- --check` 只检查已有部署；`--ref` 可固定完整的 40 位提交。日志、配置快照、数据库备份及 `rollback.sh` 保存于输出的 `/root/xcli-update-XXXXXXXX` 目录。切换后验证失败会自动恢复旧面板；手动执行该目录的 `rollback.sh` 也可回退。回退保留当前数据库及更新后产生的流量，新增编译依赖保留。
+候选程序先在数据库副本上检查兼容性。切换时短暂重启面板，只在配套程序变化时重启对应服务；动态池程序变化会使其连接重连。Xray、Nginx、证书、节点配置与网络参数保持现状。发布和回退都保留当前用户、订阅、管理认证和累计流量，不用旧快照覆盖数据库。
 
-更新结束会核对用户身份、密码、已有会话、二次验证、累计流量及三个后台服务的进程。随后登录面板，检查概览运行信息、接入节点状态和诊断页；权限不足或没有采样的数据应显示未知。此入口仅处理 1.3.0 内的面板更新，旧版部署先按下文完成版本迁移。
+无人值守使用 `--yes`；`--ref` 可固定完整的 40 位提交。检查、回退与中断恢复分别使用：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/update.sh | sudo bash -s -- --check
+sudo xcli-release status
+sudo xcli-release rollback
+sudo xcli-release recover  # 仅存在未完成发布事务时使用
+```
+
+`update.sh --yes --rollback` 也调用同一个回退工具。正常发布失败会自动恢复上一份程序；被杀死、断电或自动恢复未完成时，保留事务并阻止下一次发布，检查后执行 `recover`。初次安装只有一个版本，没有可供普通回退的 `previous`；安装失败的停用脚本仍保存在安装日志目录中。
+
+更新构建日志位于 `/var/backups/xcli/updates/`，发布快照与事务记录位于 `/var/backups/xcli/releases/`，临时构建和数据库副本位于 `/var/cache/xcli/`。已有 GitHub Actions 版本包可通过 `update.sh --bundle /absolute/path/package.tar.gz --sha256 PACKAGE_SHA256 --yes` 更新，不在生产机编译；包必须匹配本机 Ubuntu 版本与 CPU 架构。
+
+[应用安装、发布与回退手册](docs/operations/releases.md) 说明目录归属、固定提交构建、分步发布和故障恢复。`deploy/update-panel.sh` 只保留转到新流程的兼容入口，旧式原地覆盖实现已移除。更早的数据库或 Xray 版本迁移按下文处理；历史脚本拒绝覆盖已纳入版本管理的部署。
 
 ### 1.2.0 升级到 1.3.0
 
@@ -468,7 +481,7 @@ sudo journalctl -u xray-gateway-panel -u xray-gateway-monitor -n 50 --no-pager
 忘记管理密码时，可通过本机 root 维护工具交互式重置：
 
 ```sh
-sudo python3 /opt/xray-gateway/scripts/gatewayctl.py reset-password
+sudo xcli-admin reset-password
 ```
 
 如果验证器和所有恢复码均丢失，root 可执行同一工具的 `disable-mfa` 操作，输入明确确认短语后关闭二次验证并退出所有会话。此操作会记入管理日志，之后应重新绑定验证器。

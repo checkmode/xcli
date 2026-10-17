@@ -28,7 +28,8 @@ def run(*args):
 def main():
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() != 0:
         raise SystemExit('Only run as root on a disposable GitHub Actions machine')
-    root = Path('/root/xcli-webshare-ci')
+    base = Path('/var/backups/xcli/configuration') if Path('/opt/xcli/current').is_symlink() else Path('/root')
+    root = base / 'xcli-webshare-ci'
     original = {name: Path('/etc/xray-gateway', name).read_bytes() for name in ('settings.json', 'core.json')}
     nginx_pid = run('systemctl', 'show', 'nginx', '-p', 'MainPID', '--value')
     run('python3', SOURCE / 'cpp/tests/migration_state.py', 'save', '/root/xcli-webshare-before.json')
@@ -48,8 +49,8 @@ def main():
                 assert client.recv(10)[1] != 0, 'Unconfigured pool must never connect directly'
     finally:
         run('bash', root / 'rollback.sh')
-    legacy = Path('/root/xcli-webshare-legacy-ci')
-    expansion = Path('/root/xcli-webshare-expand-ci')
+    legacy = base / 'xcli-webshare-legacy-ci'
+    expansion = base / 'xcli-webshare-expand-ci'
     with patch.object(installer, 'REGISTRY', installer.REGISTRY[:4]), patch.object(installer, 'ALLOW', installer.LEGACY_ALLOW):
         installer.install(SimpleNamespace(action='install', source=SOURCE, backup=legacy))
     legacy_settings = Path('/etc/xray-gateway/settings.json').read_bytes()

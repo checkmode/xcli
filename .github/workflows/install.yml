@@ -15,13 +15,13 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - name: Unit checks
         run: |
           bash -n install.sh
-          bash -n update.sh deploy/update-panel.sh
+          bash -n update.sh deploy/update-panel.sh deploy/build-release.sh deploy/build-source-release.sh deploy/install-release-tools.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-cryptography
           python3 -m unittest discover -s deploy/tests -v
@@ -40,7 +40,7 @@ jobs:
             chmod 755 "$work"
             mkdir "$work/source"
             git archive HEAD | tar -x -C "$work/source"
-            sudo python3 "$work/source/deploy/install.py" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
+            sudo python3 "$work/source/deploy/install.py" --commit "$GITHUB_SHA" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
               --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key" --tune-network
           fi
       - name: Real accounting and Hysteria 2 revocation in isolated test instances
@@ -49,7 +49,12 @@ jobs:
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
               cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py cpp/tests/test_webshare.py
-      - name: Verify one-click panel update and rollback
+      - name: Verify optional configuration changes keep the application release sealed
+        if: matrix.os == 'ubuntu-26.04-arm'
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_webshare.py
+          sudo xcli-release check
+      - name: Verify one-click complete update, rollback and reactivation
         run: |
           sudo python3 cpp/tests/migration_state.py save /root/xcli-before-update.json
           sudo bash update.sh --check
@@ -63,7 +68,7 @@ jobs:
             sudo bash "$work/source/deploy/update-panel.sh" "$work/source" "$GITHUB_SHA"
           fi
           sudo python3 cpp/tests/migration_state.py verify /root/xcli-before-update.json
-          sudo python3 deploy/tests/verify_panel_update.py
+          sudo --preserve-env=GITHUB_SHA python3 deploy/tests/verify_panel_update.py
       - name: Verify login and safe repeat refusal
         run: sudo python3 deploy/tests/verify_install.py
       - name: Installation diagnostics on failure
@@ -72,7 +77,7 @@ jobs:
           sudo systemctl --no-pager --full status nginx xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
           sudo journalctl --no-pager -n 60 -u xray-gateway-core -u xray-gateway-panel -u xray-gateway-monitor || true
           sudo cat /var/lib/xray-gateway-monitor/report.json || true
-          sudo sh -c 'for file in /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'
+          sudo sh -c 'for file in /var/backups/xcli/install/*/install.log /var/backups/xcli/updates/*/update.log; do test ! -f "$file" || tail -n 100 "$file"; done'
   upgrade:
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 35
@@ -122,3 +127,45 @@ jobs:
           sudo cat /var/lib/xray-gateway-monitor/report.json || true
           sudo sh -c 'test ! -f /root/xcli-upgrade-ci/upgrade.log || tail -n 100 /root/xcli-upgrade-ci/upgrade.log'
           sudo sh -c 'for file in /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 60 "$file"; done'
+  adopt:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: 7a578c200538cdb65147f70be77878bc669f870c
+          path: legacy
+      - name: Prepare disposable machine and trusted test certificate
+        run: bash deploy/tests/prepare-machine.sh
+      - name: Install the last legacy 1.3.0 layout and seed real users
+        run: |
+          work=$(mktemp -d /var/tmp/xcli-adoption-test.XXXXXXXX)
+          chmod 755 "$work"
+          mkdir "$work/source"
+          git -C legacy archive HEAD | tar -x -C "$work/source"
+          sudo python3 "$work/source/deploy/install.py" --commit 7a578c200538cdb65147f70be77878bc669f870c \
+            --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
+            --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
+          sudo python3 deploy/tests/verify_upgrade.py seed
+          sudo python3 cpp/tests/migration_state.py save /root/xcli-before-update.json
+      - name: Update through the same entry point, adopting only the first time
+        run: |
+          work=$(mktemp -d /var/tmp/xcli-update-test.XXXXXXXX)
+          chmod 755 "$work"
+          mkdir "$work/source"
+          git archive HEAD | tar -x -C "$work/source"
+          sudo bash "$work/source/deploy/update-panel.sh" "$work/source" "$GITHUB_SHA"
+          sudo python3 cpp/tests/migration_state.py verify /root/xcli-before-update.json
+          sudo --preserve-env=GITHUB_SHA python3 deploy/tests/verify_panel_update.py
+      - name: Configuration migrations preserve the sealed application payload
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_residential.py
+          sudo --preserve-env=GITHUB_ACTIONS python3 deploy/tests/verify_webshare.py
+          sudo xcli-release check
+      - name: Adoption diagnostics on failure
+        if: failure()
+        run: |
+          sudo systemctl --no-pager --full status xray-gateway-panel xray-gateway-import xray-gateway-monitor || true
+          sudo journalctl --no-pager -n 60 -u xray-gateway-panel -u xray-gateway-import || true
+          sudo sh -c 'for file in /var/backups/xcli/updates/*/update.log /root/xcli-install-*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'

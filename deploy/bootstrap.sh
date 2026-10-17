@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Historical migration only; never overwrite a managed application release.
+if [[ -L /opt/xcli/current ]]; then
+    echo '部署已纳入完整版本管理；请使用 update.sh 或 xcli-release。' >&2
+    exit 1
+fi
 [[ $EUID == 0 ]] || { echo 'Run with sudo'; exit 1; }
 [[ $(uname -m) == aarch64 ]] || { echo 'Expected ARM64'; exit 1; }
 backup=/root/xray-gateway-before-$(date -u +%Y%m%dT%H%M%SZ)

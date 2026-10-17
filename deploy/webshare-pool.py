@@ -164,6 +164,8 @@ def rollback(backup):
         subprocess.run(['systemctl', 'disable', SERVICE], capture_output=True)
     run('systemctl', 'stop', 'xray-gateway-monitor', 'xray-gateway-panel')
     for name, path in FILES.items():
+        if name == 'webshare.py' and Path('/opt/xcli/current').is_symlink():
+            continue  # Configuration rollback never changes an immutable application release.
         if name in manifest['existing']:
             if path.exists():
                 replace(path, (backup / name).read_bytes(), backup / name)
@@ -193,10 +195,14 @@ def rollback(backup):
 
 
 def install(args):
-    if args.backup.parent != Path('/root') or args.backup.exists():
-        raise ValueError('Use a new backup directory directly under /root')
+    managed = Path('/opt/xcli/current').is_symlink()
+    if managed and FILES['webshare.py'].read_bytes() != (args.source / 'scripts/webshare.py').read_bytes():
+        raise ValueError('先通过 update.sh 发布匹配的完整应用版本，再调整动态池配置')
+    allowed = [Path('/var/backups/xcli/configuration')] + ([] if managed else [Path('/root')])
+    if args.backup.parent not in allowed or args.backup.exists():
+        raise ValueError('Use a new backup directory under /var/backups/xcli/configuration')
     expanding = args.action == 'expand'
-    present = [FILES[name].exists() for name in ('locations.conf', 'webshare.py', 'webshare.service')]
+    present = [FILES[name].exists() for name in ('locations.conf', 'webshare.service')]
     if (not expanding and any(present)) or (expanding and not all(present)):
         raise ValueError('Use install for a new pool or expand for an existing four-country pool')
     for service in ('xray-gateway-core', 'xray-gateway-panel', 'xray-gateway-monitor', 'nginx'):
@@ -219,6 +225,7 @@ def install(args):
     if any(path.is_symlink() for path in FILES.values()):
         raise ValueError('Customized file symlinks require review')
     settings, core, nginx, firewall, locations = configure(json.loads(old['settings.json']), json.loads(old['core.json']), old['nginx.conf'].decode(), old['firewall.sh'].decode(), expand=expanding)
+    args.backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.backup.mkdir(mode=0o700)
     for name in old:
         shutil.copy2(FILES[name], args.backup / name)
@@ -246,7 +253,8 @@ def install(args):
     os.chmod(directory, 0o700)
     os.chown(directory, owner.pw_uid, owner.pw_gid)
     try:
-        install_file(FILES['webshare.py'], (args.source / 'scripts/webshare.py').read_bytes())
+        if not managed:
+            install_file(FILES['webshare.py'], (args.source / 'scripts/webshare.py').read_bytes())
         install_file(FILES['webshare.service'], (args.source / 'deploy/xray-gateway-webshare.service').read_bytes())
         replace(FILES['firewall.sh'], firewall)
         run('iptables', '-w', '-I', 'XG_OUT', '1', *ALLOW)

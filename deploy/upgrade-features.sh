@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Upgrade an already provisioned gateway. Does not rewrite settings or restart Xray/Nginx.
 set -euo pipefail
+# Historical migration only; never overwrite a managed application release.
+if [[ -L /opt/xcli/current ]]; then
+    echo '部署已纳入完整版本管理；请使用 update.sh 或 xcli-release。' >&2
+    exit 1
+fi
 [[ $EUID == 0 && $# == 3 ]] || { echo 'Usage: sudo upgrade-features.sh SOURCE_DIR VERIFIED_BINARY NEW_ROOT_BACKUP_DIR'; exit 1; }
 source_dir=$(realpath -- "$1")
 candidate=$(realpath -- "$2")

@@ -15,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -22,6 +23,7 @@ from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
                        initialize_admin, monitor_config, private_file, public_ipv4,
                        render_firewall, render_nginx, settings_for, write_json)
 from certificate import install_tls
+import release
 
 Path = pathlib.Path
 SERVICES = ('xray-gateway-firewall', 'xray-gateway-core', 'xray-gateway-panel', 'xray-gateway-monitor', 'xray-gateway-import')
@@ -29,13 +31,12 @@ OWNED_PATHS = ('/etc/xray-gateway', '/etc/xcli-monitor', '/var/lib/xray-gateway'
                '/var/lib/xray-gateway-monitor', '/var/lib/xray-gateway-import', '/usr/local/lib/xray-gateway',
                '/opt/xray-gateway', '/root/xray-gateway-admin.txt', '/etc/nginx',
                '/etc/sysctl.d/91-xray-gateway-network.conf', '/etc/modules-load.d/xray-gateway-network.conf',
-               '/etc/systemd/system/xray-gateway-network.service')
+               '/etc/systemd/system/xray-gateway-network.service', '/opt/xcli',
+               '/usr/local/lib/xcli', '/var/lib/xcli', '/var/backups/xcli', '/var/cache/xcli',
+               '/usr/local/sbin/xcli-release', '/usr/local/sbin/xcli-layout', '/usr/local/sbin/xcli-admin')
 PORTS = (80, 443, 8080, 8443, 10080, 10085, 10443)
-PACKAGES = ('g++ cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-dev '
-            'libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev '
-            'libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc '
-            'nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod '
-            'python3-fastapi python3-qrcode python3-pil python3-cryptography').split()
+PACKAGES = (Path(__file__).with_name('build-packages.txt').read_text().split()
+            + 'nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod'.split())
 
 
 def arguments(argv=None):
@@ -138,8 +139,8 @@ def preflight(args):
     check_udp_port()
     if bool(args.certificate) != bool(args.private_key):
         raise ValueError('--certificate 和 --private-key 必须一起提供')
-    if args.commit != 'local' and not re.fullmatch('[0-9a-f]{40}', args.commit):
-        raise ValueError('提交编号格式不正确')
+    if not args.check and not re.fullmatch('[0-9a-f]{40}', args.commit):
+        raise ValueError('安装必须使用固定的 40 位提交；请通过 install.sh 或传入 --commit')
     for name in ('cpp/CMakeLists.txt', 'static/index.html', 'deploy/templates/nginx.conf'):
         if not (args.source / name).is_file():
             raise ValueError('源码包不完整：' + name)
@@ -198,8 +199,8 @@ class Installer:
     def __init__(self, args, arch, resolvers):
         self.args, self.arch, self.resolvers = args, arch, resolvers
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        self.backup = Path('/root') / ('xcli-install-' + stamp)
-        self.backup.mkdir(mode=0o700)
+        self.backup = Path('/var/backups/xcli/install') / stamp
+        self.backup.mkdir(parents=True, mode=0o700)
         self.log = self.backup / 'install.log'
         private_file(self.log, '')
         self.packages_started = False
@@ -264,9 +265,12 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         self.run(['groupadd', '--system', 'xgmonitor'])
         self.run(['useradd', '--system', '--no-create-home', '--home-dir', '/nonexistent',
                   '--shell', '/usr/sbin/nologin', '--gid', 'xgmonitor', 'xgprobe'])
-        # The source remains root-owned. Compilation runs without root privileges.
-        self.build = self.directory(self.args.source.parent / 'build', user='xgateway', group='xgateway')
-        self.run(['runuser', '-u', 'xgateway', '--', 'bash', self.args.source / 'deploy/build-cpp.sh', self.build])
+        # Fresh install, source update and CI all use the same bundle builder.
+        cache = self.directory('/var/cache/xcli/builds')
+        self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), user='xgateway', group='xgateway')
+        self.bundle = self.build / 'release.tar.gz'
+        self.run(['runuser', '-u', 'xgateway', '--', 'bash', self.args.source / 'deploy/build-source-release.sh',
+                  self.args.source, self.args.commit, self.bundle])
         version = re.search(r'project\([^\n]*VERSION\s+([0-9.]+)', (self.args.source / 'cpp/CMakeLists.txt').read_text())
         if not version:
             raise ValueError('未找到管理服务版本')
@@ -284,19 +288,13 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             raise ValueError('Xray 文件的 SHA-256 不匹配，停止安装')
         with zipfile.ZipFile(archive) as zipped:
             private_file(base / 'xray', zipped.read('xray'), 0o755)
-        self.release = self.directory(base / 'releases' / f'cpp-{self.version}-{self.args.commit[:12]}')
-        self.copy(self.build / 'xray-gateway-panel', self.release / 'xray-gateway-panel', 0o755)
-        shutil.copytree(self.args.source / 'static', self.release / 'static')
-        (base / 'panel-current').symlink_to(self.release / 'xray-gateway-panel')
-        app = self.directory('/opt/xray-gateway')
-        self.copy(self.args.source / 'app.py', app / 'app.py')
-        (app / 'static').symlink_to(self.release / 'static')
-        for directory in ('scripts', 'deploy'):
-            self.directory(app / directory)
-        for name in ('probe.py', 'gatewayctl.py', 'proxy_import.py', 'proxy_vmess.py'):
-            self.copy(self.args.source / 'scripts' / name, app / 'scripts' / name)
-        self.copy(self.args.source / 'deploy/certificate.py', app / 'deploy/certificate.py')
-        self.copy(self.args.source / 'deploy/network.py', app / 'deploy/network.py')
+        self.manager = release.Manager()
+        with self.manager.lock():
+            staged = self.manager.stage(self.bundle, release.digest(self.bundle))
+        self.release_id = staged['staged']
+        host = self.directory('/usr/local/lib/xcli/host')
+        for name in ('certificate.py', 'network.py'):
+            self.copy(self.args.source / 'deploy' / name, host / name)
         config = self.directory('/etc/xray-gateway', 0o750, group='xgateway')
         state = self.directory('/var/lib/xray-gateway', 0o700, 'xgateway', 'xgateway')
         self.directory('/var/lib/xray-gateway-import', 0o750, group='xgateway')
@@ -311,12 +309,13 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             shutil.chown(config / name, 'root', 'xgateway')
         write_json(monitor / 'monitor.json', monitor_config(self.settings))
         shutil.chown(monitor / 'monitor.json', 'root', 'xgmonitor')
-        initialize_admin(state / 'gateway.sqlite', Path('/root/xray-gateway-admin.txt'), self.args.domain)
+        initialize_admin(state / 'gateway.sqlite', config / 'initial-admin.txt', self.args.domain)
         shutil.chown(state / 'gateway.sqlite', 'xgateway', 'xgateway')
         write_json(config / 'installation.json', {'version': self.version, 'commit': self.args.commit,
             'architecture': self.arch, 'xray': XRAY_VERSION, 'installed': int(time.time()),
             'certificate': 'provided' if self.args.certificate else 'letsencrypt'}, 0o600)
-        private_file(app / 'deploy/firewall.sh', render_firewall(self.args.public_ip, self.resolvers), 0o755)
+        private_file(host / 'firewall.sh', render_firewall(self.args.public_ip, self.resolvers), 0o755)
+        release.atomic_json(host / 'manifest.json', {p.name: release.digest(p) for p in host.iterdir()}, 0o444)
         for tool, name in (('iptables-save', 'iptables.v4.before'), ('ip6tables-save', 'iptables.v6.before')):
             private_file(self.backup / name, self.run([tool], capture=True))
         for service in SERVICES:
@@ -328,10 +327,11 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             'Environment=XG_SECRET_KEY=/etc/xray-gateway/security.key\n'
             'Environment=XG_MONITOR_CONFIG=/etc/xcli-monitor/monitor.json\n'
             'Environment=XG_MONITOR_REPORT=/var/lib/xray-gateway-monitor/report.json\n'
-            'Environment=XG_BACKUP_INTERVAL=21600\nEnvironment=XG_BACKUP_RETENTION=28\n'
-            f'Environment=XG_STATIC={self.release}/static\n', 0o644)
+            'Environment=XG_BACKUP_INTERVAL=21600\nEnvironment=XG_BACKUP_RETENTION=28\n', 0o644)
         self.services_installed = True
-        self.run(['systemctl', 'daemon-reload'])
+        self.run(['bash', self.args.source / 'deploy/install-release-tools.sh'])
+        self.manager.initialize(self.release_id)
+        shutil.rmtree(self.build)
 
     def nginx_config(self, certificate=None, key=None):
         target = Path('/etc/nginx/nginx.conf')
@@ -403,6 +403,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         self.run(['systemctl', 'enable', '--now', 'xray-gateway-monitor', 'xray-gateway-import'])
         for service in (*SERVICES, 'nginx'):
             self.run(['systemctl', 'is-active', '--quiet', service])
+        self.manager.host.health(self.manager.current.resolve(), release.BASE_UNITS)
         probe = Path('/var/lib/xray-gateway-monitor/report.json')
         for attempt in range(100):
             if probe.is_file():
@@ -430,8 +431,8 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
                   '请根据日志处理，勿删除已有配置后盲目重试。', file=sys.stderr, flush=True)
             raise
         print(f'\n安装完成： https://{self.args.domain}/\n'
-              '管理员用户名：admin\n初始密码文件：/root/xray-gateway-admin.txt（仅 root 可读）\n'
-              '查看凭据：sudo cat /root/xray-gateway-admin.txt\n'
+              '管理员用户名：admin\n初始密码文件：/etc/xray-gateway/initial-admin.txt（仅 root 可读）\n'
+              '查看凭据：sudo cat /etc/xray-gateway/initial-admin.txt\n'
               f'日志与停用脚本：{self.backup}\n'
               + ('已有证书不会自动续期，请按原有方式更新安装目录内的证书并重载 Nginx。\n' if self.args.certificate else ''), flush=True)
         return 0 if healthy else 2

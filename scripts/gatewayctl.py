@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Root-only local recovery and consistent database backup."""
 import argparse,datetime,getpass,os,pathlib,sqlite3,sys
-sys.path.insert(0,'/opt/xray-gateway')
+sys.dont_write_bytecode=True
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 import app
 p=argparse.ArgumentParser(description='Xdistribute 管理维护工具')
 p.add_argument('action',choices=['backup','reset-password','disable-mfa','status'])
@@ -9,7 +10,9 @@ p.add_argument('--output',help='备份数据库绝对路径')
 a=p.parse_args()
 if os.geteuid()!=0:raise SystemExit('请使用 sudo 执行')
 if a.action=='backup':
-    dest=pathlib.Path(a.output or '/root/xray-gateway-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'.sqlite')
+    backup_root=pathlib.Path('/var/backups/xcli/manual')
+    if not a.output:backup_root.mkdir(parents=True,exist_ok=True,mode=0o700);backup_root.chmod(0o700)
+    dest=pathlib.Path(a.output) if a.output else backup_root/('gateway-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'.sqlite')
     if not dest.is_absolute() or dest.exists():raise SystemExit('目标必须为不存在的绝对路径')
     fd=os.open(dest,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
     with app.db() as src,sqlite3.connect(dest) as dst:src.backup(dst)

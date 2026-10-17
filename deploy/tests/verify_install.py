@@ -11,7 +11,10 @@ import urllib.request
 
 
 def main():
-    credential = pathlib.Path('/root/xray-gateway-admin.txt')
+    assert pathlib.Path('/opt/xcli/current').is_symlink()
+    assert pathlib.Path('/opt/xray-gateway/scripts').is_symlink()
+    subprocess.run(['xcli-release', 'check'], check=True)
+    credential = pathlib.Path('/etc/xray-gateway/initial-admin.txt')
     fields = dict(line.split(': ', 1) for line in credential.read_text().splitlines())
     settings = json.loads(pathlib.Path('/etc/xray-gateway/settings.json').read_text())
     domain = settings['domain']
@@ -49,7 +52,7 @@ def main():
         assert hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() == digest
     subprocess.run(['python3', '/opt/xray-gateway/scripts/gatewayctl.py', 'status'], check=True)
     print('Initial administrator login, HTTPS cookie, database, disabled-by-default features, recovery tool and repeat-install refusal passed.')
-    rollback = sorted(pathlib.Path('/root').glob('xcli-install-*/rollback.sh'))[-1]
+    rollback = sorted(pathlib.Path('/var/backups/xcli/install').glob('*/rollback.sh'))[-1]
     subprocess.run(['sh', str(rollback)], check=True)
     for service in ('xray-gateway-panel', 'xray-gateway-core', 'xray-gateway-monitor', 'xray-gateway-firewall', 'nginx'):
         assert subprocess.run(['systemctl', 'is-active', '--quiet', service]).returncode != 0

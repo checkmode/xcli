@@ -45,7 +45,7 @@ HELP
     . /etc/os-release
     [[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo '当前支持 Ubuntu 24.04 / 26.04。' >&2; return 1; }
     case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) echo '当前支持 AMD64 / ARM64。' >&2; return 1 ;; esac
-    for work in /etc/xray-gateway /var/lib/xray-gateway /usr/local/lib/xray-gateway /opt/xray-gateway /etc/nginx/nginx.conf; do
+    for work in /etc/xray-gateway /var/lib/xray-gateway /usr/local/lib/xray-gateway /opt/xray-gateway /opt/xcli /usr/local/lib/xcli /var/lib/xcli /var/backups/xcli /var/cache/xcli /etc/nginx/nginx.conf; do
         [[ ! -e "$work" && ! -L "$work" ]] || { echo "检测到已有配置：$work；安装已停止，请使用 README 中的升级流程。" >&2; return 1; }
     done
     if ! command -v python3 >/dev/null; then
@@ -66,7 +66,7 @@ HELP
             https://api.github.com/repos/checkmode/xcli/commits/main -o "$work/revision.json"
         sha=$(python3 -c 'import json,re,sys; s=json.load(open(sys.argv[1]))["sha"]; assert re.fullmatch("[0-9a-f]{40}",s); print(s)' "$work/revision.json")
     fi
-    printf '正在下载 xcli 源码版本 %s（自动构建，无需下载或克隆仓库）\n' "${sha:0:12}"
+    printf '正在下载固定源码 %s，构建完整版本后安装到 /opt/xcli/releases/\n' "${sha:0:12}"
     curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --connect-timeout 10 --max-time 180 \
         "https://codeload.github.com/checkmode/xcli/tar.gz/$sha" -o "$work/source.tar.gz"
     python3 - "$work" "$sha" <<'PY'
@@ -82,6 +82,8 @@ with tarfile.open(work/'source.tar.gz','r:gz') as archive:
             raise SystemExit('源码包包含不安全路径或链接')
     archive.extractall(work,filter='data')
 (work/prefix).rename(work/'source')
+if not (work/'source/deploy/build-source-release.sh').is_file():
+    raise SystemExit('该提交不支持统一版本发布；请选用包含 release.py 的新版本')
 PY
     python3 "$work/source/deploy/install.py" --source "$work/source" --commit "$sha" "${args[@]}"
     rm -rf -- "$work"

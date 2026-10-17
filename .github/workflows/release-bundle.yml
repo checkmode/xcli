@@ -1,0 +1,50 @@
+name: Build immutable application bundle
+on:
+  push:
+    branches: [main]
+    paths: ['install.sh', 'update.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/release-bundle.yml']
+  pull_request:
+    paths: ['install.sh', 'update.sh', 'deploy/**', 'cpp/**', 'static/**', 'scripts/**', 'app.py', '.github/workflows/release-bundle.yml']
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full 40-character commit to build
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RELEASE_REVISION: ${{ inputs.revision || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.revision || github.sha }}
+      - name: Validate immutable source reference
+        run: |
+          [[ "$RELEASE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse "$RELEASE_REVISION^{commit}")" = "$RELEASE_REVISION"
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          mapfile -t packages < deploy/build-packages.txt
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Build and test the fixed commit as the runner user
+        run: bash deploy/build-release.sh "$GITHUB_WORKSPACE" "$RELEASE_REVISION" "$RUNNER_TEMP/xcli-release.tar.gz"
+      - name: Retain the immutable bundle and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcli-${{ env.RELEASE_REVISION }}-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/xcli-release.tar.gz
+            ${{ runner.temp }}/xcli-release.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

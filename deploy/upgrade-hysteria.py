@@ -288,6 +288,8 @@ def main():
     revert = commands.add_parser('rollback')
     revert.add_argument('backup', type=Path)
     args = parser.parse_args()
+    if Path('/opt/xcli/current').is_symlink():
+        parser.error('部署已纳入完整版本管理；应用更新用 update.sh，核心升级须单独迁移')
     if os.geteuid() != 0 or platform.system() != 'Linux':
         parser.error('Run as root on the provisioned Linux host')
     if args.action == 'upgrade':

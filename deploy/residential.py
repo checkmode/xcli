@@ -135,6 +135,8 @@ def wait_ready(expected_tags, since):
 
 def rollback(backup):
     for name, path in FILES.items():
+        if name == 'probe.py' and Path('/opt/xcli/current').is_symlink():
+            continue
         replace(path, (backup / name).read_bytes(), backup / name)
     LOCATIONS.unlink(missing_ok=True)
     PRIVATE_POOL.unlink(missing_ok=True)
@@ -151,8 +153,12 @@ def rollback(backup):
 
 
 def install(args):
-    if args.backup.parent != Path('/root') or args.backup.exists() or LOCATIONS.exists() or PRIVATE_POOL.exists():
-        raise ValueError('Use a new /root backup directory; no existing residential configuration may be replaced')
+    managed = Path('/opt/xcli/current').is_symlink()
+    if managed and FILES['probe.py'].read_bytes() != (args.source / 'scripts/probe.py').read_bytes():
+        raise ValueError('先通过 update.sh 发布匹配的完整应用版本，再调整住宅入口配置')
+    allowed = [Path('/var/backups/xcli/configuration')] + ([] if managed else [Path('/root')])
+    if args.backup.parent not in allowed or args.backup.exists() or LOCATIONS.exists() or PRIVATE_POOL.exists():
+        raise ValueError('Use a new /var/backups/xcli/configuration backup directory; existing configuration cannot be replaced')
     if args.pool.stat().st_mode & 0o077:
         raise ValueError('Private proxy input must have mode 0600')
     ready = time.monotonic() + 20
@@ -171,6 +177,7 @@ def install(args):
     for entry in new_settings['residential_exits']:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', entry['port']))
+    args.backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.backup.mkdir(mode=0o700)
     for name, path in FILES.items():
         shutil.copy2(path, args.backup / name)
@@ -218,7 +225,8 @@ def install(args):
         private_write(LOCATIONS, locations, 0o644)
         private_write(PRIVATE_POOL, json.dumps(pool))
         replace(FILES['nginx.conf'], nginx, args.backup / 'nginx.conf')
-        replace(FILES['probe.py'], probe.read_bytes(), args.backup / 'probe.py')
+        if not managed:
+            replace(FILES['probe.py'], probe.read_bytes(), args.backup / 'probe.py')
         since = int(time.time())
         run('systemctl', 'restart', 'xray-gateway-core')
         run('systemctl', 'start', 'xray-gateway-panel')

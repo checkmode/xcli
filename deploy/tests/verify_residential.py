@@ -29,6 +29,8 @@ def main():
         sock.bind((settings['public_ip'], 0))
         ports.append(sock.getsockname()[1])
         reservations.append(sock)
+    backup_base = Path('/var/backups/xcli/configuration') if Path('/opt/xcli/current').is_symlink() else Path('/root')
+    backup = backup_base / 'xcli-residential-ci'
     root = Path('/root/xcli-residential-fixture')
     root.mkdir(mode=0o700)
     upstream = root / 'upstream.json'
@@ -86,7 +88,7 @@ def main():
                 assert process.poll() is None
                 time.sleep(.1)
         subprocess.run(['python3', str(SOURCE / 'deploy/residential.py'), 'install', '--source', str(SOURCE),
-                        '--pool', str(pool), '--backup', '/root/xcli-residential-ci'], check=True)
+                        '--pool', str(pool), '--backup', str(backup)], check=True)
         nodes = api('users/' + uid + '/links')
         for name, value in links.items():
             assert nodes[name] == value, 'Existing client links changed'
@@ -106,7 +108,7 @@ def main():
         residential = next(row for row in report['checks'] if row['transport'] == 'residential-01')
         assert residential['status'] == 'healthy' and residential['doh_ms'] is not None and residential['udp_supported'] is False
         assert len(report['checks']) == 13 and all(row['status'] == 'healthy' for row in report['checks'])
-        subprocess.run(['bash', '/root/xcli-residential-ci/rollback.sh'], check=True)
+        subprocess.run(['bash', str(backup / 'rollback.sh')], check=True)
         assert settings_path.read_bytes() == before_settings
         assert api('session')['csrf'] == auth['csrf'], 'Existing login session changed'
         assert subprocess.check_output(['systemctl', 'show', 'nginx', '-p', 'MainPID', '--value']) == nginx_pid

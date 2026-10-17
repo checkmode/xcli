@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Switch only the management service; keep the Xray and Nginx processes running.
 set -euo pipefail
+# Historical migration only; never overwrite a managed application release.
+if [[ -L /opt/xcli/current ]]; then
+    echo '部署已纳入完整版本管理；请使用 update.sh 或 xcli-release。' >&2
+    exit 1
+fi
 [[ $EUID == 0 ]] || { echo 'Run with sudo'; exit 1; }
 [[ $# == 2 ]] || { echo 'Usage: switch-cpp.sh VERIFIED_BINARY BACKUP_DIRECTORY'; exit 1; }
 candidate=$(realpath -- "$1")
