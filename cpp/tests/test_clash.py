@@ -98,6 +98,45 @@ def test_missing_exit_rejects_instead_of_falling_back(fixture):
     assert 'AND,((RULE-SET,service-CLAUDE),(NETWORK,UDP)),REJECT' in value['rules']
 
 
+@pytest.mark.parametrize('fixture', [SERVICE_SETTINGS], indirect=True)
+def test_fixed_exit_protocol_choices_keep_names_identity_and_revocation(fixture):
+    import base64
+    from urllib.parse import urlsplit, parse_qs, unquote
+    c=fixture['client'];c.login()
+    path='/api/users/'+fixture['uid']
+    value=subscription(fixture)
+    proxies={p['name']:p for p in value['proxies']}
+    groups={g['name']:g for g in value['proxy-groups']}
+    name='IPRoyal ISP 28 · 8.8.4.4'
+    assert groups[name]['proxies']==[name+' · Hysteria2',name+' · HTTPS']
+    assert name in groups['PROXY']['proxies'] and name in groups['住宅分组 · 新加坡']['proxies']
+    assert name+' · HTTPS' not in groups['PROXY']['proxies']
+    all_names=list(proxies)+list(groups)
+    assert len(all_names)==len(set(all_names))
+    assert all(target in all_names+['DIRECT','REJECT'] for group in groups.values() for target in group['proxies'])
+    https=proxies[name+' · HTTPS'];hy2=proxies[name+' · Hysteria2']
+    assert https['type']=='vless' and https['network']=='ws' and hy2['type']=='hysteria2'
+    assert hy2['password']==https['uuid']+'.residential-28-hy2'
+    assert https['udp'] is False and hy2['udp'] is False
+    links=c.json(path+'/links')
+    ws=urlsplit(links['residential-28']);hy=urlsplit(links['residential-28-hy2'])
+    assert ws.scheme=='vless' and hy.scheme=='hysteria2'
+    assert parse_qs(ws.query)['path']==['/connect/test/residential-28']
+    assert unquote(hy.username)==ws.username+'.residential-28-hy2'
+    assert unquote(ws.fragment)==unquote(hy.fragment)+' · HTTPS'
+    subpath='/s/'+fixture['token']
+    status,_,body=c.call(subpath)
+    assert status==200 and set(base64.b64decode(body).decode().splitlines())=={
+        links[k] for k in ('reality','websocket','hysteria2','residential-28','residential-28-hy2')}
+    c.json(path+'/rotate','POST',{})
+    assert c.call(subpath)[0]==404
+    rotated=c.json(path+'/links')
+    assert all(rotated[k]!=links[k] for k in ('residential-28','residential-28-hy2'))
+    newpath=urlsplit(rotated['subscription']).path
+    c.json(path,'PUT',{'name':'disabled','enabled':False})
+    assert c.call(newpath)[0]==403 and c.call(newpath+'/clash.yaml')[0]==403
+
+
 def test_invalid_service_routing_is_rejected_before_startup(fixture):
     original = json.loads((fixture['tmp'] / 'settings.json').read_text())
     service = {'name': 'CLAUDE', 'outbound': 'residential-28', 'domains': ['claude.ai'], 'udp': 'reject'}

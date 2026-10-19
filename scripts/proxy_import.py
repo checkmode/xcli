@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 
+sys.dont_write_bytecode=True
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import proxy_vmess
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -267,6 +268,7 @@ def configure(old,proxies,protocol,label,rows):
         tag=f'residential-{number:02d}';tags.add(tag);ports.add(port);path=settings['ws_path']+'/'+tag
         entry={'tag':tag,'label':label+' '+str(number)+' · '+COUNTRIES.get(row['country'],row['country']),
             'exit_ip':row['exit_ip'],'country':row['country'],'ws_path':path,'port':port}
+        if residential_hysteria_available(settings,core):entry['hysteria2']=True
         entries.append(entry)
         settings.setdefault('residential_exits',[]).append(entry);monitor.setdefault('residential_exits',[]).append(entry)
         core['inbounds'].append({'tag':tag,'listen':'127.0.0.1','port':port,'protocol':'vless',
@@ -276,6 +278,8 @@ def configure(old,proxies,protocol,label,rows):
         locations+=f'\nlocation = {path} {{\n    proxy_pass http://127.0.0.1:{port};\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection $connection_upgrade;\n    proxy_set_header Host $host;\n    proxy_read_timeout 600s;\n    proxy_send_timeout 600s;\n    proxy_buffering off;\n}}\n'
     rules=core['routing']['rules'];rules.append({'type':'field','inboundTag':[e['tag'] for e in entries],'network':'udp','outboundTag':'blocked'})
     rules.extend({'type':'field','inboundTag':[e['tag']],'network':'tcp','outboundTag':e['tag']+'-exit'} for e in entries)
+    for entry in entries:
+        if entry.get('hysteria2'):rules.extend(residential_hysteria_rules(entry['tag']))
     nginx=old['nginx'].decode();include='include '+str(FILES['locations'])+';';marker='location = '+settings['ws_path']+' {'
     if 'locations' in old:
         if nginx.count(include)!=1:raise ImportErrorSafe('既有导入入口与 Nginx 配置不一致')
@@ -318,12 +322,17 @@ def residential_hysteria_rules(tag):
             {**match,'ruleTag':tag+'-hy2-tcp','network':'tcp','outboundTag':tag+'-exit'}]
 
 
+def residential_hysteria_available(settings,core):
+    return bool(settings.get('hysteria2_port')) and any(
+        i['tag']=='hysteria2' and i['protocol']=='hysteria' for i in core['inbounds'])
+
+
 def enable_residential_hysteria(old,tag):
     settings=json.loads(old['settings']);monitor=json.loads(old['monitor']);core=json.loads(old['core']);pool=load_pool(old)
     target=next((p for p in pool['proxies'] if p['tag']==tag),None)
-    if not settings.get('hysteria2_port') or not any(i['tag']=='hysteria2' and i['protocol']=='hysteria' for i in core['inbounds']):
+    if not residential_hysteria_available(settings,core):
         raise ImportErrorSafe('请先启用 Hysteria 2 基础入口')
-    if target is None or not target['enabled'] or target['deleted_at'] or target['entry'].get('hysteria2'):
+    if target is None or not target['enabled'] or target['deleted_at'] or target['entry'].get('dynamic') or target['entry'].get('hysteria2'):
         raise ImportErrorSafe('请选择尚未启用 Hysteria 2 的有效手动代理')
     target['entry']['hysteria2']=True
     for config in (settings,monitor):
@@ -331,6 +340,16 @@ def enable_residential_hysteria(old,tag):
     core['routing']['rules'].extend(residential_hysteria_rules(tag))
     new={**old,'settings':json.dumps(settings).encode(),'monitor':json.dumps(monitor).encode(),
          'core':json.dumps(core).encode(),'pool':json.dumps(pool).encode()}
+    return new,[]
+
+
+def enable_all_residential_hysteria(old):
+    if not residential_hysteria_available(json.loads(old['settings']),json.loads(old['core'])):
+        raise ImportErrorSafe('请先启用 Hysteria 2 基础入口')
+    new=old
+    for target in load_pool(old)['proxies']:
+        if target['enabled'] and not target['deleted_at'] and not target['entry'].get('dynamic') and not target['entry'].get('hysteria2'):
+            new,_=enable_residential_hysteria(new,target['tag'])
     return new,[]
 
 
@@ -668,7 +687,11 @@ def main():
             if (ROOT/'transaction.json').exists():raise ImportErrorSafe('请先恢复未完成的事务')
             if (ROOT/'report.json').exists() and json.loads(read_regular(ROOT/'report.json')).get('status') in ('verifying','applying','ready'):
                 raise ImportErrorSafe('请先完成正在进行的代理操作')
-            old=read_config();new,entries=enable_residential_hysteria(old,sys.argv[2]);job=secrets.token_hex(16)
+            old=read_config()
+            new,entries=enable_all_residential_hysteria(old) if sys.argv[2]=='--all' else enable_residential_hysteria(old,sys.argv[2])
+            if new==old:
+                print('All active fixed proxies already support Hysteria 2; no restart needed.');return
+            job=secrets.token_hex(16)
             apply_config(old,new,entries,job)
         print('Residential Hysteria 2 enabled; upstream credentials remain on server. Rollback job: '+job);return
     if len(sys.argv)==2 and sys.argv[1]=='enable-vmess':

@@ -37,13 +37,19 @@ Json Backend::clash_configuration(const User& user) const {
       {"ws-opts",{{"path",settings_["vmess_ws_path"]},{"headers",{{"Host",domain}}}}}});
   const bool dynamic_enabled=dynamic_residential_enabled();
   std::map<std::string,Json> country_nodes;
+  Json protocol_groups=Json::array();
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
     const auto name=exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>());
-    if(exit.value("hysteria2",false))
-      add({{"name",name},{"type","hysteria2"},{"server",address},{"port",settings_.at("hysteria2_port")},
+    if(exit.value("hysteria2",false)) {
+      const auto hy2=name+" · Hysteria2",https=name+" · HTTPS";
+      add({{"name",hy2},{"type","hysteria2"},{"server",address},{"port",settings_.at("hysteria2_port")},
         {"password",user.uuid+"."+exit.at("tag").get<std::string>()+"-hy2"},{"sni",domain},{"skip-cert-verify",false},{"udp",false}});
-    else websocket(name,exit.at("ws_path").get<std::string>(),false);
+      websocket(https,exit.at("ws_path").get<std::string>(),false);
+      // Keep the previous selection/service target stable while exposing both transports.
+      names.erase(names.end()-2,names.end());names.push_back(name);
+      protocol_groups.push_back({{"name",name},{"type","select"},{"proxies",Json::array({hy2,https})}});
+    } else websocket(name,exit.at("ws_path").get<std::string>(),false);
     const auto country=exit.at("country").get<std::string>();
     if(!country_nodes.contains(country))country_nodes[country]=Json::array();
     if(dynamic)country_nodes[country].insert(country_nodes[country].begin(),Json(name));
@@ -58,7 +64,7 @@ Json Backend::clash_configuration(const User& user) const {
   }
   // Prefer the HTTPS transport for interoperability with current Mihomo clients.
   std::swap(names[0],names[1]);
-  Json groups=Json::array();
+  Json groups=std::move(protocol_groups);
   for(const auto& [country,nodes]:country_nodes) {
     std::string label=country;for(const auto& region:webshare_regions)if(region.country==country)label=region.label;
     const auto name="住宅分组 · "+label;names.push_back(name);

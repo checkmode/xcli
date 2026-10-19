@@ -114,6 +114,48 @@ class ProxyImportTests(unittest.TestCase):
         self.assertEqual(json.loads(enabled['core'])['routing']['rules'][-2:],imp.residential_hysteria_rules('residential-27'))
         self.assertEqual(imp.load_pool(enabled)['proxies'][0]['password'],'secret-fixture')
 
+    def add_hysteria_base(self,config):
+        settings=json.loads(config['settings']);settings['hysteria2_port']=443
+        core=json.loads(config['core']);core['inbounds'].append(provision.hysteria_inbound())
+        monitor=json.loads(config['monitor']);monitor['hysteria2_port']=443
+        return {**config,'settings':json.dumps(settings).encode(),'core':json.dumps(core).encode(),'monitor':json.dumps(monitor).encode()}
+
+    def test_new_fixed_import_exposes_both_transports_when_hysteria_is_available(self):
+        old=self.add_hysteria_base(self.old)
+        new,entries=imp.configure(old,self.proxies,'http','Fixture',self.rows)
+        self.assertTrue(entries[0]['hysteria2'])
+        core=json.loads(new['core'])
+        self.assertEqual(core['inbounds'][-1]['protocol'],'vless')
+        self.assertEqual(core['routing']['rules'][-2:],imp.residential_hysteria_rules(entries[0]['tag']))
+        self.assertTrue(imp.load_pool(new)['proxies'][0]['entry']['hysteria2'])
+
+    def test_batch_hysteria_is_idempotent_and_leaves_disabled_deleted_and_dynamic_alone(self):
+        proxies=[{**self.proxies[0],'port':12324+n} for n in range(4)]
+        rows=[{**self.rows[0],'port':p['port']} for p in proxies]
+        old,_=imp.configure(self.old,proxies,'http','Fixture',rows)
+        old,_,_=imp.manage_config(old,{'operation':'disable','tag':'residential-29'})
+        old,_,_=imp.manage_config(old,{'operation':'delete','tag':'residential-30'})
+        old=self.add_hysteria_base(old)
+        old,_=imp.enable_residential_hysteria(old,'residential-27')
+        for key in ('settings','monitor'):
+            value=json.loads(old[key]);value['residential_exits'].append({'tag':'residential-11','dynamic':True,'country':'US'})
+            old[key]=json.dumps(value).encode()
+        before=copy.deepcopy(old);updated,_=imp.enable_all_residential_hysteria(old)
+        self.assertEqual(old,before)
+        core=json.loads(old['core']);new_core=json.loads(updated['core'])
+        self.assertEqual(new_core['inbounds'],core['inbounds'])
+        self.assertEqual(new_core['outbounds'],core['outbounds'])
+        self.assertEqual(new_core['routing']['rules'][:-2],core['routing']['rules'])
+        self.assertEqual(new_core['routing']['rules'][-2:],imp.residential_hysteria_rules('residential-28'))
+        for key in ('nginx','locations'):self.assertEqual(updated[key],old[key])
+        for key in ('settings','monitor'):
+            self.assertEqual(json.loads(updated[key])['residential_exits'][-1],json.loads(old[key])['residential_exits'][-1])
+        pool=imp.load_pool(updated)['proxies']
+        self.assertTrue(all(p['entry'].get('hysteria2') for p in pool[:2]))
+        self.assertTrue(all(not p['entry'].get('hysteria2') for p in pool[2:]))
+        self.assertEqual(imp.enable_all_residential_hysteria(updated)[0],updated)
+        with self.assertRaises(imp.ImportErrorSafe):imp.enable_all_residential_hysteria(self.old)
+
     def test_management_lifecycle_and_reserved_identity(self):
         first,entries=imp.configure(self.old,self.proxies,'socks','IPRoyal ISP',self.rows)
         tag=entries[0]['tag'];original=copy.deepcopy(entries[0])

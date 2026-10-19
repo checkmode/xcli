@@ -268,12 +268,13 @@ Json Backend::links_for(const User& user) const {
   const bool dynamic_enabled=dynamic_residential_enabled();
   for(const auto& exit:settings_.value("residential_exits",Json::array())) {
     const bool dynamic=exit.value("dynamic",false);if(dynamic&&!dynamic_enabled)continue;
+    const auto tag=exit.at("tag").get<std::string>();
+    const auto name=user.name+" · "+exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>());
     if(exit.value("hysteria2",false)) {
-      const auto tag=exit.at("tag").get<std::string>();
-      result[tag]="hysteria2://"+url_quote(user.uuid+"."+tag+"-hy2")+"@"+s("domain")+":"+std::to_string(settings_.at("hysteria2_port").get<int>())+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+" · "+exit.at("exit_ip").get<std::string>(),false,true);
-      continue;
+      // Retain the existing Hysteria display name used by installed Shadowrocket service groups.
+      result[tag+"-hy2"]="hysteria2://"+url_quote(user.uuid+"."+tag+"-hy2")+"@"+s("domain")+":"+std::to_string(settings_.at("hysteria2_port").get<int>())+"/?sni="+url_quote(s("domain"))+"#"+url_quote(name,false,true);
     }
-    result[exit.at("tag").get<std::string>()]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(user.name+" · "+exit.at("label").get<std::string>()+(dynamic?"":" · "+exit.at("exit_ip").get<std::string>()),false,true);
+    result[tag]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(name+(exit.value("hysteria2",false)?" · HTTPS":""),false,true);
   }
   return result;
 }
