@@ -83,7 +83,7 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
       const auto name=checked_string(service.at("name"),1,32),outbound=checked_string(service.at("outbound"),1,32);
       const auto udp=checked_string(service.at("udp"),5,6);
       if(!std::regex_match(name,std::regex("[A-Z][A-Z0-9_-]*"))||
-         std::set<std::string>{"PROXY","DIRECT","REJECT","REJECT-DROP","PASS","COMPATIBLE","GLOBAL","REALITY","HTTPS"}.contains(name)||
+         std::set<std::string>{"PROXY","STUN","DIRECT","REJECT","REJECT-DROP","PASS","COMPATIBLE","GLOBAL","REALITY","HTTPS"}.contains(name)||
          !service_names.insert(name).second||
          !(outbound=="hysteria2"||outbound=="reality"||outbound=="websocket"||outbound=="vmess"||std::regex_match(outbound,std::regex("residential-[0-9]{2}")))||
          (udp!="reject"&&udp!="proxy"))throw std::runtime_error("Invalid Clash service route");

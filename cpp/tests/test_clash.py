@@ -77,10 +77,11 @@ def test_service_routes_are_user_scoped_and_follow_identity_rotation(fixture):
     with fixture['legacy'].db() as db:
         other_token = db.execute('SELECT token FROM users WHERE id=?', (other_id,)).fetchone()[0]
     other = subscription(fixture, other_token)
-    assert 'rule-providers' not in other
+    assert set(other['rule-providers']) == {'stun-endpoints'}
     assert not any(g['name'] in ('CLAUDE', 'GITHUB') for g in other['proxy-groups'])
-    assert len(other['rules']) == 11
-    assert list(other['dns']['nameserver-policy']) == ['geosite:cn,private']
+    assert len(other['rules']) == 13
+    assert '+.claude.ai' not in other['dns']['nameserver-policy']
+    assert '+.github.com' not in other['dns']['nameserver-policy']
     # Rotate credentials, preserving the same user's routing policy.
     c.json('/api/users/' + fixture['uid'] + '/rotate', 'POST', {})
     with fixture['legacy'].db() as db:
@@ -144,6 +145,7 @@ def test_invalid_service_routing_is_rejected_before_startup(fixture):
         {**service, 'udp': 'proxy'},
         {**service, 'domains': ['claude.ai,PROXY']},
         {**service, 'name': 'PROXY'},
+        {**service, 'name': 'STUN'},
         {**service, 'domains': ['claude.ai', 'api.claude.ai']},
         {**service, 'outbound': 'arbitrary-display-name'},
     ]
@@ -154,3 +156,30 @@ def test_invalid_service_routing_is_rejected_before_startup(fixture):
             '--settings', str(settings), '--offline', '--preflight'], capture_output=True, timeout=10)
         assert result.returncode != 0
         assert b'Clash service' in result.stderr or b'Residential service' in result.stderr
+
+
+@pytest.mark.parametrize('fixture', [{}, SERVICE_SETTINGS,
+    {**SERVICE_SETTINGS, 'vmess_ws_path': '/connect/vmess'}], indirect=True)
+def test_stun_uses_udp_capable_server_exits_and_precise_endpoints(fixture):
+    value = subscription(fixture)
+    groups = {g['name']: g for g in value['proxy-groups']}
+    proxies = {p['name']: p for p in value['proxies']}
+    expected = (['Hysteria 2'] if 'Hysteria 2' in proxies else []) + ['HTTPS', 'REALITY']
+    if 'VMess TLS' in proxies:
+        expected.append('VMess TLS')
+    assert groups['STUN'] == {'name': 'STUN', 'type': 'select', 'proxies': expected}
+    assert all(proxies[name].get('udp', proxies[name]['type'] == 'hysteria2') for name in expected)
+    assert 'STUN' not in groups['PROXY']['proxies']
+    endpoints = {f'stun{i}.l.google.com': '19302' for i in ('', '1', '2', '3', '4')}
+    endpoints.update({'stun.cloudflare.com': '3478', 'turn.cloudflare.com': '3478/443'})
+    assert value['rule-providers']['stun-endpoints'] == {
+        'type': 'inline', 'behavior': 'classical', 'payload': sorted(
+            f'AND,((NETWORK,UDP),(DOMAIN,{host}),(DST-PORT,{ports}))' for host, ports in endpoints.items())}
+    rules = value['rules']; index = rules.index('RULE-SET,stun-endpoints,STUN')
+    assert rules[index+1] == 'RULE-SET,stun-endpoints,REJECT'
+    assert rules.index('IP-CIDR,192.168.0.0/16,DIRECT,no-resolve') < index < rules.index('GEOSITE,cn,DIRECT')
+    if 'CLAUDE' in groups:
+        assert rules.index('RULE-SET,service-CLAUDE,CLAUDE') < index
+    for host in endpoints:
+        assert value['dns']['nameserver-policy'][host][0].endswith('#STUN')
+    assert 'tun' not in value  # Subscriptions do not enable device-wide capture silently.

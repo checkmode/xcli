@@ -71,6 +71,12 @@ Json Backend::clash_configuration(const User& user) const {
     groups.push_back({{"name",name},{"type","select"},{"proxies",nodes}});
   }
   groups.insert(groups.begin(),Json{{"name","PROXY"},{"type","select"},{"proxies",names}});
+  // STUN needs an actual UDP-capable upstream; residential HTTP exits cannot carry it.
+  Json stun_nodes=Json::array();
+  if(settings_.value("hysteria2_port",0)>0)stun_nodes.push_back("Hysteria 2");
+  stun_nodes.push_back("HTTPS");stun_nodes.push_back("REALITY");
+  if(settings_.contains("vmess_ws_path"))stun_nodes.push_back("VMess TLS");
+  groups.push_back({{"name","STUN"},{"type","select"},{"proxies",stun_nodes}});
   const auto domestic_dns=Json::array({"https://223.5.5.5/dns-query#DIRECT","https://1.12.12.12/dns-query#DIRECT"});
   Json rules=Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
     "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve","IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"});
@@ -95,6 +101,23 @@ Json Backend::clash_configuration(const User& user) const {
     }
     rule_providers[provider]={{"type","inline"},{"behavior","domain"},{"payload",payload}};
   }
+  // Exact endpoint + port + UDP matching leaves unrelated game/LAN/TCP traffic alone.
+  // Domain rules require the client to retain DNS metadata (e.g. TUN with fake-IP).
+  // https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/
+  // https://developers.cloudflare.com/realtime/turn/#service-address-and-ports
+  Json stun_payload=Json::array();
+  for(const auto& [host,ports]:std::map<std::string,std::string>{
+      {"stun.l.google.com","19302"},{"stun1.l.google.com","19302"},
+      {"stun2.l.google.com","19302"},{"stun3.l.google.com","19302"},
+      {"stun4.l.google.com","19302"},{"stun.cloudflare.com","3478"},
+      {"turn.cloudflare.com","3478/443"}}) {
+    stun_payload.push_back("AND,((NETWORK,UDP),(DOMAIN,"+host+"),(DST-PORT,"+ports+"))");
+    dns_policy[host]=Json::array({"https://1.1.1.1/dns-query#STUN","https://1.0.0.1/dns-query#STUN"});
+  }
+  rule_providers["stun-endpoints"]={{"type","inline"},{"behavior","classical"},{"payload",stun_payload}};
+  rules.push_back("RULE-SET,stun-endpoints,STUN");
+  // Mihomo skips a UDP rule if its selected proxy lacks UDP; never fall back to DIRECT.
+  rules.push_back("RULE-SET,stun-endpoints,REJECT");
   for(const auto* rule:{"GEOSITE,private,DIRECT","GEOSITE,cn,DIRECT","GEOSITE,geolocation-!cn,PROXY",
                        "GEOIP,private,DIRECT,no-resolve","GEOIP,CN,DIRECT","MATCH,PROXY"})rules.push_back(rule);
   dns_policy["geosite:cn,private"]=domestic_dns;
@@ -114,7 +137,7 @@ std::pair<std::string,std::string> Backend::clash_subscription(const std::string
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});
   if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
-  return {"# Xdistribute — Clash Verge Rev / Mihomo\n# China/private destinations use DIRECT; other traffic uses PROXY.\n# Domestic DNS uses direct DoH; overseas DNS follows PROXY. Residential exits support TCP only.\n"+yaml(clash_configuration(user)),
+  return {"# Xdistribute — Clash Verge Rev / Mihomo\n# China/private destinations use DIRECT; other traffic uses PROXY.\n# Domestic DNS uses direct DoH; overseas DNS follows PROXY. Residential exits support TCP only.\n# Listed Google/Cloudflare STUN UDP endpoints use STUN (server egress, not residential egress).\n# Requires UDP capture and DNS metadata, e.g. TUN + fake-IP. Other/custom STUN endpoints are not covered.\n"+yaml(clash_configuration(user)),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }
 }
