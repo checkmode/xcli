@@ -159,7 +159,7 @@ def test_invalid_service_routing_is_rejected_before_startup(fixture):
 
 
 @pytest.mark.parametrize('fixture', [{}, SERVICE_SETTINGS,
-    {**SERVICE_SETTINGS, 'vmess_ws_path': '/connect/vmess'}], indirect=True)
+    {**SERVICE_SETTINGS, 'vmess_ws_path': '/connect/test/vmess', 'vmess_port': 10081}], indirect=True)
 def test_stun_uses_udp_capable_server_exits_and_precise_endpoints(fixture):
     value = subscription(fixture)
     groups = {g['name']: g for g in value['proxy-groups']}
