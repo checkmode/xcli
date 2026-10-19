@@ -33,6 +33,7 @@ class ProxyImportTests(unittest.TestCase):
 
     def setUp(self):
         settings=provision.settings_for('panel.example.com','8.8.8.8','example.com','PrivateKey: '+('a'*43)+'\nPassword: '+('b'*43))
+        settings['hysteria2_port']=0  # Legacy fixed imports are upgraded explicitly below.
         self.old={'settings':json.dumps(settings).encode(),'core':json.dumps(provision.core_config(settings)).encode(),
             'monitor':json.dumps(provision.monitor_config(settings)).encode(),
             'nginx':provision.render_nginx(SOURCE,settings,'/test/cert.pem','/test/key.pem').encode()}
