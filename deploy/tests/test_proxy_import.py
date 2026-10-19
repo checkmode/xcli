@@ -13,6 +13,7 @@ from unittest.mock import patch
 SOURCE=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(SOURCE/'deploy'))
 import provision
+import subscription_https
 spec=importlib.util.spec_from_file_location('proxy_import',SOURCE/'scripts/proxy_import.py')
 imp=importlib.util.module_from_spec(spec);spec.loader.exec_module(imp)
 
@@ -60,6 +61,41 @@ class ProxyImportTests(unittest.TestCase):
         self.assertEqual(json.loads(second['core'])['outbounds'][-1]['protocol'],'http')
         self.assertEqual(second['nginx'],first['nginx'])
         self.assertEqual(len(json.loads(second['monitor'])['residential_exits']),2)
+
+    def test_subscription_https_exception_allows_preview_and_preserves_routes(self):
+        settings=json.loads(self.old['settings'])
+        core=subscription_https.core_candidate(json.loads(self.old['core']),settings['public_ip'],'a'*32)
+        self.old['core']=json.dumps(core).encode()
+        new,entries=imp.configure(self.old,self.proxies,'socks','Fixture',self.rows)
+        self.assertEqual(len(entries),1)
+        self.assertEqual(json.loads(new['core'])['routing']['rules'][:-2],core['routing']['rules'])
+        worker=imp.Worker.__new__(imp.Worker)
+        with tempfile.TemporaryDirectory() as tmp,patch.object(imp,'ROOT',Path(tmp)),patch.object(imp,'read_config',return_value=self.old),\
+                patch.object(imp,'probe',return_value=self.rows[0]) as probe,patch.object(imp,'atomic'),\
+                patch.object(worker,'publish') as publish:
+            worker.preview({'id':'b'*32,'protocol':'socks','proxies':self.proxies,'label':'Fixture'})
+            probe.assert_called_once_with(self.proxies[0],'socks')
+            self.assertEqual(publish.call_args_list[-1].kwargs['status'],'ready')
+
+    def test_subscription_https_rule_cannot_hide_broader_routes(self):
+        settings=json.loads(self.old['settings'])
+        base=subscription_https.core_candidate(json.loads(self.old['core']),settings['public_ip'],'a'*32)
+        mutations=[{'user':[]},{'user':['regexp:.*']},{'user':['regexp:^'+'b'*32+r'\.[0-9a-f]{8}@']},
+                   {'ip':['0.0.0.0/0']},{'ip':['1.1.1.1/32']},{'port':'1-65535'},
+                   {'network':'tcp,udp'},{'outboundTag':'unrelated'},{'type':'other'},
+                   {'domain':['example.com']},{'ruleTag':'subscription-https-untrusted'}]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                core=copy.deepcopy(base);core['routing']['rules'][0].update(mutation)
+                old={**self.old,'core':json.dumps(core).encode()}
+                with self.assertRaises(imp.ImportErrorSafe):imp.configure(old,self.proxies,'socks','Fixture',self.rows)
+        for dependency in ('self-block','direct-outbound'):
+            with self.subTest(dependency=dependency):
+                core=copy.deepcopy(base)
+                if dependency=='self-block':core['routing']['rules']=core['routing']['rules'][:1]
+                else:core['outbounds']=[o for o in core['outbounds'] if o['tag']!='direct']
+                with self.assertRaises(imp.ImportErrorSafe):
+                    imp.configure({**self.old,'core':json.dumps(core).encode()},self.proxies,'socks','Fixture',self.rows)
 
     def test_residential_hysteria_management_preserves_legacy_entry(self):
         first,_=imp.configure(self.old,self.proxies,'http','Fixture',self.rows)
