@@ -1,4 +1,5 @@
 #include "gateway.hpp"
+#include "client_policy.hpp"
 
 namespace xg {
 namespace {
@@ -131,6 +132,7 @@ Json Backend::clash_configuration(const User& user) const {
     {"proxies",proxies},{"proxy-groups",groups},
     {"rules",rules}};
   if(!rule_providers.empty())result["rule-providers"]=rule_providers;
+  apply_client_policy(result,settings_,user,outbound_names);
   return result;
 }
 std::pair<std::string,std::string> Backend::clash_subscription(const std::string& token) {

@@ -1,5 +1,48 @@
 # 按订阅指定业务出口
 
+## 同时生成 Clash 与小火箭业务分组
+
+`client_policies` 为指定用户启用统一分类：总代理入口、自动选择、故障转移、住宅国家分组，以及 AI、Telegram、YouTube、Netflix、国外媒体、哔哩哔哩、Apple 和其他流量。两种格式共用同一份分类与节点关系，小火箭使用 `XCLI-` 名称前缀，避免覆盖用户原有分组。普通节点订阅继续提供相同的节点和凭据。
+
+以下片段合并到现有 `settings.json`。用户 ID 应替换为实际值，并提前为同一用户保存完整的 `shadowrocket_base_profiles`。`ai_outbound` 引用现有出口标识，也可以设为 `proxy`，让 AI 默认跟随总代理：
+
+```json
+{
+  "client_policies": {
+    "00000000000000000000000000000000": {
+      "ai_outbound": "residential-28"
+    }
+  }
+}
+```
+
+启用时应将旧的 `CLAUDE` 业务策略合并到 AI，移除该用户旧的 `CLAUDE` 条目。若 `clash_service_routes` 已无其他策略，同时移除该用户的空条目和 `shadowrocket_service_users` 条目；新分类配置本身会启用小火箭远程配置。未启用 `client_policies` 的用户继续使用原来的导出行为。
+
+| 分组 | 初始选择与用途 |
+| --- | --- |
+| PROXY | 默认故障转移；也可手选服务器协议或进入住宅节点 |
+| 故障转移 | 按 REALITY、HTTPS、VMess TLS、Hysteria 2 顺序检测可用节点；省略未启用的协议 |
+| 自动选择 | 对同一组服务器接入协议测速，按延迟选择；容差 100 ms |
+| 住宅节点 | 先选国家，再选出口；同一固定出口的协议组初始使用 HTTPS |
+| AI | Claude、ChatGPT/OpenAI、Gemini/NotebookLM、Copilot、Perplexity、Grok 共用一个选择；默认由 `ai_outbound` 指定，也可手选其他出口 |
+| Telegram、YouTube、Netflix、国外媒体 | 默认跟随 PROXY，可单独选择国家或服务器协议 |
+| Apple、哔哩哔哩 | 默认直连，可改为代理 |
+| 其他流量 | 未命中其他规则时使用，默认跟随 PROXY |
+
+两个自动组仅检测服务器接入协议，不在不同住宅出口之间自动轮换；测试间隔均为 120 秒。测试 URL 可达只证明该检测请求成功，不证明 AI 或流媒体服务可用、账号地区正确或内容已解锁。已有客户端可能保留上次手选结果；刷新后应核对 PROXY 是否选中了预期策略。
+
+AI 使用独立域名规则，不将整个 `google.com`、`github.com` 或共享 CDN 划入 AI。GitHub 网站继续走通用代理，Copilot 的专属接口归入 AI。国内 AI 服务保留原来的国内规则。AI 允许选择只支持 TCP 的住宅出口，因此其 UDP 请求明确拒绝，防止客户端跳过规则后走其他出口；依赖 UDP 的实时语音功能不在此配置的验证范围内。指定 AI 出口缺失时，默认项为 `REJECT`，不会自动改用其他出口；用户仍可显式改选。
+
+Clash 的分类 DNS 跟随对应策略组。小火箭保留完整基础配置的 DNS、Host、重写和 MITM 设置，增加分类规则，将原有规则中的通用 `PROXY` 目标接入 `XCLI-PROXY`，将 `FINAL,PROXY` 接入 `XCLI-其他流量`。小火箭 DNS 仍遵循原配置，不能据此声称与 Clash 的 DNS 出口完全一致。
+
+每次修改节点、分类或规则，须成对检查以下三个资源：Clash 配置、小火箭节点订阅、小火箭远程配置。检查组内引用、AI 域名归属、私网优先级、故障组成员与出口缺失行为；保留原配置快照。客户端需分别刷新 Clash 订阅，以及小火箭的首页节点订阅和当前远程配置。服务端生成正确与客户端实际生效应分别记录；客户端由使用者操作时，不将其记为已验证。
+
+上线只需更新订阅面板程序和配置，不需要更改代理核心、用户凭据或累计流量。回退到不支持 `client_policies` 的版本前，先恢复配套旧设置，再回退程序，避免旧版本拒绝新配置中的小火箭基础文件归属。
+
+分类参考 [MetaCubeX 规则数据](https://github.com/MetaCubeX/meta-rules-dat)，Telegram 网段依据 [官方地址清单](https://core.telegram.org/resources/cidr.txt)。自动组行为参考 [Mihomo fallback](https://wiki.metacubex.one/config/proxy-groups/fallback/)、[url-test](https://wiki.metacubex.one/config/proxy-groups/url-test/) 和 [Shadowrocket 配置示例维护者文档](https://github.com/LOWERTOP/Shadowrocket/wiki)。
+
+## 单独绑定业务出口
+
 服务端通过 `settings.json` 中的 `clash_service_routes` 为指定用户生成业务分流。配置按用户内部 ID 关联，改名或轮换订阅凭据不会丢失策略。未配置的用户继续获得原来的节点、代理组、DNS 和规则。
 
 此功能作用于 `/s/<token>/clash.yaml`。所有使用该用户 Clash 订阅的设备会在更新后收到策略；普通节点链接不携带分流规则。客户端需要支持内嵌规则集和逻辑规则的 Mihomo，并使用规则模式。已在 Clash Verge 的 Mihomo v1.19.32 上进行配置验证。

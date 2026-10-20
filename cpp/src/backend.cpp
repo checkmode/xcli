@@ -1,4 +1,5 @@
 #include "gateway.hpp"
+#include "client_policy.hpp"
 #include <algorithm>
 #include <fcntl.h>
 #include <iostream>
@@ -102,6 +103,21 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
       }
     }
   }
+  const auto policies=settings_.value("client_policies",Json::object());
+  if(!policies.is_object()||policies.size()>1000)throw std::runtime_error("Invalid client policy registry");
+  for(const auto& [id,policy]:policies.items()) {
+    if(!std::regex_match(id,std::regex("[0-9a-f]{32}")))throw std::runtime_error("Invalid client policy owner");
+    fields(policy,{"ai_outbound"},{"ai_outbound"});
+    const auto target=checked_string(policy.at("ai_outbound"),1,32);
+    if(!(target=="proxy"||target=="reality"||target=="websocket"||target=="vmess"||target=="hysteria2"||
+         std::regex_match(target,std::regex("residential-[0-9]{2}"))))
+      throw std::runtime_error("Invalid client policy AI outbound");
+    if(routes.contains(id))for(const auto& service:routes.at(id))
+      if(std::set<std::string>{"AI","CLAUDE","Telegram","YouTube","Netflix","Apple"}.contains(service.at("name").get<std::string>()))
+        throw std::runtime_error("Client policy requires merging overlapping service routes");
+    if(!settings_.value("shadowrocket_base_profiles",Json::object()).contains(id))
+      throw std::runtime_error("Client policy requires a complete Shadowrocket base");
+  }
   const auto shadow_users=settings_.value("shadowrocket_service_users",Json::array());
   if(!shadow_users.is_array()||shadow_users.size()>1000)throw std::runtime_error("Invalid Shadowrocket service users");
   std::set<std::string> shadow_ids;
@@ -123,7 +139,7 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
     throw std::runtime_error("Invalid Shadowrocket base profile registry");
   std::size_t shadow_base_bytes=0;
   for(const auto& [id,base]:shadow_bases.items()) {
-    if(!shadow_ids.contains(id)||!base.is_string())
+    if((!shadow_ids.contains(id)&&!policies.contains(id))||!base.is_string())
       throw std::runtime_error("Shadowrocket base requires an enabled service user");
     const auto& text=base.get_ref<const std::string&>();
     shadow_base_bytes+=text.size();
@@ -286,7 +302,7 @@ Json Backend::shadowrocket_links_for(const User& user) const {
   // A fragment keeps the subscription credential out of landing-page requests.
   auto entry=origin+"/client/shadowrocket#"+user.token;
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
-  if(std::find(users.begin(),users.end(),Json(user.id))!=users.end())
+  if(std::find(users.begin(),users.end(),Json(user.id))!=users.end()||client_policy_enabled(settings_,user.id))
     entry="shadowrocket://config/add/"+origin+"/s/"+user.token+"/shadowrocket.conf";
   return {{"shadowrocket",entry},
     {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)},
