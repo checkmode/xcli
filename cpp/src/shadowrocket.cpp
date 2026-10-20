@@ -14,7 +14,8 @@ std::string trimmed(std::string value) {
 // Keep the user's complete file, including comments, DNS and unrelated sections.
 // Only insert the managed groups/rules and set this resource's update URL.
 std::string extend_base(const std::string& base,const std::string& groups,
-                        const std::string& rules,const std::string& update_url,bool categorized=false) {
+                        const std::string& rules,const std::string& update_url,bool categorized=false,
+                        const std::map<std::string,std::string>& managed_targets={}) {
   if(base.empty()||base.size()>512*1024||base.find('\0')!=std::string::npos)
     throw HttpError(503,"Invalid Shadowrocket base profile");
   const std::string eol=base.find("\r\n")!=std::string::npos?"\r\n":"\n";
@@ -64,6 +65,16 @@ std::string extend_base(const std::string& base,const std::string& groups,
     } else if(categorized&&section=="Rule") {
       // Preserve the complete base; only its generic policy references join
       // the new hierarchy. Shadowrocket's built-in PROXY remains a special word.
+      std::smatch existing;
+      const std::regex generic(R"(^[ \t]*(.+),[ \t]*(PROXY|DIRECT)([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
+      if(std::regex_match(original,existing,generic)&&managed_targets.contains(trimmed(existing[1]))) {
+        auto rewritten=original;
+        rewritten.replace(static_cast<std::size_t>(existing.position(2)),existing.length(2),
+          managed_targets.at(trimmed(existing[1])));
+        result+=rewritten;
+        offset=end==base.size()?end:end+1;
+        continue;
+      }
       const std::regex policy(R"(,PROXY([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
       result+=std::regex_replace(original,policy,
         (line.starts_with("FINAL,")?",XCLI-其他流量":",XCLI-PROXY")+std::string("$1"));
@@ -85,6 +96,7 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
     return name;
   };
   std::string groups,rules;
+  std::map<std::string,std::string> managed_targets;
   for(const auto& group:config.at("proxy-groups")) {
     const auto type=group.at("type").get<std::string>();
     groups+=safe(policy(group.at("name").get<std::string>()))+" = "+type;
@@ -114,6 +126,7 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
     if(match.starts_with("IP-CIDR6,"))match.replace(0,9,"IP-CIDR,");
     const auto suffix=match.ends_with(",no-resolve")?std::string(",no-resolve"):std::string();
     if(!suffix.empty())match.resize(match.size()-suffix.size());
+    if(!match.starts_with("AND,"))managed_targets[match]=policy(target);
     rules+=match+","+policy(target)+suffix+"\n";
   };
   for(const auto& item:config.at("rules")) {
@@ -135,7 +148,7 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
       emit(stripped.substr(0,split)+(no_resolve?",no-resolve":""),stripped.substr(split+1));
     }
   }
-  return extend_base(base,groups,rules,update_url,true);
+  return extend_base(base,groups,rules,update_url,true,managed_targets);
 }
 }
 

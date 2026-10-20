@@ -52,6 +52,7 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     for name in ("故障转移", "自动选择"):
         assert groups[name]["proxies"] == ["REALITY", "HTTPS", "VMess TLS", "Hysteria 2"]
         assert groups[name]["interval"] == 120
+    assert groups["STUN"]["proxies"] == groups["故障转移"]["proxies"]
     assert groups["Apple"]["proxies"][0] == groups["哔哩哔哩"]["proxies"][0] == "DIRECT"
     assert clash["rules"][-1] == "MATCH,其他流量"
     assert "CLAUDE" not in groups and "GITHUB" not in groups
@@ -125,6 +126,20 @@ def test_missing_ai_exit_stays_rejected_and_optional_transports_are_omitted(fixt
     assert "XCLI-AI = select,REJECT," in shadow
     assert groups["故障转移"]["proxies"] == ["REALITY", "HTTPS", "VMess TLS"]
     assert "住宅节点" not in groups
+
+
+@pytest.mark.parametrize("fixture", [{**POLICY, "shadowrocket_base_profiles": {"__USER_ID__":
+    BASE.replace("FINAL,PROXY", "DOMAIN-SUFFIX,claude.ai,PROXY\nDOMAIN-SUFFIX,bilibili.com,DIRECT\n"
+        "IP-CIDR,91.108.4.0/22,PROXY,no-resolve\nFINAL,PROXY # preserve comment").replace("\n", "\r\n")}}],
+    indirect=True)
+def test_existing_generic_duplicates_follow_the_same_category(fixture):
+    _, shadow, _ = exports(fixture)
+    assert "DOMAIN-SUFFIX,claude.ai,PROXY" not in shadow
+    assert shadow.count("DOMAIN-SUFFIX,claude.ai,XCLI-AI") == 2
+    assert "DOMAIN-SUFFIX,bilibili.com,DIRECT" not in shadow
+    assert shadow.count("DOMAIN-SUFFIX,bilibili.com,XCLI-哔哩哔哩") == 2
+    assert "IP-CIDR,91.108.4.0/22,PROXY" not in shadow
+    assert "FINAL,XCLI-其他流量 # preserve comment\r\n" in shadow
 
 
 def test_invalid_policy_requires_explicit_base_and_ai_merge(fixture):

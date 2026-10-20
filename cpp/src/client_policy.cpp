@@ -62,6 +62,7 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   for(auto& group:groups) {
     const auto name=group.at("name").get<std::string>();
     if(name.starts_with("住宅分组 · "))countries.push_back(name);
+    if(name=="STUN")group["proxies"]=servers;
     // Same exit IP, different access transport. Prefer TCP on a fresh selection.
     auto& members=group["proxies"];
     if(members.size()==2&&members[0].is_string()&&members[1].is_string()&&
