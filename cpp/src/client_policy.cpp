@@ -90,7 +90,8 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   const auto ai_default=ai_tag=="proxy"?std::string("PROXY"):
     found==outbound_names.end()?std::string("REJECT"):found->second;
   for(const auto& category:categories()) {
-    Json choices=category.direct?Json::array({"DIRECT","PROXY"}):Json::array({"PROXY"});
+    if(category.direct)continue;
+    Json choices=Json::array({"PROXY"});
     if(category.name=="AI"&&ai_default!="PROXY")choices.insert(choices.begin(),ai_default);
     for(const auto& country:countries)choices.push_back(country);
     for(const auto& node:servers)choices.push_back(node);
@@ -107,13 +108,14 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   Json rules=Json::array();
   auto& dns=config["dns"]["nameserver-policy"];
   for(const auto& category:categories()) {
+    const auto target=category.direct?std::string("DIRECT"):category.name;
     Json payload=Json::array();
     auto add=[&](const std::string& kind,const std::string& domain) {
       payload.push_back(kind+","+domain);
       const auto key=kind=="DOMAIN-SUFFIX"?"+."+domain:domain;
       dns[key]=category.direct
-        ?Json::array({"https://223.5.5.5/dns-query#"+category.name,"https://1.12.12.12/dns-query#"+category.name})
-        :Json::array({"https://1.1.1.1/dns-query#"+category.name,"https://1.0.0.1/dns-query#"+category.name});
+        ?Json::array({"https://223.5.5.5/dns-query#"+target,"https://1.12.12.12/dns-query#"+target})
+        :Json::array({"https://1.1.1.1/dns-query#"+target,"https://1.0.0.1/dns-query#"+target});
     };
     for(const auto& domain:category.suffixes)add("DOMAIN-SUFFIX",domain);
     for(const auto& domain:category.hosts)add("DOMAIN",domain);
@@ -124,7 +126,7 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
     // AI may select a TCP-only residential exit. Do not let unsupported UDP
     // skip the category and escape via another exit or DIRECT.
     if(category.name=="AI")rules.push_back("AND,((RULE-SET,"+provider+"),(NETWORK,UDP)),REJECT");
-    rules.push_back("RULE-SET,"+provider+","+category.name);
+    rules.push_back("RULE-SET,"+provider+","+target);
   }
   auto& old_rules=config["rules"];
   auto position=std::find(old_rules.begin(),old_rules.end(),Json("GEOSITE,private,DIRECT"));
