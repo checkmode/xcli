@@ -2,9 +2,9 @@
 
 ## 同时生成 Clash 与小火箭业务分组
 
-`client_policies` 为指定用户启用统一分类：总代理入口、自动选择、故障转移、住宅国家分组，以及 AI、Telegram、YouTube、Netflix、国外媒体和其他流量。哔哩哔哩与 Apple 保留域名规则，直接指向 `DIRECT`，不生成独立策略组。两种格式共用同一份分类与节点关系，小火箭使用 `XCLI-` 名称前缀，避免覆盖用户原有分组。普通节点订阅继续提供相同的节点和凭据。
+`client_policies` 为指定用户启用统一分类：总代理入口、直连、自动选择、故障转移、住宅国家分组，以及 AI、Telegram、YouTube、Netflix、国外媒体和其他流量。AI、Telegram、YouTube、Netflix、国外媒体及 STUN 的组名统一使用 `独立 · ` 前缀，表示不受 `PROXY` 选择影响。哔哩哔哩与 Apple 保留域名规则，直接指向 `DIRECT`，不生成独立策略组。两种格式共用同一份分类与节点关系，小火箭另加 `XCLI-` 名称前缀，避免覆盖用户原有分组。普通节点订阅继续提供相同的节点和凭据。
 
-以下片段合并到现有 `settings.json`。用户 ID 应替换为实际值，并提前为同一用户保存完整的 `shadowrocket_base_profiles`。`ai_outbound` 引用现有出口标识，也可以设为 `proxy`，让 AI 默认跟随总代理：
+以下片段合并到现有 `settings.json`。用户 ID 应替换为实际值，并提前为同一用户保存完整的 `shadowrocket_base_profiles`。`ai_outbound` 引用现有出口标识。兼容值 `proxy` 让 AI 默认使用故障转移，不再跟随 `PROXY`，避免总代理选直连时改变 AI 出口：
 
 ```json
 {
@@ -20,15 +20,19 @@
 
 | 分组 | 初始选择与用途 |
 | --- | --- |
-| PROXY | 默认故障转移；也可手选服务器协议或进入住宅节点 |
+| PROXY | 默认故障转移；也可手选服务器协议、进入住宅节点或选择直连 |
+| 直连 | 唯一成员为 `DIRECT`；在 PROXY 中选择此项，让通用代理流量和跟随 PROXY 的其他流量直连 |
 | 故障转移 | 按 REALITY、HTTPS、VMess TLS、Hysteria 2 顺序检测可用节点；省略未启用的协议 |
 | 自动选择 | 对同一组服务器接入协议测速，按延迟选择；容差 100 ms |
 | 住宅节点 | 先选国家，再选出口；同一固定出口的协议组初始使用 HTTPS |
-| AI | Claude、ChatGPT/OpenAI、Gemini/NotebookLM、Copilot、Perplexity、Grok 共用一个选择；默认由 `ai_outbound` 指定，也可手选其他出口 |
-| Telegram、YouTube、Netflix、国外媒体 | 默认跟随 PROXY，可单独选择国家或服务器协议 |
+| 独立 · AI | Claude、ChatGPT/OpenAI、Gemini/NotebookLM、Copilot、Perplexity、Grok 共用一个选择；默认由 `ai_outbound` 指定，也可手选其他代理出口 |
+| 独立 · Telegram、独立 · YouTube、独立 · Netflix、独立 · 国外媒体 | 默认使用故障转移，可单独选择自动选择、国家或服务器协议；不包含 PROXY 和直连 |
+| 独立 · STUN | 默认 REALITY，可选择其他支持 UDP 的服务器协议；不包含住宅节点、PROXY 和直连 |
 | 其他流量 | 未命中其他规则时使用，默认跟随 PROXY |
 
 两个自动组仅检测服务器接入协议，不在不同住宅出口之间自动轮换；测试间隔均为 120 秒。测试 URL 可达只证明该检测请求成功，不证明 AI 或流媒体服务可用、账号地区正确或内容已解锁。已有客户端可能保留上次手选结果；刷新后应核对 PROXY 是否选中了预期策略。
+
+需要让普通流量直连时，保持 Clash 的规则模式或小火箭的配置模式，在 `PROXY`（小火箭为 `XCLI-PROXY`）中选择 `直连`（小火箭为 `XCLI-直连`）。带 `独立 · ` 前缀的业务组继续使用自己的代理出口；切回 PROXY 的其他选项即可恢复普通代理。客户端的全局直连模式会跳过这些业务规则，不用于此场景。组名增加前缀后，客户端可能不会继承旧组的手动选择，首次更新应核对各独立组；服务端保留原来的 AI 默认出口设置。
 
 AI 使用独立域名规则，不将整个 `google.com`、`github.com` 或共享 CDN 划入 AI。GitHub 网站继续走通用代理，Copilot 的专属接口归入 AI。国内 AI 服务保留原来的国内规则。AI 允许选择只支持 TCP 的住宅出口，因此其 UDP 请求明确拒绝，防止客户端跳过规则后走其他出口；依赖 UDP 的实时语音功能不在此配置的验证范围内。指定 AI 出口缺失时，默认项为 `REJECT`，不会自动改用其他出口；用户仍可显式改选。
 

@@ -47,12 +47,14 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     validate_graph({k: v["proxies"] for k, v in groups.items()}, nodes)
     assert groups["PROXY"]["proxies"][:2] == ["故障转移", "自动选择"]
     assert "IPRoyal ISP 28 · 8.8.4.4" not in groups["PROXY"]["proxies"]
-    assert groups["AI"]["proxies"][0] == "IPRoyal ISP 28 · 8.8.4.4"
+    assert groups["独立 · AI"]["proxies"][0] == "IPRoyal ISP 28 · 8.8.4.4"
     assert groups["IPRoyal ISP 28 · 8.8.4.4"]["proxies"][0].endswith(" · HTTPS")
     for name in ("故障转移", "自动选择"):
         assert groups[name]["proxies"] == ["REALITY", "HTTPS", "VMess TLS", "Hysteria 2"]
         assert groups[name]["interval"] == 120
-    assert groups["STUN"]["proxies"] == groups["故障转移"]["proxies"]
+    assert groups["独立 · STUN"]["proxies"] == groups["故障转移"]["proxies"]
+    assert "RULE-SET,stun-endpoints,独立 · STUN" in clash["rules"]
+    assert all(server.endswith("#独立 · STUN") for server in clash["dns"]["nameserver-policy"]["stun.l.google.com"])
     for name in ("Apple", "哔哩哔哩"):
         assert name not in groups
         assert "XCLI-" + name not in shadow
@@ -65,19 +67,19 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     assert "CLAUDE" not in groups and "GITHUB" not in groups
     assert "XCLI-CLAUDE" not in shadow and "XCLI-GITHUB" not in shadow
     assert "DOMAIN-SUFFIX,github.com," not in shadow
-    assert "DOMAIN-SUFFIX,claude.ai,XCLI-AI" in shadow
+    assert "DOMAIN-SUFFIX,claude.ai,XCLI-独立 · AI" in shadow
     ai = clash["rule-providers"]["category-AI"]["payload"]
     for host in ("claude.ai", "chatgpt.com", "gemini.google.com", "githubcopilot.com", "perplexity.ai", "grok.com"):
         assert "DOMAIN-SUFFIX," + host in ai
-        assert clash["dns"]["nameserver-policy"]["+." + host][0].endswith("#AI")
-        assert "DOMAIN-SUFFIX," + host + ",XCLI-AI" in shadow
+        assert clash["dns"]["nameserver-policy"]["+." + host][0].endswith("#独立 · AI")
+        assert "DOMAIN-SUFFIX," + host + ",XCLI-独立 · AI" in shadow
     assert "DOMAIN-SUFFIX,google.com" not in ai
     assert "DOMAIN-SUFFIX,github.com" not in ai
     assert "DOMAIN-SUFFIX,deepseek.com" not in ai
-    assert shadow.index("AND,((DOMAIN-SUFFIX,claude.ai),(PROTOCOL,UDP)),REJECT") < shadow.index("DOMAIN-SUFFIX,claude.ai,XCLI-AI")
+    assert shadow.index("AND,((DOMAIN-SUFFIX,claude.ai),(PROTOCOL,UDP)),REJECT") < shadow.index("DOMAIN-SUFFIX,claude.ai,XCLI-独立 · AI")
     assert "NETWORK,UDP" not in shadow and "3478/443" not in shadow
     assert "OR,((DST-PORT,3478),(DST-PORT,443))" in shadow
-    assert "IP-CIDR,2001:b28:f23d::/48,XCLI-Telegram,no-resolve" in shadow
+    assert "IP-CIDR,2001:b28:f23d::/48,XCLI-独立 · Telegram,no-resolve" in shadow
     assert "FINAL,XCLI-其他流量" in shadow and "FINAL,PROXY" not in shadow
     assert "[Host]\nlocalhost = 127.0.0.1" in shadow and "[MITM]\nenable = false" in shadow
     assert shadow.count("[Proxy Group]") == 1
@@ -102,9 +104,41 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
             kind, value, *flags = payload.split(",")
             if kind == "IP-CIDR6":
                 kind = "IP-CIDR"
-            target = "DIRECT" if name in ("Apple", "哔哩哔哩") else "XCLI-" + name
+            target = "DIRECT" if name in ("Apple", "哔哩哔哩") else "XCLI-独立 · " + name
             expected = f"{kind},{value},{target}" + ("," + ",".join(flags) if flags else "")
             assert expected in shadow
+
+
+@pytest.mark.parametrize("fixture", [POLICY,
+    {**POLICY, "client_policies": {"__USER_ID__": {"ai_outbound": "proxy"}}}], indirect=True)
+def test_main_direct_option_cannot_redirect_independent_groups(fixture):
+    clash, shadow, _ = exports(fixture)
+    graphs = [{g["name"]: g["proxies"] for g in clash["proxy-groups"]}, {}]
+    for line in shadow.splitlines():
+        if line.startswith("XCLI-"):
+            name, definition = line.split(" = ", 1)
+            graphs[1][name] = [x for x in definition.split(",")[1:] if "=" not in x]
+    for graph, prefix in zip(graphs, ("", "XCLI-")):
+        main, direct, other = (prefix + x for x in ("PROXY", "直连", "其他流量"))
+        assert direct in graph[main] and graph[direct] == ["DIRECT"]
+        roots = [prefix + "独立 · " + name for name in ("AI", "Telegram", "YouTube", "Netflix", "国外媒体", "STUN")]
+
+        def reachable(name):
+            return {name}.union(*(reachable(child) for child in graph.get(name, [])))
+
+        def resolve(name, selected):
+            while name in graph:
+                name = selected.get(name, graph[name][0])
+            return name
+
+        for name in roots:
+            assert reachable(name).isdisjoint({main, direct, other, "DIRECT"})
+            original = resolve(name, {})
+            assert resolve(name, {main: direct}) == original
+        assert resolve(other, {main: direct}) == "DIRECT"
+        assert resolve(other, {}) != "DIRECT"
+    assert not any(g["name"] in ("AI", "Telegram", "YouTube", "Netflix", "国外媒体", "STUN")
+                   for g in clash["proxy-groups"])
 
 
 @pytest.mark.parametrize("fixture", [POLICY], indirect=True)
@@ -114,7 +148,7 @@ def test_opt_in_is_scoped_and_both_formats_follow_revocation(fixture):
     links = c.json("/api/users/" + other + "/links")
     path = urlsplit(links["subscription"]).path
     plain = yaml.safe_load(c.call(path + "/clash.yaml")[2])
-    assert not any(g["name"] == "AI" for g in plain["proxy-groups"])
+    assert not any(g["name"] == "独立 · AI" for g in plain["proxy-groups"])
     assert c.call(path + "/shadowrocket.conf")[0] == 404
     current = "/s/" + fixture["token"]
     c.json("/api/users/" + fixture["uid"] + "/rotate", "POST", {})
@@ -130,8 +164,8 @@ def test_opt_in_is_scoped_and_both_formats_follow_revocation(fixture):
 def test_missing_ai_exit_stays_rejected_and_optional_transports_are_omitted(fixture):
     clash, shadow, _ = exports(fixture)
     groups = {g["name"]: g for g in clash["proxy-groups"]}
-    assert groups["AI"]["proxies"][0] == "REJECT"
-    assert "XCLI-AI = select,REJECT," in shadow
+    assert groups["独立 · AI"]["proxies"][0] == "REJECT"
+    assert "XCLI-独立 · AI = select,REJECT," in shadow
     assert groups["故障转移"]["proxies"] == ["REALITY", "HTTPS", "VMess TLS"]
     assert "住宅节点" not in groups
 
@@ -143,7 +177,7 @@ def test_missing_ai_exit_stays_rejected_and_optional_transports_are_omitted(fixt
 def test_existing_generic_duplicates_follow_the_same_category(fixture):
     _, shadow, _ = exports(fixture)
     assert "DOMAIN-SUFFIX,claude.ai,PROXY" not in shadow
-    assert shadow.count("DOMAIN-SUFFIX,claude.ai,XCLI-AI") == 2
+    assert shadow.count("DOMAIN-SUFFIX,claude.ai,XCLI-独立 · AI") == 2
     assert shadow.count("DOMAIN-SUFFIX,bilibili.com,DIRECT") == 2
     assert shadow.count("DOMAIN-SUFFIX,apple.com,DIRECT") == 2
     assert "DOMAIN-SUFFIX,apple.com,PROXY" not in shadow

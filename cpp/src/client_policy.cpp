@@ -9,6 +9,7 @@ struct Category {
   bool direct;
   std::vector<std::string> suffixes,hosts,cidrs;
 };
+std::string independent(const std::string& name) {return "独立 · "+name;}
 // Both clients consume this catalog through clash_configuration(). Keep shared
 // CDN/login domains out of AI: only service-owned suffixes or exact hosts belong here.
 // AI sources: MetaCubeX/meta-rules-dat geo/geosite/{openai,anthropic,google-gemini,
@@ -62,7 +63,10 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   for(auto& group:groups) {
     const auto name=group.at("name").get<std::string>();
     if(name.starts_with("住宅分组 · "))countries.push_back(name);
-    if(name=="STUN")group["proxies"]=servers;
+    if(name=="STUN") {
+      group["name"]=independent(name);
+      group["proxies"]=servers;
+    }
     // Same exit IP, different access transport. Prefer TCP on a fresh selection.
     auto& members=group["proxies"];
     if(members.size()==2&&members[0].is_string()&&members[1].is_string()&&
@@ -76,7 +80,9 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   Json main=Json::array({"故障转移","自动选择"});
   for(const auto& node:servers)main.push_back(node);
   if(!countries.empty())main.push_back("住宅节点");
+  main.push_back("直连");
   select("PROXY",main);
+  select("直连",Json::array({"DIRECT"}));
   for(const auto& [name,type]:std::vector<std::pair<std::string,std::string>>{
       {"故障转移","fallback"},{"自动选择","url-test"}}) {
     Json group={{"name",name},{"type",type},{"proxies",servers},
@@ -87,15 +93,18 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   if(!countries.empty())select("住宅节点",countries);
   const auto ai_tag=settings.at("client_policies").at(user.id).at("ai_outbound").get<std::string>();
   const auto found=outbound_names.find(ai_tag);
-  const auto ai_default=ai_tag=="proxy"?std::string("PROXY"):
+  // Keep the legacy setting valid, but do not let independent AI traffic
+  // inherit the main selector's new direct option.
+  const auto ai_default=ai_tag=="proxy"?std::string("故障转移"):
     found==outbound_names.end()?std::string("REJECT"):found->second;
   for(const auto& category:categories()) {
     if(category.direct)continue;
-    Json choices=Json::array({"PROXY"});
-    if(category.name=="AI"&&ai_default!="PROXY")choices.insert(choices.begin(),ai_default);
+    Json choices=Json::array({"故障转移","自动选择"});
+    if(category.name=="AI"&&ai_default!="故障转移")choices.insert(choices.begin(),ai_default);
     for(const auto& country:countries)choices.push_back(country);
-    for(const auto& node:servers)choices.push_back(node);
-    select(category.name,choices);
+    for(const auto& node:servers)
+      if(std::find(choices.begin(),choices.end(),node)==choices.end())choices.push_back(node);
+    select(independent(category.name),choices);
   }
   select("其他流量",Json::array({"PROXY","DIRECT"}));
   for(const auto& group:groups)if(group.at("name")!="PROXY")top.push_back(group);
@@ -107,8 +116,12 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
 
   Json rules=Json::array();
   auto& dns=config["dns"]["nameserver-policy"];
+  for(auto& resolvers:dns)for(auto& resolver:resolvers) {
+    const auto value=resolver.get<std::string>();
+    if(value.ends_with("#STUN"))resolver=value.substr(0,value.size()-4)+independent("STUN");
+  }
   for(const auto& category:categories()) {
-    const auto target=category.direct?std::string("DIRECT"):category.name;
+    const auto target=category.direct?std::string("DIRECT"):independent(category.name);
     Json payload=Json::array();
     auto add=[&](const std::string& kind,const std::string& domain) {
       payload.push_back(kind+","+domain);
@@ -129,6 +142,8 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
     rules.push_back("RULE-SET,"+provider+","+target);
   }
   auto& old_rules=config["rules"];
+  for(auto& rule:old_rules)
+    if(rule=="RULE-SET,stun-endpoints,STUN")rule="RULE-SET,stun-endpoints,"+independent("STUN");
   auto position=std::find(old_rules.begin(),old_rules.end(),Json("GEOSITE,private,DIRECT"));
   old_rules.insert(position,rules.begin(),rules.end());
   old_rules.back()="MATCH,其他流量";
