@@ -48,7 +48,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml zbar-tools
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py \
-              cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py cpp/tests/test_webshare.py
+              cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py cpp/tests/test_webshare.py \
+              cpp/tests/test_client_policy.py cpp/tests/test_shadowrocket_services.py
       - name: Verify optional configuration changes keep the application release sealed
         if: matrix.os == 'ubuntu-26.04-arm'
         run: |

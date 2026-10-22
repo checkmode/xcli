@@ -77,7 +77,7 @@ def main():
             else:second_job=job
         users=api('overview')['users'];uid=next(u['id'] for u in users if u['status']=='active');links=api('users/'+uid+'/links')
         with client.open(links['subscription'],timeout=10) as r:text=base64.b64decode(r.read()).decode()
-        assert len(text.splitlines())==5 and 'fixture-password' not in text
+        assert len(text.splitlines())==7 and 'fixture-password' not in text
         monitor=api('overview')['monitor'];assert len(monitor['checks'])==5 and monitor['status']=='healthy'
         now=snapshot(Path('/var/lib/xray-gateway/gateway.sqlite'),settings_path)
         for key in ('identity_digest','admin_digest','security'):assert now[key]==before[key],key
@@ -97,16 +97,17 @@ def main():
             result=api('proxy-import')
             assert 'fixture-password' not in json.dumps(result) and 'fixture-user' not in json.dumps(result)
             return next(p for p in result['items'] if p['tag']==tag)
-        def count(n):
-            with client.open(links['subscription'],timeout=10) as r:assert len(base64.b64decode(r.read()).decode().splitlines())==n
-            assert len(api('overview')['monitor']['checks'])==n
+        def count(nodes,checks):
+            # Each fixed exit has two client protocols and one upstream probe.
+            with client.open(links['subscription'],timeout=10) as r:assert len(base64.b64decode(r.read()).decode().splitlines())==nodes
+            assert len(api('overview')['monitor']['checks'])==checks
         changed=change('edit',{'label':'Edited fixture','address':settings['public_ip'],'port':ports[0],'protocol':'socks','username':'','password':''})
-        assert changed['label']=='Edited fixture';count(5)
-        assert not change('disable')['enabled'];count(4)
-        assert change('enable')['enabled'];count(5)
-        assert change('delete')['deleted_at'];count(4)
-        restored=change('restore');assert not restored['deleted_at'] and not restored['enabled'];count(4)
-        assert change('enable')['enabled'];count(5)
+        assert changed['label']=='Edited fixture';count(7,5)
+        assert not change('disable')['enabled'];count(5,4)
+        assert change('enable')['enabled'];count(7,5)
+        assert change('delete')['deleted_at'];count(5,4)
+        restored=change('restore');assert not restored['deleted_at'] and not restored['enabled'];count(5,4)
+        assert change('enable')['enabled'];count(7,5)
         for job in reversed(management_jobs):subprocess.run(['python3','/opt/xray-gateway/scripts/proxy_import.py','rollback',job],check=True)
         now=snapshot(Path('/var/lib/xray-gateway/gateway.sqlite'),settings_path)
         for key in ('identity_digest','admin_digest','security'):assert now[key]==before[key],key

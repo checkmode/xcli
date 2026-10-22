@@ -59,11 +59,11 @@ def main():
     assert api('session')['csrf']==csrf
     user=next(u for u in api('overview')['users'] if u['status']=='active');links=api('users/'+user['id']+'/links')
     vmess=json.loads(base64.b64decode(links['vmess'][8:]));assert vmess['net']=='ws' and vmess['tls']=='tls' and vmess['aid']=='0'
-    def count(n):
+    def count(nodes,checks):
         with client.open(links['subscription'],timeout=10) as r:subscription=base64.b64decode(r.read()).decode()
-        assert len(subscription.splitlines())==n and UUID not in subscription
-        monitor=api('overview')['monitor'];assert monitor['status']=='healthy' and len(monitor['checks'])==n
-    count(4)
+        assert len(subscription.splitlines())==nodes and UUID not in subscription
+        monitor=api('overview')['monitor'];assert monitor['status']=='healthy' and len(monitor['checks'])==checks
+    count(4,4)
     vmess_check=next(c for c in api('overview')['monitor']['checks'] if c['transport']=='vmess')
     assert vmess_check['https_ms'] is not None and vmess_check['udp_ms'] is not None
     # Three independently authenticated upstream transports, with real TLS for WS/gRPC.
@@ -92,15 +92,15 @@ def main():
                 'type':'none','host':'' if mode=='tcp' else settings['domain'],'path':'' if mode=='tcp' else '/fixture-vmess' if mode=='ws' else 'fixture-vmess',
                 'tls':'' if mode=='tcp' else 'tls','sni':'' if mode=='tcp' else settings['domain']}
             text='vmess://'+base64.b64encode(json.dumps(share).encode()).decode()
-            state=apply({'action':'preview','protocol':'vmess','label':'Fixture '+mode,'text':text});count(5+index)
+            state=apply({'action':'preview','protocol':'vmess','label':'Fixture '+mode,'text':text});count(6+2*index,5+index)
         item=next(p for p in state['items'] if p['network']=='ws');tag=item['tag']
         # Invalid changes cannot alter the serving configuration; blank UUID keeps it.
         original=settings_path.read_bytes()
         job=api('proxy-import',{'action':'manage','operation':'edit','tag':tag,'changes':{'label':'Invalid','address':item['address'],'port':item['port'],'protocol':'vmess','uuid':'bad'}},csrf)['id']
         wait(job,'failed');assert settings_path.read_bytes()==original
-        apply({'action':'manage','operation':'edit','tag':tag,'changes':{'label':'Edited VMess','address':item['address'],'port':item['port'],'protocol':'vmess','uuid':''}});count(7)
-        for operation,expected in [('disable',6),('delete',6),('restore',6),('enable',7)]:
-            state=apply({'action':'manage','operation':operation,'tag':tag});count(expected)
+        apply({'action':'manage','operation':'edit','tag':tag,'changes':{'label':'Edited VMess','address':item['address'],'port':item['port'],'protocol':'vmess','uuid':''}});count(10,7)
+        for operation,expected in [('disable',(8,6)),('delete',(8,6)),('restore',(8,6)),('enable',(10,7))]:
+            state=apply({'action':'manage','operation':operation,'tag':tag});count(*expected)
             record=next(p for p in state['items'] if p['tag']==tag)
             if operation=='restore':assert not record['enabled'] and not record['deleted_at']
         for job in reversed(jobs):subprocess.run(['python3','/opt/xray-gateway/scripts/proxy_import.py','rollback',job],check=True)
