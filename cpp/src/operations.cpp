@@ -9,6 +9,12 @@ constexpr Int retention = 30*86400;
 const std::map<std::string,std::string> service_names={{"reality","REALITY 入口"},{"websocket","WebSocket / TLS 入口"},
   {"hysteria2","Hysteria 2 入口"},{"vmess","VMess / TLS 入口"},
   {"probe","探测结果采集"},{"core","Xray 管理接口"},{"backup","本地自动加密备份"},{"test","通知通道测试"}};
+std::string service_label(const Json& settings,const std::string& service) {
+  if(auto found=service_names.find(service);found!=service_names.end())return found->second;
+  for(const auto& exit:settings.value("residential_exits",Json::array()))
+    if(exit.at("tag")==service)return exit.at("label").get<std::string>();
+  return service;
+}
 Int numeric(const Json& input,const std::string& key,Int fallback,Int low,Int high) {
   auto value=input.value(key,Json(fallback));
   if(!value.is_number_integer()||(value.is_number_unsigned()&&value.get<std::uint64_t>()>static_cast<std::uint64_t>(high)))throw HttpError(422,"通知阈值必须是有效整数");
@@ -43,7 +49,7 @@ Json Backend::history(const std::string& token,const std::string& range) {
   auto first=database.one("SELECT MIN(ts) AS ts FROM probe_history");
   database.exec("COMMIT");
   for(auto& row:summary){auto known=row.at("healthy").get<Int>()+row.at("failed").get<Int>();row["success_percent"]=known?Json(100.0*row.at("healthy").get<double>()/static_cast<double>(known)):Json(nullptr);}
-  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"transports",inbound_tags()},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
+  return {{"range",range},{"start",start},{"end",end},{"bucket_seconds",bucket},{"retention_days",30},{"transports",probe_tags()},{"first_probe",first->at("ts")},{"traffic",traffic},{"probes",probes},{"summary",summary}};
 }
 Json Backend::webhook_configuration(Database& database) {
   auto value=*database.one("SELECT * FROM notification_config WHERE id=1");
@@ -89,7 +95,7 @@ void Backend::configure_notifications(const std::string& token,const std::string
 std::string Backend::queue_notification(Database& database,const std::string& service,const std::string& kind,Int timestamp,Int started) {
   auto config=*database.one("SELECT enabled,url,generation FROM notification_config WHERE id=1");
   if(config.at("url")==""||(kind!="test"&&!config.at("enabled").get<Int>()))return {};
-  auto id=random_id();auto label=service_names.at(service);
+  auto id=random_id();auto label=service_label(settings_,service);
   std::string title=kind=="test"?"xcli 测试通知":label+(kind=="fault"?"持续异常":"已恢复");
   std::string message=kind=="test"?"通知通道测试，不代表节点发生故障。":
     kind=="recovery"?"已达到连续恢复阈值。":service=="probe"?"探测结果缺失或已过期，当前无法判断节点可用性。":
@@ -115,8 +121,8 @@ void Backend::observe_alarm(Database& database,const std::string& service,bool f
   if(timestamp-row.at("last_seen").get<Int>()>180){bad=failed?1:0;good=failed?0:1;}
   auto since=row.at("since").get<Int>();bool firing=row.at("firing").get<Int>()!=0;
   if(failed&&bad==1&&!firing)since=timestamp;
-  if(failed&&!firing&&bad>=failure_threshold){firing=true;queue_notification(database,service,"fault",timestamp,since);audit(database,"fault_detected",service_names.at(service));}
-  if(!failed&&firing&&good>=recovery_threshold){firing=false;queue_notification(database,service,"recovery",timestamp,since);audit(database,"fault_recovered",service_names.at(service));since=0;}
+  if(failed&&!firing&&bad>=failure_threshold){firing=true;queue_notification(database,service,"fault",timestamp,since);audit(database,"fault_detected",service_label(settings_,service));}
+  if(!failed&&firing&&good>=recovery_threshold){firing=false;queue_notification(database,service,"recovery",timestamp,since);audit(database,"fault_recovered",service_label(settings_,service));since=0;}
   if(!failed&&!firing)since=0;
   database.run("UPDATE alarm_state SET bad=?,good=?,firing=?,since=?,last_sample=?,last_seen=? WHERE service=?",
     {std::min(bad,Int(100)),std::min(good,Int(100)),Int(firing),since,sample,timestamp,service});
@@ -126,7 +132,7 @@ void Backend::collect_operations(Int timestamp) {
   std::lock_guard guard(mutation_mutex_);auto database=db();Transaction transaction(database);
   auto cfg=*database.one("SELECT failures,recoveries FROM notification_config WHERE id=1");int failures=cfg.at("failures"),recoveries=cfg.at("recoveries");
   auto status=monitor.value("status",std::string("unknown"));bool fresh=status=="healthy"||status=="failed";
-  auto enabled=inbound_tags();
+  auto enabled=probe_tags();
   Json checks=Json::object();
   if(fresh)for(const auto& check:monitor.value("checks",Json::array())) {
     auto transport=check.value("transport",std::string());auto state=check.value("status",std::string());

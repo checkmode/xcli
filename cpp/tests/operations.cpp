@@ -84,6 +84,37 @@ int main(){try{
   for(Int elapsed:{1000,1030,1150,1750,3550,7150,20000})backend->deliver_notifications(t+elapsed);
   {Database db(options.state/"gateway.sqlite");auto exhausted=*db.one("SELECT status,attempts FROM notifications WHERE id=?",{retry.at("id").get<std::string>()});
     check(exhausted.at("status")=="failed"&&exhausted.at("attempts")==6&&calls==before+6,"Retry limit failed");}
-  std::cout<<"PASS: history, distinct probe debounce, missing-data semantics, recovery, encrypted settings, auth, URL and socket address policy, retries across restart, cancellation, idempotency, test throttling, retention\n";
+  {
+    Temp exits;auto cfg=options;cfg.state=exits.path/"state";cfg.settings=exits.path/"settings.json";cfg.monitor_report=exits.path/"report.json";
+    auto settings=Json::parse(read_file(options.settings));settings["hysteria2_port"]=443;
+    settings["residential_exits"]=Json::array({{{"tag","residential-28"},{"label","Fixed fixture"},{"exit_ip","8.8.4.4"},
+      {"country","SG"},{"ws_path","/test/residential-28"},{"port",12028},{"hysteria2",true}}});
+    const auto& region=webshare_regions.front();
+    settings["residential_exits"].push_back({{"tag",region.tag},{"label","Dynamic fixture"},{"exit_ip",""},
+      {"country",region.country},{"ws_path",std::string("/test/")+std::string(region.tag)},{"port",region.port},{"dynamic",true}});
+    std::ofstream(cfg.settings)<<settings.dump();Backend panel(cfg,nullptr,sender);
+    {Database db(cfg.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("operations-test-password")});}
+    std::string cookie;auto auth=panel.login({{"username","admin"},{"password","operations-test-password"}},"127.0.0.1",cookie);
+    panel.configure_notifications(cookie,auth.at("csrf"),config);
+    check(panel.inbound_tags().size()==6&&panel.probe_tags().size()==4,"Probe and credential inventories were conflated");
+    Json payload={{"schema",1},{"scope","server"},{"updated",t},{"status","healthy"},{"checks",Json::array()}};
+    for(const auto& kind:panel.probe_tags())payload["checks"].push_back({{"transport",kind},{"status","healthy"},{"https_ms",100}});
+    std::ofstream(cfg.monitor_report)<<payload.dump();
+    check(panel.monitor_status(t).at("status")=="healthy","Dual-protocol fixed exit or dynamic pool required a nonexistent probe");
+    panel.collect_operations(t);panel.collect_operations(t+60);panel.collect_operations(t+120);
+    {Database db(cfg.state/"gateway.sqlite");
+      check(db.one("SELECT firing FROM alarm_state WHERE service='probe'")->at("firing")==0,"Complete fixed-exit probes raised sensor alarm");
+      check(!db.one("SELECT transport FROM probe_history WHERE transport LIKE '%-hy2'"),"Credential alias polluted probe history");}
+    check(panel.history(cookie,"1h").at("transports")==Json(panel.probe_tags()),"History listed unprobed entries");
+    auto missing=payload;missing["checks"].erase(3);std::ofstream(cfg.monitor_report)<<missing.dump();
+    check(panel.monitor_status(t).at("status")=="unknown","Missing fixed exit probe claimed healthy");
+    payload["status"]="failed";payload["checks"][3]["status"]="failed";
+    for(Int elapsed:{180,240,300}){payload["updated"]=t+elapsed;std::ofstream(cfg.monitor_report)<<payload.dump();panel.collect_operations(t+elapsed);}
+    check(panel.monitor_status(t+300).at("status")=="failed","Fixed exit failure was hidden");
+    {Database db(cfg.state/"gateway.sqlite");
+      auto event=db.one("SELECT payload FROM notifications WHERE service='residential-28' AND kind='fault'");
+      check(event&&Json::parse(event->at("payload").get<std::string>()).at("title")=="Fixed fixture持续异常","Fixed exit alarm label failed");}
+  }
+  std::cout<<"PASS: history, distinct probe debounce, missing-data semantics, recovery, encrypted settings, auth, URL and socket address policy, retries across restart, cancellation, idempotency, test throttling, retention, dual-protocol fixed exits\n";
   return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL: "<<e.what()<<'\n';return 1;}}

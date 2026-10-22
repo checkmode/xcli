@@ -173,6 +173,14 @@ std::vector<std::string> Backend::inbound_tags() const {
   }
   return result;
 }
+std::vector<std::string> Backend::probe_tags() const {
+  auto result=transports();
+  // The monitor probes each fixed exit once through its selected transport.
+  // Credential/accounting aliases and dynamic pool checks are separate.
+  for(const auto& exit:settings_.value("residential_exits",Json::array()))
+    if(!exit.value("dynamic",false))result.push_back(exit.at("tag").get<std::string>());
+  return result;
+}
 User Backend::get_user(Database& database,const std::string& id) {
   auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{id});
   if(!row)throw HttpError(404,"用户不存在");

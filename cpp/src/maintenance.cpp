@@ -45,9 +45,7 @@ Json Backend::monitor_status(Int timestamp) {
         {"https_ms",check.value("https_ms",Json(nullptr))},{"udp_ms",check.value("udp_ms",Json(nullptr))},{"udp_supported",check.value("udp_supported",true)},{"doh_ms",check.value("doh_ms",Json(nullptr))},
         {"last_success",check.value("last_success",Int(0))},{"error",check.value("error",std::string(""))}});
     }
-    if(result["status"]!="stale")for(const auto& kind:inbound_tags()) {
-      bool dynamic=false;for(const auto& entry:settings_.value("residential_exits",Json::array()))if(entry.at("tag")==kind&&entry.value("dynamic",false))dynamic=true;
-      if(dynamic)continue; // Dynamic upstream probes have their own pool status and do not impersonate public-entry checks.
+    if(result["status"]!="stale")for(const auto& kind:probe_tags()) {
       bool found=false;for(const auto& check:result["checks"])if(check["transport"]==kind)found=true;
       if(!found){result["status"]="unknown";result["message"]="等待全部入口的自检结果";}
     }

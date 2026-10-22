@@ -62,7 +62,7 @@ def main():
     def count(nodes,checks):
         with client.open(links['subscription'],timeout=10) as r:subscription=base64.b64decode(r.read()).decode()
         assert len(subscription.splitlines())==nodes and UUID not in subscription
-        monitor=api('overview')['monitor'];assert monitor['status']=='healthy' and len(monitor['checks'])==checks
+        monitor=api('overview')['monitor'];assert monitor['status']=='healthy' and len(monitor['checks'])==checks,monitor
     count(4,4)
     vmess_check=next(c for c in api('overview')['monitor']['checks'] if c['transport']=='vmess')
     assert vmess_check['https_ms'] is not None and vmess_check['udp_ms'] is not None

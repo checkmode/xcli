@@ -78,7 +78,7 @@ def main():
         users=api('overview')['users'];uid=next(u['id'] for u in users if u['status']=='active');links=api('users/'+uid+'/links')
         with client.open(links['subscription'],timeout=10) as r:text=base64.b64decode(r.read()).decode()
         assert len(text.splitlines())==7 and 'fixture-password' not in text
-        monitor=api('overview')['monitor'];assert len(monitor['checks'])==5 and monitor['status']=='healthy'
+        monitor=api('overview')['monitor'];assert len(monitor['checks'])==5 and monitor['status']=='healthy',monitor
         now=snapshot(Path('/var/lib/xray-gateway/gateway.sqlite'),settings_path)
         for key in ('identity_digest','admin_digest','security'):assert now[key]==before[key],key
         for uid,values in before['traffic'].items():assert all(a>=b for a,b in zip(now['traffic'][uid],values))
