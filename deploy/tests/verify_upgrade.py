@@ -11,6 +11,9 @@ import sys
 import time
 import urllib.request
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from provision import XRAY_VERSION
+
 STATE = Path('/root/xcli-upgrade-test.json')
 COOKIE = Path('/root/xcli-upgrade-cookie.txt')
 
@@ -73,7 +76,7 @@ def main():
                 assert links['hysteria2'].startswith('hysteria2://')
                 assert subscription[2] == links['hysteria2']
         if phase == 'upgraded':
-            assert settings == {**state['settings'], 'hysteria2_port': 443, 'xray_version': '26.10.10'}
+            assert settings == {**state['settings'], 'hysteria2_port': 443, 'xray_version': XRAY_VERSION}
             newest = create('created-after-upgrade')
             state['users'].append(newest)
             # Creation is asynchronous: revocation only requires a core restart

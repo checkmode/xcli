@@ -144,7 +144,8 @@ jobs:
           chmod 755 "$work"
           mkdir "$work/source"
           git -C legacy archive HEAD | tar -x -C "$work/source"
-          sudo python3 "$work/source/deploy/install.py" --commit 7a578c200538cdb65147f70be77878bc669f870c \
+          # Keep the legacy application/layout but avoid its withdrawn Xray pin.
+          sudo python3 deploy/tests/install_legacy_fixture.py "$work/source" --commit 7a578c200538cdb65147f70be77878bc669f870c \
             --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
             --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
           sudo python3 deploy/tests/verify_upgrade.py seed

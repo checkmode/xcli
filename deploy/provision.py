@@ -10,10 +10,10 @@ import secrets
 import sqlite3
 import uuid
 
-XRAY_VERSION = '26.10.10'
+XRAY_VERSION = '26.10.21'
 XRAY_ASSETS = {
-    'x86_64': ('Xray-linux-64.zip', '72a5fde819713a103c6fc26a87aa025c1518c918a34eba4bc38d64dc0728e5d9'),
-    'aarch64': ('Xray-linux-arm64-v8a.zip', '58e339e67827220175b3a1c6f66f48ccd086b79209f30ba1c0bcb47885d4c22a'),
+    'x86_64': ('Xray-linux-64.zip', '0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978'),
+    'aarch64': ('Xray-linux-arm64-v8a.zip', 'd1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c'),
 }
 BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
               '172.16.0.0/12', '192.168.0.0/16', '192.0.0.0/24', '192.0.2.0/24', '198.18.0.0/15',
