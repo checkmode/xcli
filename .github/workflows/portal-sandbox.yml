@@ -1,0 +1,23 @@
+name: Portal sandbox
+on:
+  pull_request:
+    paths:
+      - 'portal/**'
+      - 'cpp/**'
+      - 'app.py'
+      - 'tests/test_app.py'
+      - '.dockerignore'
+      - '.github/workflows/portal-sandbox.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build isolated sandbox
+        run: docker build -f portal/sandbox/Containerfile -t xcli-portal-sandbox:test .
+      - name: Run PostgreSQL, controller, and compatibility tests
+        run: docker run --rm --cpus 2 --memory 4g xcli-portal-sandbox:test test

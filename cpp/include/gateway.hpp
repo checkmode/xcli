@@ -102,6 +102,10 @@ struct Options {
   bool automatic_backups = true;
   int backup_interval = 21600;
   int backup_retention = 28;
+  // Opt-in local commerce bridge. Never exposed by the HTTP server.
+  fs::path provision_socket;
+  Int provision_uid = -1;
+  int portal_limit = 50;
 };
 
 struct User {
@@ -202,6 +206,7 @@ class Backend {
   bool dynamic_residential_enabled() const;
   Json proxy_import_status(const std::string& token);
   Json request_proxy_import(const std::string& token, const std::string& csrf, const Json& input);
+  Json provision(const Json& input);
  private:
   Options options_;
   Json settings_;
@@ -245,6 +250,20 @@ class Backend {
     const std::string& kind, Int timestamp, Int started);
   void observe_alarm(Database& database, const std::string& service, bool failed,
     Int sample, Int timestamp, int failure_threshold, int recovery_threshold);
+};
+
+class ProvisionServer {
+ public:
+  explicit ProvisionServer(Backend& backend);
+  ~ProvisionServer();
+  void start();
+  void stop();
+ private:
+  Backend& backend_;
+  int fd_ = -1;
+  std::atomic<bool> stopping_{false};
+  std::thread thread_;
+  void serve();
 };
 
 class HttpServer {

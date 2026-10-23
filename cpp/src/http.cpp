@@ -55,7 +55,7 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.set_pre_routing_handler([this](const Request& request,Response& response) {
     security_headers(response);
     if(request.body.size()>16384) {json(response,{{"detail","请求过大"}},413);return httplib::Server::HandlerResponse::Handled;}
-    if(request.method!="GET"&&request.method!="HEAD"&&request.method!="OPTIONS"&&request.get_header_value("Origin")!=backend_.settings().at("origin").get<std::string>()) {
+    if(request.method!="GET"&&request.method!="HEAD"&&request.method!="OPTIONS"&&request.get_header_value("Origin")!=backend_.settings().value("admin_origin",backend_.settings().at("origin").get<std::string>())) {
       json(response,{{"detail","来源校验失败"}},403);return httplib::Server::HandlerResponse::Handled;
     }
     return httplib::Server::HandlerResponse::Unhandled;

@@ -113,6 +113,9 @@ void Database::initialize() {
       attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,
       delivered INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',http_status INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS notification_pending ON notifications(status,next_attempt);
+    CREATE TABLE IF NOT EXISTS portal_accounts(account_id TEXT PRIMARY KEY,user_id TEXT NOT NULL UNIQUE REFERENCES users(id),version INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS portal_reservations(account_id TEXT PRIMARY KEY,reservation_id TEXT NOT NULL UNIQUE,expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS portal_operations(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,response TEXT NOT NULL,created INTEGER NOT NULL);
   )SQL");
   Transaction migration(*this);
   if(!one("SELECT value FROM metadata WHERE key='operations_history_imported'")) {

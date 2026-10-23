@@ -45,6 +45,15 @@ std::string User::email(std::string_view tag) const {return id+"."+uuid.substr(0
 Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender) : options_(std::move(options)),settings_(Json::parse(read_file(options_.settings))),core_(std::move(core)),webhook_sender_(std::move(sender)) {
   for(const auto& key:{"domain","public_ip","origin","reality_sni","reality_public","short_id","ws_path"})
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
+  if(settings_.contains("admin_origin")) {
+    if(!settings_["admin_origin"].is_string())throw std::runtime_error("Invalid admin_origin");
+    const auto origin=settings_["admin_origin"].get<std::string>();std::smatch parts;
+    if(!std::regex_match(origin,parts,std::regex("https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)(:([0-9]{1,5}))?"))||parts[1].length()>253||
+       (parts[6].matched&&(std::stoi(parts[6])<1||std::stoi(parts[6])>65535)))
+      throw std::runtime_error("admin_origin requires a canonical HTTPS DNS origin without a path");
+    const auto port=parts[6].matched?std::stoi(parts[6]):443;
+    settings_["admin_origin"]="https://"+parts[1].str()+(port==443?"":":"+std::to_string(port));
+  }
   auto hy2=settings_.value("hysteria2_port",Json(0));
   if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
   if(settings_.contains("vmess_ws_path")) {
@@ -248,7 +257,7 @@ Json Backend::overview(const std::string& token) {
 Json Backend::create_user(const std::string& token,const std::string& csrf,const Json& input) {
   auto values=validated_user(input);std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
   auto database=db();Transaction transaction(database);
-  if(database.one("SELECT COUNT(*) AS n FROM users WHERE deleted=0")->at("n").get<Int>()>=500)throw HttpError(409,"最多支持 500 位用户");
+  if(database.one("SELECT (SELECT COUNT(*) FROM users WHERE deleted=0) + (SELECT COUNT(*) FROM portal_reservations r WHERE r.expires>? AND NOT EXISTS(SELECT 1 FROM portal_accounts a WHERE a.account_id=r.account_id)) AS n",{now()})->at("n").get<Int>()>=500)throw HttpError(409,"最多支持 500 位用户（含待支付预留）");
   auto id=random_id();auto name=values["name"].get<std::string>();
   database.run("INSERT INTO users(id,name,uuid,token,enabled,quota,expires,created) VALUES(?,?,?,?,?,?,?,?)",
     {id,name,random_uuid(),random_token(),values["enabled"].get<Int>(),values["quota"].get<Int>(),values["expires"].get<Int>(),now()});

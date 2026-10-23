@@ -29,6 +29,29 @@ def test_auth_and_csrf(client):
     r=client.get('/api/overview');assert r.status_code==200
     assert 'uuid' not in r.json()['users'][0] and 'token' not in r.json()['users'][0]
 
+def test_admin_origin_compatibility(client):
+    headers=login(client);uid=create(client,headers)
+    before=client.get(f'/api/users/{uid}/links').json()
+    settings=app.config();settings['admin_origin']='https://admin.testserver'
+    app.SETTINGS.write_text(json.dumps(settings))
+    assert client.get('/api/session').status_code==200
+    assert client.post('/api/users',json={'name':'old-origin'},headers=headers).status_code==403
+    headers['Origin']='https://admin.testserver'
+    assert client.post('/api/users',json={'name':'new-origin'},headers=headers).status_code==200
+    assert client.get(f'/api/users/{uid}/links').json()==before
+    assert client.get(before['subscription']).status_code==200
+
+@pytest.mark.parametrize('origin',['http://admin.testserver','https://admin.testserver/','https://user:pass@admin.testserver','https://admin.testserver:0','https://admin.testserver:65536','https://bad..example',None])
+def test_admin_origin_rejects_non_origin_values(client,origin):
+    settings=app.config();settings['admin_origin']=origin
+    app.SETTINGS.write_text(json.dumps(settings))
+    with pytest.raises(ValueError):app.config()
+
+def test_admin_origin_normalizes_default_port(client):
+    settings=app.config();settings['admin_origin']='https://admin.testserver:0443'
+    app.SETTINGS.write_text(json.dumps(settings))
+    assert app.config()['admin_origin']=='https://admin.testserver'
+
 def test_subscription_rotation_disable_and_delete(client):
     h=login(client);uid=create(client,h)
     old=client.get(f'/api/users/{uid}/links').json();r=client.get(old['subscription']);assert r.status_code==200

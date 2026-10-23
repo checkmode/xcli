@@ -115,6 +115,10 @@ void Backend::restore_backup(const std::string& token,const std::string& csrf,co
   auto id=checked_string(input.value("id",Json("")),1,80);
   if(input.value("confirm",Json(""))!=Json(id))throw HttpError(422,"请确认指定备份编号");
   auto database=db();{Transaction auth(database);confirm_admin(database,token,input);auth.commit();}
+  // A gateway-only restore would detach paid orders from their durable operation history.
+  if(database.one("SELECT COUNT(*) AS n FROM portal_accounts")->at("n").get<Int>()>0||
+     database.one("SELECT COUNT(*) AS n FROM portal_reservations WHERE expires>?",{now()})->at("n").get<Int>()>0)
+    throw HttpError(409,"存在公众账户或待支付预留；需要同时核对订单账本与网关状态后再进行离线恢复");
   auto bundle=open_backup(id);
   if(!secure_equal(sha256(bundle.at("settings").dump()),sha256(settings_.dump())))throw HttpError(409,"备份来自不同的服务器配置；请使用离线恢复工具");
   Temporary candidate{options_.state/("restore-"+random_id()+".sqlite")};write_private_file(candidate.path,unbase64(bundle.at("database").get<std::string>(),40*1024*1024));

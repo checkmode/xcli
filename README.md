@@ -6,6 +6,8 @@
 
 当前版本为 1.3.0，提供 REALITY / XTLS Vision、WebSocket / TLS 两个 VLESS 入口，以及 Hysteria 2 / QUIC 入口；可额外启用 VMess / WebSocket / TLS。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
 
+公众账户、订单与受限开通的本地开发入口见 [公众账户与支付沙箱](portal/README.md)。该入口使用独立测试数据和模拟付款，默认不启用生产收费或部署。
+
 安装器固定使用官方 Xray-core **v26.10.21（上游预发布版本）**并校验 AMD64、ARM64 文件的 SHA-256。上游因证书信任库问题撤下了 v26.10.10 和 v26.10.17，安装器不再引用这些版本；说明见 [v26.10.21 发布页](https://github.com/XTLS/Xray-core/releases/tag/v26.10.21)。真实核心测试覆盖四个入口、64～4096 字节随机 UDP 报文、计费和权限撤销。升级脚本保留旧核心供回退。
 
 ## 一键安装

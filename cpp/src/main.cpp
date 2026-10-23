@@ -25,6 +25,9 @@ int main(int argc,char** argv) {
     options.backup_interval=number(env("XG_BACKUP_INTERVAL","21600"),60,604800);
     options.backup_retention=number(env("XG_BACKUP_RETENTION","28"),2,365);
     options.port=number(env("XG_PORT","8080"),1,65535);
+    options.provision_socket=env("XG_PROVISION_SOCKET","");
+    if(!options.provision_socket.empty())options.provision_uid=number(env("XG_PROVISION_UID","-1"),1,2147483647);
+    options.portal_limit=number(env("XG_PORTAL_LIMIT","50"),1,500);
     bool preflight=false;std::string backup,extract,destination;
     for(int i=1;i<argc;++i) {
       std::string arg=argv[i];
@@ -34,11 +37,14 @@ int main(int argc,char** argv) {
       else if(arg=="--static")options.static_dir=value();else if(arg=="--api")options.api=value();
       else if(arg=="--core-binary")options.core_binary=value();else if(arg=="--core-pid-file")options.core_pid_file=value();
       else if(arg=="--port")options.port=number(value(),1,65535);else if(arg=="--poll-seconds")options.poll_seconds=number(value(),1,60);
+      else if(arg=="--provision-socket")options.provision_socket=value();
+      else if(arg=="--provision-uid")options.provision_uid=number(value(),1,2147483647);
+      else if(arg=="--portal-limit")options.portal_limit=number(value(),1,500);
       else if(arg=="--secret-key")options.secret_key=value();else if(arg=="--monitor-config")options.monitor_config=value();
       else if(arg=="--monitor-report")options.monitor_report=value();else if(arg=="--no-auto-backup")options.automatic_backups=false;
       else if(arg=="--extract-backup")extract=value();else if(arg=="--destination")destination=value();
       else if(arg=="--offline")options.offline=true;else if(arg=="--preflight")preflight=true;else if(arg=="--backup")backup=value();
-      else if(arg=="--help") {std::cout<<"Options: --state DIR --settings FILE --static DIR --port PORT --api LOOPBACK:PORT --core-binary FILE --core-pid-file FILE --poll-seconds N --offline --preflight --backup NEW_FILE --secret-key FILE --monitor-config FILE --monitor-report FILE --no-auto-backup --extract-backup FILE --destination NEW_DIRECTORY\n";return 0;}
+      else if(arg=="--help") {std::cout<<"Options: --state DIR --settings FILE --static DIR --port PORT --api LOOPBACK:PORT --core-binary FILE --core-pid-file FILE --poll-seconds N --offline --preflight --backup NEW_FILE --secret-key FILE --monitor-config FILE --monitor-report FILE --no-auto-backup --extract-backup FILE --destination NEW_DIRECTORY --provision-socket FILE --provision-uid UID --portal-limit N\n";return 0;}
       else throw std::runtime_error("Unknown command line option");
     }
     if(!backup.empty()){xg::Database database(options.state/"gateway.sqlite",true);database.backup(backup);std::cout<<"Database backup completed\n";return 0;}
@@ -65,6 +71,7 @@ int main(int argc,char** argv) {
     if(preflight){std::cout<<backend.preflight().dump(2)<<'\n';return 0;}
     xg::HttpServer server(backend);
     if(!server.bind())throw std::runtime_error("Cannot bind management port");
+    xg::ProvisionServer provisioner(backend);
     std::jthread signal_thread([&](std::stop_token stop) {
       while(!stop.stop_requested()) {
         timespec timeout{0,200000000};int signal=sigtimedwait(&signals,nullptr,&timeout);
@@ -72,8 +79,9 @@ int main(int argc,char** argv) {
       }
     });
     backend.start_worker();
+    provisioner.start();
     std::cout<<"C++ management backend ready on loopback port "<<options.port<<std::endl;
-    bool ok=server.listen();backend.stop_worker();
+    bool ok=server.listen();provisioner.stop();backend.stop_worker();
     return ok?0:1;
   } catch(const std::exception& error) {std::cerr<<"Startup failed: "<<error.what()<<'\n';return 1;}
 }

@@ -1,0 +1,25 @@
+FROM ubuntu:26.04
+ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake pkg-config ca-certificates \
+    libcpp-httplib-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libcurl4-openssl-dev \
+    libqrencode-dev libpng-dev libgrpc++-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler \
+    python3-venv postgresql-18 zbar-tools \
+    && rm -rf /var/lib/apt/lists/*
+COPY portal/requirements*.txt /tmp/requirements/
+COPY portal/sandbox/wheels /tmp/wheels
+ARG PORTAL_PIP_NO_INDEX=false
+RUN python3 -m venv /opt/portal-venv \
+    && PIP_NO_INDEX="$PORTAL_PIP_NO_INDEX" /opt/portal-venv/bin/pip install --no-cache-dir \
+       --find-links=/tmp/wheels -r /tmp/requirements/requirements-test.txt \
+    && rm -rf /tmp/wheels
+COPY cpp /workspace/cpp
+RUN cmake -S /workspace/cpp -B /tmp/xcli-build-check -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/xcli-build-check -j2
+COPY static /workspace/static
+COPY tests /workspace/tests
+COPY app.py /workspace/app.py
+COPY portal /workspace/portal
+WORKDIR /workspace/portal
+EXPOSE 8088
+ENTRYPOINT ["/opt/portal-venv/bin/python", "/workspace/portal/sandbox/entrypoint.py"]

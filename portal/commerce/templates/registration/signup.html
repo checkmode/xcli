@@ -1,0 +1,3 @@
+{% extends 'commerce/base.html' %}{% block title %}创建账户 · Xdistribute{% endblock %}{% block content %}
+<section class="card narrow"><span class="eyebrow">开始测试</span><h1>创建账户</h1><p>使用测试账号信息即可。请设置至少 12 位密码。</p><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">创建账户</button></form><p>已有账户？<a href="{% url 'login' %}">登录</a></p></section>
+{% endblock %}

@@ -1,0 +1,17 @@
+# Explicit source allow-list: never send private gateway data or local credentials to a builder.
+**
+!cpp/
+!cpp/**
+!portal/
+!portal/**
+!static/
+!static/**
+!tests/
+!tests/**
+!app.py
+**/__pycache__/
+**/*.pyc
+**/*.sqlite*
+**/.env
+**/.venv/
+**/build*/

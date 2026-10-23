@@ -1,0 +1,9 @@
+{% load static %}<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Xdistribute · 账户沙箱{% endblock %}</title><link rel="stylesheet" href="{% static 'commerce/portal.css' %}"></head>
+<body><div class="sandbox-bar">本地沙箱 · 所有付款均为模拟，不收取真实费用</div>
+<header><a class="brand" href="{% url 'home' %}">Xdistribute <span>Sandbox</span></a><nav>
+{% if request.user.is_authenticated %}<a href="{% url 'account' %}">我的账户</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="link" type="submit">退出</button></form>
+{% else %}<a href="{% url 'login' %}">登录</a><a class="button small" href="{% url 'signup' %}">创建测试账户</a>{% endif %}
+</nav></header><main>{% block content %}{% endblock %}</main>
+<footer>账户、订单与开通流程测试环境。这里显示的价格用于测试，不代表正式销售方案。</footer></body></html>

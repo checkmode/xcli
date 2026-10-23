@@ -26,7 +26,14 @@ RATE = defaultdict(deque)
 POLL = 5
 
 def config():
-    return json.loads(SETTINGS.read_text())
+    value = json.loads(SETTINGS.read_text())
+    if 'admin_origin' in value:
+        match = re.fullmatch(r'https://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)(?::([0-9]{1,5}))?', value['admin_origin']) if isinstance(value['admin_origin'], str) else None
+        if not match or len(match[1]) > 253 or (match[2] is not None and not 1 <= int(match[2]) <= 65535):
+            raise ValueError('admin_origin requires a canonical HTTPS DNS origin without a path')
+        port=int(match[2]) if match[2] is not None else 443
+        value['admin_origin']='https://'+match[1]+('' if port==443 else ':'+str(port))
+    return value
 
 @contextlib.contextmanager
 def db():
@@ -192,7 +199,8 @@ async def protection(request:Request, call_next):
         return JSONResponse({'detail':'请求过大'},status_code=413)
     if request.method not in ('GET','HEAD','OPTIONS'):
         origin=request.headers.get('origin')
-        if origin!=config()['origin']:
+        settings=config()
+        if origin!=settings.get('admin_origin',settings['origin']):
             return JSONResponse({'detail':'来源校验失败'},status_code=403)
     response=await call_next(request)
     response.headers.update({'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','Cache-Control':'no-store','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})

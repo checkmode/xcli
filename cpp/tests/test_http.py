@@ -25,6 +25,21 @@ PASSWORD = 'compatibility-test-password'
 ORIGIN = 'https://testserver'
 
 
+@pytest.mark.parametrize('fixture', [{'admin_origin': 'https://admin.testserver'}], indirect=True)
+def test_separate_admin_origin_preserves_legacy_sessions_and_subscriptions(fixture):
+    client = fixture['client']
+    client.cookie, client.csrf = fixture['old_cookie'], fixture['old_csrf']
+    assert client.json('/api/session')['csrf'] == fixture['old_csrf']
+    assert client.json('/api/users/' + fixture['uid'] + '/links') == fixture['links']
+    assert client.call('/s/' + fixture['token'])[0] == 200
+    assert client.call('/api/users', 'POST', {'name': 'wrong origin'})[0] == 403
+    client.json('/api/users', 'POST', {'name': 'new admin origin'}, headers={'Origin': 'https://admin.testserver'})
+    assert client.call('/api/login', 'POST', {'username': 'admin', 'password': PASSWORD})[0] == 403
+    assert client.call('/api/login', 'POST', {'username': 'admin', 'password': PASSWORD}, headers={'Origin': 'https://admin.testserver'})[0] == 200
+    assert client.call('/api/provision', 'POST', {}, headers={'Origin': 'https://admin.testserver'})[0] == 404
+    assert client.json('/api/users/' + fixture['uid'] + '/links') == fixture['links']
+
+
 def available_port():
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))

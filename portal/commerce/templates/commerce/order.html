@@ -1,0 +1,6 @@
+{% extends 'commerce/base.html' %}{% block content %}
+<div class="page-heading"><div><a href="{% url 'account' %}">← 我的账户</a><h1>沙箱订单</h1></div><a class="button secondary" href="{% url 'order' intent.pk %}">刷新状态</a></div>
+<section class="card narrow"><span class="eyebrow">{{ intent.plan.name }}</span>{% if order %}<h2>{{ order.get_state_display }}</h2><div class="price">{{ order.display_amount }}</div><p class="muted">测试金额，不会发生真实扣款。</p>{% if order.message %}<p class="notice">{{ order.message }}</p>{% endif %}
+{% if order.state == 'waiting' %}{% if payment_requested %}<p>模拟付款已提交，请稍后刷新查看开通结果。</p>{% else %}<p>名额保留至 {{ order.reservation_expires|date:'H:i' }} UTC。</p><form method="post" action="{% url 'sandbox-pay' order.pk %}">{% csrf_token %}<label for="channel">模拟支付方式</label><select name="channel" id="channel"><option value="card">银行卡 · 沙箱</option><option value="paypal">PayPal · 沙箱</option><option value="wechat">微信支付 · 沙箱</option><option value="alipay">支付宝 · 沙箱</option></select><p class="muted">无需填写卡号或支付账号。上述选项均使用本地模拟收银台。</p><button type="submit">模拟付款成功</button></form>{% endif %}{% endif %}
+{% else %}<h2>正在确认可用名额</h2><p>订单准备完成后，页面将显示价格和沙箱付款入口。请稍后刷新。</p>{% endif %}<p class="order-id">订单编号 {{ intent.pk }}</p></section>
+{% endblock %}

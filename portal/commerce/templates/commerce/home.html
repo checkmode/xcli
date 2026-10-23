@@ -1,0 +1,5 @@
+{% extends 'commerce/base.html' %}{% block content %}
+<section class="hero"><span class="eyebrow">账户服务预览</span><h1>从创建账户，<br>到获得订阅。</h1><p>体验完整的购买与开通流程，查看属于自己的订单和订阅状态。</p><a class="button" href="{% url 'account' %}">进入我的账户 <span>→</span></a></section>
+<div class="steps"><div><b>01</b><h3>创建账户</h3><p>独立登录，查看自己的订单。</p></div><div><b>02</b><h3>模拟付款</h3><p>选择支付方式，完成沙箱付款。</p></div><div><b>03</b><h3>查看订阅</h3><p>确认开通结果及有效期。</p></div></div>
+<section class="card"><span class="eyebrow">当前测试方案</span>{% for plan in plans %}<h2>{{ plan.name }}</h2><p>固定期限，手动续期。付款前会确认是否还有可用名额。</p>{% empty %}<p>测试方案尚未准备完成。</p>{% endfor %}</section>
+{% endblock %}
