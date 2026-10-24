@@ -82,6 +82,8 @@ Json Backend::clash_configuration(const User& user) const {
   Json rules=Json::array({"DOMAIN,"+domain+",DIRECT","IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
     "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve","IP-CIDR,172.16.0.0/12,DIRECT,no-resolve","IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"});
   Json dns_policy=Json::object(),rule_providers=Json::object();
+  rules.push_back("DOMAIN-SUFFIX,todesk.com,DIRECT");
+  dns_policy["+.todesk.com"]=domestic_dns;
   const auto registry=settings_.value("clash_service_routes",Json::object());
   if(registry.contains(user.id))for(const auto& service:registry.at(user.id)) {
     const auto group=service.at("name").get<std::string>(),tag=service.at("outbound").get<std::string>();
