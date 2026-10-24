@@ -3,7 +3,7 @@ import base64
 import json
 import re
 import subprocess
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import pytest
 import yaml
@@ -17,6 +17,58 @@ POLICY = {
     "client_policies": {"__USER_ID__": {"ai_outbound": "residential-28"}},
     "shadowrocket_base_profiles": {"__USER_ID__": BASE},
 }
+
+
+DNS_BASE = BASE.replace('dns-server = system', '''dns-server = system
+dns-server = 8.8.8.8
+fallback-dns-server = system
+direct-dns-server = system
+proxy-dns-server = system
+dns-fallback-system = true
+dns-direct-system = true
+dns-direct-fallback-proxy = true
+always-ip-address = true
+use-local-host-item-for-proxy = true
+hijack-dns = 8.8.8.8:53''').replace('localhost = 127.0.0.1', 'localhost = 127.0.0.1\ntestserver = 192.0.2.99')
+
+
+@pytest.mark.parametrize('fixture', [
+    {**POLICY, 'shadowrocket_base_profiles': {'__USER_ID__': base}}
+    for base in (DNS_BASE, DNS_BASE.replace('\n', '\r\n'),
+                 DNS_BASE.replace('[Host]\nlocalhost = 127.0.0.1\ntestserver = 192.0.2.99\n', ''))
+], indirect=True)
+def test_integrated_dns_overrides_old_resolvers_without_changing_proxy_routes(fixture):
+    clash, shadow, links = exports(fixture)
+    section = ''; values = {}; keys = []
+    for line in shadow.splitlines():
+        if line.startswith('['): section = line
+        elif section == '[General]' and '=' in line and not line.startswith('#'):
+            key, value = (x.strip() for x in line.split('=', 1))
+            keys.append(key); values[key] = value
+    assert len(keys) == len(set(keys))
+    domestic = 'https://223.5.5.5/dns-query,https://1.12.12.12/dns-query'
+    assert values['direct-dns-server'] == values['proxy-dns-server'] == domestic
+    label = next(unquote(urlsplit(link).fragment) for link in links
+                 if link.startswith('vless://') and unquote(urlsplit(link).fragment).endswith(' · HTTPS')
+                 and '固定' not in unquote(urlsplit(link).fragment))
+    # The fallback binds an actual imported node, not an unverified DNS group alias.
+    assert values['dns-server'] == 'https://1.1.1.1/dns-query#proxy=' + quote(label, safe='')
+    assert values['fallback-dns-server'] == 'https://1.0.0.1/dns-query#proxy=' + quote(label, safe='')
+    for key in ('dns-fallback-system', 'dns-direct-system', 'dns-direct-fallback-proxy',
+                'always-ip-address', 'use-local-host-item-for-proxy'):
+        assert values[key] == 'false'
+    assert values['hijack-dns'] == ':53'
+    assert values['ipv6'] == 'true'
+    assert values['udp-policy-not-supported-behaviour'] == 'REJECT'
+    assert shadow.count('testserver = 203.0.113.2') == 1
+    assert 'testserver = 192.0.2.99' not in shadow
+    assert shadow.count('[Host]') == 1
+    assert 'DOMAIN-SUFFIX,local.example,DIRECT' in shadow
+    assert 'DOMAIN-SUFFIX,claude.ai,XCLI-独立 · AI' in shadow
+    assert 'DOMAIN-SUFFIX,youtube.com,XCLI-独立 · YouTube' in shadow
+    assert '[MITM]\nenable = false' in shadow.replace('\r\n', '\n')
+    setup = Client(fixture['client'].port).json('/s/' + fixture['token'] + '/shadowrocket.json')
+    assert setup['dns_routing'] == 'integrated'
 
 
 def exports(fixture):
@@ -81,7 +133,7 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     assert "OR,((DST-PORT,3478),(DST-PORT,443))" in shadow
     assert "IP-CIDR,2001:b28:f23d::/48,XCLI-独立 · Telegram,no-resolve" in shadow
     assert "FINAL,XCLI-其他流量" in shadow and "FINAL,PROXY" not in shadow
-    assert "[Host]\nlocalhost = 127.0.0.1" in shadow and "[MITM]\nenable = false" in shadow
+    assert "localhost = 127.0.0.1" in shadow and "[MITM]\nenable = false" in shadow
     assert shadow.count("[Proxy Group]") == 1
 
     # Every generated Shadowrocket member resolves to a group or an actual

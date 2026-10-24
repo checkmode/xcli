@@ -45,6 +45,12 @@
         byId('changes-detail').textContent='专属远程配置继承 default.conf，仅增加固定业务节点、策略组、域名规则和 UDP 拒绝兜底。Claude 固定住宅出口，GitHub 固定普通 Hysteria 2；现有完整默认设置和 DNS 保留。';
         byId('completion-detail').textContent='首次导入后选择使用此配置。后续在小火箭「设置 → 配置」启用自动更新，或再次扫码/点击本按钮更新。需要立即生效时请手动更新配置；只刷新首页节点订阅不会更新分流。切回 default.conf 可撤销本次增量。';
         byId('dns-troubleshooting').hidden=true;
+        if(setup.dns_routing==='integrated') {
+          byId('intro').textContent='安装或更新完整分流配置。国内域名直连解析，代理域名由对应策略选中的节点解析。';
+          byId('nodes-help').textContent='先更新首页节点订阅，再更新并使用此配置，全局路由保持「配置」。请关闭旧的「Xcli DNS 随所选节点」模块，避免覆盖内置 DNS 分流。';
+          byId('changes-detail').textContent='配置内置国内直连加密 DNS，并保留代理域名在对应出口解析。需要先解析 IP 才能匹配规则时，经本站 HTTPS 节点查询；不回退系统 DNS。AI、YouTube 等独立策略组继续生效。';
+          byId('completion-detail').textContent='需要支持直连 DNS 的新版小火箭。更新配置后断开并重连，检查百度直连和国外网站分流。只刷新首页节点订阅不会更新配置；旧 DNS 模块保持关闭。';
+        }
       }
       byId('set-proxy').href='shadowrocket://route/'+(serviceRouting?'config':'proxy');
       byId('import-nodes').href=serviceRouting?'shadowrocket://config/add/'+moduleURL:'shadowrocket://add/'+subscription;

@@ -11,6 +11,54 @@ std::string trimmed(std::string value) {
   return value.substr(first,value.find_last_not_of(" \t\r\n")-first+1);
 }
 
+// Proxy-domain connections keep their hostname and are resolved by the selected
+// outbound. Only DIRECT domains and rule-evaluation lookups use these resolvers.
+std::string integrated_dns(const std::string& profile,const std::string& domain,
+                           const std::string& address,const std::string& lookup_node) {
+  const std::string domestic="https://223.5.5.5/dns-query,https://1.12.12.12/dns-query";
+  const std::string proxy="#proxy="+url_quote(lookup_node);
+  const std::map<std::string,std::string> fields{
+    {"dns-server","https://1.1.1.1/dns-query"+proxy},
+    {"fallback-dns-server","https://1.0.0.1/dns-query"+proxy},
+    {"direct-dns-server",domestic},{"proxy-dns-server",domestic},
+    {"dns-fallback-system","false"},{"dns-direct-system","false"},
+    {"dns-direct-fallback-proxy","false"},{"always-ip-address","false"},
+    {"use-local-host-item-for-proxy","false"},{"hijack-dns",":53"},
+    {"udp-policy-not-supported-behaviour","REJECT"}};
+  const std::string eol=profile.find("\r\n")!=std::string::npos?"\r\n":"\n";
+  std::string result,section;
+  bool host=false;
+  for(std::size_t offset=0;offset<profile.size();) {
+    auto end=profile.find('\n',offset);const bool newline=end!=std::string::npos;
+    if(!newline)end=profile.size();
+    const auto original=profile.substr(offset,end-offset+(newline?1:0));
+    auto line=trimmed(original);
+    if(offset==0&&line.starts_with("\xef\xbb\xbf"))line.erase(0,3);
+    if(line.starts_with("[")&&line.find(']')!=std::string::npos) {
+      section=line.substr(1,line.find(']')-1);
+      result+=original;if(!newline)result+=eol;
+      if(section=="General") {
+        result+="# Xcli integrated DNS: DIRECT uses domestic DoH; proxy domains resolve at their selected outbound."+eol;
+        result+="# Rule-evaluation DNS uses the HTTPS node. Keep the old Xcli DNS module disabled."+eol;
+        for(const auto& [key,value]:fields)result+=key+" = "+value+eol;
+      } else if(section=="Host") {
+        if(host)throw HttpError(503,"Ambiguous Shadowrocket Host sections");
+        host=true;result+=domain+" = "+address+eol;
+      } else if(section=="Rule") {
+        result+="IP-CIDR,223.5.5.5/32,DIRECT,no-resolve"+eol;
+        result+="IP-CIDR,1.12.12.12/32,DIRECT,no-resolve"+eol;
+      }
+    } else {
+      const auto equals=line.find('=');
+      const auto key=equals==std::string::npos?std::string():trimmed(line.substr(0,equals));
+      if(!((section=="General"&&fields.contains(key))||(section=="Host"&&key==domain)))result+=original;
+    }
+    offset=newline?end+1:end;
+  }
+  if(!host)result+=eol+"[Host]"+eol+domain+" = "+address+eol;
+  return result;
+}
+
 // Keep the user's complete file, including comments, DNS and unrelated sections.
 // Only insert the managed groups/rules and set this resource's update URL.
 std::string extend_base(const std::string& base,const std::string& groups,
@@ -158,7 +206,9 @@ Json Backend::shadowrocket_setup(const std::string& token) {
   const auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
   const bool enabled=std::find(users.begin(),users.end(),Json(user.id))!=users.end()||client_policy_enabled(settings_,user.id);
-  return {{"service_routing",enabled},{"resource",enabled?"/s/"+token+"/shadowrocket.conf":"/shadowrocket-dns.sgmodule"}};
+  Json result={{"service_routing",enabled},{"resource",enabled?"/s/"+token+"/shadowrocket.conf":"/shadowrocket-dns.sgmodule"}};
+  if(client_policy_enabled(settings_,user.id))result["dns_routing"]="integrated";
+  return result;
 }
 
 std::string Backend::shadowrocket_profile(const std::string& token) {
@@ -188,8 +238,8 @@ std::string Backend::shadowrocket_profile(const std::string& token) {
         nodes[label+" · HTTPS"]=node+" · HTTPS";
       } else nodes[label]=node;
     }
-    return categorized_profile(clash_configuration(user),nodes,bases.at(user.id).get<std::string>(),
-      settings_.at("origin").get<std::string>()+"/s/"+token+"/shadowrocket.conf");
+    return integrated_dns(categorized_profile(clash_configuration(user),nodes,bases.at(user.id).get<std::string>(),
+      settings_.at("origin").get<std::string>()+"/s/"+token+"/shadowrocket.conf"),domain,address,nodes.at("HTTPS"));
   }
   std::string proxies,groups,rules;
   for(const auto& service:settings_.at("clash_service_routes").at(user.id)) {
