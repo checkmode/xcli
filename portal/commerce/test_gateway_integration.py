@@ -10,11 +10,12 @@ import tempfile
 import time
 import urllib.request
 from unittest import skipUnless
+from unittest.mock import patch
 
 from django.test import TransactionTestCase, override_settings
 
-from . import payments, worker
-from .models import Account, CheckoutRequest, Entitlement, Order, Payment, Plan, ProvisionJob, SandboxCharge, SandboxPaymentRequest
+from . import payments, paypal, worker
+from .models import Account, CheckoutRequest, Entitlement, Order, Payment, PaymentProvider, Plan, ProvisionJob, SandboxCharge, SandboxPaymentRequest
 
 
 @skipUnless(os.environ.get("XG_TEST_BINARY"), "Requires the compiled C++ sandbox controller")
@@ -122,4 +123,34 @@ class GatewayIntegrationTests(TransactionTestCase):
             ProvisionJob.objects.filter(pk=order.pk).update(available_at=timezone.now())
             time.sleep(.05)
         self.assertTrue(ProvisionJob.objects.get(pk=order.pk).done)
+        self.assertEqual(Entitlement.objects.get(account=self.account).version, 1)
+
+    @override_settings(PAYPAL_ENABLED=True, PAYPAL_MERCHANT_ID="TESTMERCHANT1", PUBLIC_ORIGIN="https://portal.example.test")
+    def test_paypal_receipt_reaches_real_controller_once_across_worker_loss(self):
+        from .test_paypal import FakePayPal, HEADERS
+        api = FakePayPal()
+        intent = CheckoutRequest.objects.create(account=self.account, plan=self.plan, payment_provider=PaymentProvider.PAYPAL)
+        worker.prepare(intent.pk)
+        with patch("commerce.paypal_api.client", return_value=api):
+            paypal.process(intent.pk)
+            api.capture(api.order_id, "provider-test")
+            self.assertTrue(paypal.receive(api.event(), HEADERS))
+
+            class ProcessLoss(BaseException):
+                pass
+
+            def crash():
+                raise ProcessLoss()
+
+            with self.assertRaises(ProcessLoss):
+                worker.provision(intent.pk, after_grant=crash)
+            with contextlib.closing(sqlite3.connect(f"file:{self.state / 'gateway.sqlite'}?mode=ro", uri=True)) as db:
+                first = db.execute("SELECT id,uuid,token,expires FROM users WHERE deleted=0").fetchall()
+            self.assertEqual(len(first), 1)
+            self.assertFalse(paypal.receive(api.event(), HEADERS))
+            worker.provision(intent.pk)
+            with contextlib.closing(sqlite3.connect(f"file:{self.state / 'gateway.sqlite'}?mode=ro", uri=True)) as db:
+                self.assertEqual(db.execute("SELECT id,uuid,token,expires FROM users WHERE deleted=0").fetchall(), first)
+        self.assertEqual(Order.objects.get(pk=intent.pk).state, Order.State.READY)
+        self.assertEqual(Payment.objects.get().provider_reference, api.capture_id)
         self.assertEqual(Entitlement.objects.get(account=self.account).version, 1)

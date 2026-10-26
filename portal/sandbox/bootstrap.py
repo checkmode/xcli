@@ -6,6 +6,7 @@ import pathlib
 import pwd
 import secrets
 import subprocess
+from paypal_environment import paypal_environment
 
 ROOT = pathlib.Path("/workspace/portal")
 STATE = pathlib.Path("/sandbox")
@@ -34,9 +35,40 @@ def environment(role, db_user=None):
            "PORTAL_SECRET_KEY": value["secret"], "PORTAL_DB_USER": db_user or ("xportal_worker" if role in {"worker", "hooks"} else "xportal_" + role),
            "PORTAL_DB_NAME": "xportal_sandbox", "PORTAL_PROVISION_SOCKET": "/run/xportal-bridge/provision.sock"}
     env.pop("PORTAL_SANDBOX_SIGNING_KEY", None)
+    for key in list(env):
+        if key.startswith("PORTAL_PAYPAL_"):
+            env.pop(key)
+    env.update(paypal_environment(role))
     if role in {"worker", "hooks", "owner"}:
         env["PORTAL_SANDBOX_SIGNING_KEY"] = value["payment_key"]
     return env
+
+
+def check_paypal_file_access():
+    path = os.environ.get("PORTAL_PAYPAL_CONFIG")
+    if not path:
+        return
+    # Some shared filesystems report 0600 but let every guest UID open the file.
+    # Probe actual access after dropping privileges, without reading its contents.
+    probe = """import sys
+try:
+    handle = open(sys.argv[1], 'rb')
+except PermissionError:
+    sys.exit(0)
+except OSError:
+    sys.exit(2)
+else:
+    handle.close()
+    sys.exit(1)
+"""
+    for name in ("xportal_web", "xgateway"):
+        identity = pwd.getpwnam(name)
+        result = subprocess.run([PYTHON, "-I", "-c", probe, path], user=identity.pw_uid,
+            group=identity.pw_gid, extra_groups=(), cwd="/", env={},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=5, check=False)
+        if result.returncode != 0:
+            raise SystemExit(f"PayPal config isolation failed for {name}; mount it below /run/xportal-private/host")
 
 
 def initialize():
@@ -49,6 +81,7 @@ def initialize():
         except KeyError:
             run(["useradd", "--uid", str(uid), "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", name])
     run(["usermod", "-a", "-G", "xportal_worker", "xgateway"])
+    check_paypal_file_access()
     if not (STATE / "config.json").exists():
         fd = os.open(STATE / "config.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w") as handle:

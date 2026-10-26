@@ -3,6 +3,12 @@ import uuid
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
+
+
+class PaymentProvider(models.TextChoices):
+    SIMULATOR = "simulator", "本地模拟收银台"
+    PAYPAL = "paypal_sandbox", "PayPal 官方 Sandbox"
 
 
 class Account(AbstractUser):
@@ -26,6 +32,7 @@ class CheckoutRequest(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
     plan = models.ForeignKey(Plan, on_delete=models.PROTECT)
+    payment_provider = models.CharField(max_length=24, choices=PaymentProvider.choices, default=PaymentProvider.SIMULATOR)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -42,6 +49,7 @@ class Order(models.Model):
     request = models.OneToOneField(CheckoutRequest, primary_key=True, on_delete=models.PROTECT, related_name="order")
     account = models.ForeignKey(Account, on_delete=models.PROTECT)
     state = models.CharField(max_length=16, choices=State.choices, default=State.WAITING)
+    payment_provider = models.CharField(max_length=24, choices=PaymentProvider.choices, default=PaymentProvider.SIMULATOR)
     amount_minor = models.PositiveIntegerField()
     currency = models.CharField(max_length=3)
     term_seconds = models.PositiveIntegerField()
@@ -77,6 +85,8 @@ class SandboxCharge(models.Model):
 class PaymentEvent(models.Model):
     event_id = models.UUIDField(primary_key=True)
     body_hash = models.CharField(max_length=64)
+    provider = models.CharField(max_length=24, default=PaymentProvider.SIMULATOR)
+    provider_reference = models.CharField(max_length=128, blank=True)
     received_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -87,6 +97,28 @@ class Payment(models.Model):
     amount_minor = models.PositiveIntegerField()
     currency = models.CharField(max_length=3)
     paid_at = models.DateTimeField()
+    provider = models.CharField(max_length=24, default=PaymentProvider.SIMULATOR)
+    provider_reference = models.CharField(max_length=128, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["provider", "provider_reference"], condition=~Q(provider_reference=""), name="payment_provider_reference_unique")]
+
+
+class PayPalOrder(models.Model):
+    """Durable API request and provider mapping. Only the trusted worker can write it."""
+    order = models.OneToOneField(Order, primary_key=True, on_delete=models.PROTECT)
+    create_request_id = models.UUIDField(default=uuid.uuid4, unique=True)
+    capture_request_id = models.UUIDField(default=uuid.uuid4, unique=True)
+    request_payload = models.JSONField()
+    provider_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    approval_url = models.URLField(max_length=1024, blank=True)
+    status = models.CharField(max_length=24, default="creating")
+    capture_started_at = models.DateTimeField(null=True)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt = models.DateTimeField(default=timezone.now)
+    done = models.BooleanField(default=False)
+    last_error = models.CharField(max_length=80, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class Entitlement(models.Model):

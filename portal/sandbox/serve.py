@@ -21,9 +21,12 @@ def stop(*_):
 
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
+hook_env = environment("hooks")
+# Published ports must still be bound to host loopback; only /webhooks/paypal/ is proxied publicly.
+hook_bind = "0.0.0.0:8089" if hook_env.get("PORTAL_PAYPAL_ENABLED") == "1" else "127.0.0.1:8089"
 services = [
     ("gateway", "xgateway", [binary, "--state", str(STATE / "gateway"), "--settings", str(STATE / "gateway/settings.json"), "--static", "/workspace/static", "--port", "18080", "--offline", "--no-auto-backup", "--provision-socket", "/run/xportal-bridge/provision.sock", "--provision-uid", "1500"], {}),
-    ("hooks", "xportal_worker", ["/opt/portal-venv/bin/gunicorn", "config.wsgi:application", "--bind", "127.0.0.1:8089", "--workers", "2", "--threads", "4", "--timeout", "20", "--no-control-socket"], environment("hooks")),
+    ("hooks", "xportal_worker", ["/opt/portal-venv/bin/gunicorn", "config.wsgi:application", "--bind", hook_bind, "--workers", "2", "--threads", "4", "--timeout", "60", "--no-control-socket"], hook_env),
     ("worker", "xportal_worker", [PYTHON, "manage.py", "portal_worker"], environment("worker")),
     ("web", "xportal_web", ["/opt/portal-venv/bin/gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8088", "--workers", "2", "--threads", "4", "--timeout", "20", "--no-control-socket"], environment("web")),
 ]

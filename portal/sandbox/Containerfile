@@ -20,6 +20,8 @@ COPY static /workspace/static
 COPY tests /workspace/tests
 COPY app.py /workspace/app.py
 COPY portal /workspace/portal
+RUN install -d -m 0700 /run/xportal-private \
+    && install -d -m 0700 /run/xportal-private/host
 WORKDIR /workspace/portal
 EXPOSE 8088
 ENTRYPOINT ["/opt/portal-venv/bin/python", "/workspace/portal/sandbox/entrypoint.py"]

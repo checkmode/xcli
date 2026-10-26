@@ -12,6 +12,8 @@ urlpatterns = [
     path("checkout/", views.checkout, name="checkout"),
     path("orders/<uuid:order_id>/", views.order, name="order"),
     path("orders/<uuid:order_id>/sandbox-pay/", views.sandbox_pay, name="sandbox-pay"),
+    path("orders/<uuid:order_id>/paypal/return/", views.paypal_return, name="paypal-return"),
+    path("orders/<uuid:order_id>/paypal/cancel/", views.paypal_cancel, name="paypal-cancel"),
     # Settings reject all non-sandbox modes. Production will serve collected assets separately.
     path("static/<path:path>", serve, {"insecure": True}),
 ]

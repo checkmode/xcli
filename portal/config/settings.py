@@ -1,8 +1,10 @@
 """Isolated sandbox only. Production is deliberately not an accepted mode yet."""
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
+from .paypal import configuration as paypal_configuration
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if os.environ.get("PORTAL_SANDBOX") != "1":
@@ -13,8 +15,12 @@ if len(SECRET_KEY) < 32:
 ROLE = os.environ.get("PORTAL_ROLE", "web")
 if ROLE not in {"web", "worker", "hooks", "owner"}:
     raise ImproperlyConfigured("Invalid portal role")
+globals().update(paypal_configuration(os.environ, ROLE))
 DEBUG = False
 ALLOWED_HOSTS = os.environ.get("PORTAL_HOSTS", "localhost,127.0.0.1,testserver").split(",")
+if PAYPAL_ENABLED:
+    ALLOWED_HOSTS.append(urlsplit(PUBLIC_ORIGIN).hostname)
+CSRF_TRUSTED_ORIGINS = [PUBLIC_ORIGIN] if PUBLIC_ORIGIN.startswith("https://") else []
 DATABASES = {"default": {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": os.environ.get("PORTAL_DB_NAME", "xportal_sandbox"),
@@ -54,14 +60,17 @@ STATIC_ROOT = BASE_DIR / "build-static"
 SESSION_COOKIE_NAME = "xportal_session"
 CSRF_COOKIE_NAME = "xportal_csrf"
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = "Strict"
+# PayPal redirects back with a top-level GET; writes still require Django CSRF.
+SESSION_COOKIE_SAMESITE = "Lax" if PAYPAL_ENABLED else "Strict"
+SESSION_COOKIE_SECURE = PUBLIC_ORIGIN.startswith("https://")
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
 SESSION_COOKIE_AGE = 8 * 3600
 CSRF_COOKIE_SAMESITE = "Strict"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 # HTML form navigation needs a same-origin source for CSRF validation.
 # Cross-origin navigation still sends no referrer.
 SECURE_REFERRER_POLICY = "same-origin"
-DATA_UPLOAD_MAX_MEMORY_SIZE = 16384
+DATA_UPLOAD_MAX_MEMORY_SIZE = 65536 if ROLE == "hooks" else 16384
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 20
 LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/account/"

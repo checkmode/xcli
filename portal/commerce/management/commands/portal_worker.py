@@ -6,7 +6,7 @@ from commerce.worker import tick, require_worker
 
 
 class Command(BaseCommand):
-    help = "Process sandbox checkout, callback delivery, and durable provisioning jobs"
+    help = "Process local and PayPal Sandbox checkout, reconciliation, and durable provisioning jobs"
 
     def add_arguments(self, parser):
         parser.add_argument("--once", action="store_true")

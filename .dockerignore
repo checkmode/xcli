@@ -13,5 +13,8 @@
 **/*.pyc
 **/*.sqlite*
 **/.env
+**/*.conf.private
+**/*.key
+**/*.pem
 **/.venv/
 **/build*/

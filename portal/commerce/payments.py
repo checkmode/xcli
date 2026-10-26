@@ -1,4 +1,4 @@
-"""A local payment simulator, not an integration with a real payment provider."""
+"""Local simulator verification and the shared, atomic verified-payment ledger."""
 import hashlib
 import hmac
 import json
@@ -10,7 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .bridge import operation_id
-from .models import Account, Entitlement, Order, Payment, PaymentEvent, ProvisionJob, SandboxCharge
+from .models import Account, Entitlement, Order, Payment, PaymentEvent, PaymentProvider, ProvisionJob, SandboxCharge
 
 
 class PaymentError(ValueError):
@@ -55,18 +55,32 @@ def receive(body, timestamp, digest):
     # Independent provider lookup: a signed event alone is not a payment receipt.
     if payload != event_payload(charge) or charge.merchant != settings.SANDBOX_MERCHANT:
         raise PaymentError("Provider receipt does not match callback")
+    if not charge.order.reservation_expires or charge.paid_at > charge.order.reservation_expires:
+        raise PaymentError("Payment is outside the order validity window")
+    return record_verified_payment(order_id=charge.order_id, transaction_id=charge.transaction_id,
+        event_id=charge.event_id, body_hash=hashlib.sha256(body).hexdigest(), amount_minor=charge.amount_minor,
+        currency=charge.currency, paid_at=charge.paid_at, provider=PaymentProvider.SIMULATOR)
+
+
+def record_verified_payment(*, order_id, transaction_id, event_id, body_hash, amount_minor, currency, paid_at,
+                            provider, transaction_reference="", event_reference=""):
+    """Call only after provider authentication AND an independent receipt lookup."""
+    if settings.ROLE not in {"worker", "hooks", "owner"}:
+        raise PermissionError("Verified payments require a trusted process")
     with transaction.atomic():
-        Account.objects.select_for_update().get(pk=charge.order.account_id)
-        order = Order.objects.select_for_update().get(pk=charge.order_id)
-        if (charge.amount_minor, charge.currency) != (order.amount_minor, order.currency):
-            raise PaymentError("Order amount or currency mismatch")
-        if order.state == Order.State.REJECTED or not order.reservation_expires or charge.paid_at > order.reservation_expires:
-            raise PaymentError("Payment is outside the order validity window")
-        body_hash = hashlib.sha256(body).hexdigest()
-        event, created = PaymentEvent.objects.get_or_create(event_id=charge.event_id, defaults={"body_hash": body_hash})
-        if not created and event.body_hash != body_hash:
+        account_id = Order.objects.values_list("account_id", flat=True).get(pk=order_id)
+        Account.objects.select_for_update().get(pk=account_id)
+        order = Order.objects.select_for_update().get(pk=order_id)
+        if (amount_minor, currency, provider) != (order.amount_minor, order.currency, order.payment_provider):
+            raise PaymentError("Order amount, currency, or provider mismatch")
+        if order.state == Order.State.REJECTED:
+            raise PaymentError("Order was rejected")
+        event, created = PaymentEvent.objects.get_or_create(event_id=event_id, defaults={
+            "body_hash": body_hash, "provider": provider, "provider_reference": event_reference,
+        })
+        if not created and (event.body_hash, event.provider, event.provider_reference) != (body_hash, provider, event_reference):
             raise PaymentError("Event identifier collision")
-        payment = Payment.objects.filter(transaction_id=charge.transaction_id).first()
+        payment = Payment.objects.filter(transaction_id=transaction_id).first()
         if payment:
             if payment.order_id != order.pk:
                 raise PaymentError("Transaction was already assigned to another order")
@@ -76,14 +90,15 @@ def receive(body, timestamp, digest):
         entitlement, _ = Entitlement.objects.get_or_create(account_id=order.account_id)
         entitlement.issued_version += 1
         entitlement.save(update_fields=["issued_version"])
-        Payment.objects.create(order=order, transaction_id=charge.transaction_id, event=event,
-                               amount_minor=charge.amount_minor, currency=charge.currency, paid_at=charge.paid_at)
+        Payment.objects.create(order=order, transaction_id=transaction_id, event=event,
+                               amount_minor=amount_minor, currency=currency, paid_at=paid_at,
+                               provider=provider, provider_reference=transaction_reference)
         operation = operation_id("grant", order.pk)
         ProvisionJob.objects.create(order=order, operation_id=uuid.UUID(operation), available_at=timezone.now(), payload={
             "action": "grant", "operation_id": operation, "account_id": order.account_id.hex,
             "reservation_id": order.reservation_id, "version": entitlement.issued_version, "term_seconds": order.term_seconds,
         })
         order.state = Order.State.PAID
-        order.message = "沙箱收款已核对，正在创建权限。"
+        order.message = "收款已核对，正在创建权限。"
         order.save(update_fields=["state", "message", "updated_at"])
     return True

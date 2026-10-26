@@ -1,0 +1,6 @@
+{% extends 'commerce/base.html' %}{% block content %}
+<section class="card narrow"><h1>已返回订单</h1>
+<p>你已离开 PayPal 付款页面。后台仍会核对实际付款结果；如果已经确认付款，请勿再次下单。</p>
+<p>付款窗口内，可以返回订单继续在 PayPal Sandbox 付款。</p>
+<a class="button" href="{% url 'order' order.pk %}">查看订单状态</a></section>
+{% endblock %}

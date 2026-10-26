@@ -15,9 +15,11 @@ def apply_roles():
             cursor.execute(f"GRANT SELECT, INSERT ON {table} TO xportal_web")
         for table in ("commerce_plan", "commerce_order", "commerce_entitlement"):
             cursor.execute(f"GRANT SELECT ON {table} TO xportal_web")
+        # Never expose frozen merchant API requests to the public DB role.
+        cursor.execute("GRANT SELECT(order_id, provider_id, approval_url, status, done) ON commerce_paypalorder TO xportal_web")
         for table in ("commerce_account", "commerce_checkoutrequest", "commerce_plan", "commerce_sandboxpaymentrequest"):
             cursor.execute(f"GRANT SELECT ON {table} TO xportal_worker")
         cursor.execute("GRANT UPDATE(id) ON commerce_account TO xportal_worker")
-        for table in ("commerce_order", "commerce_sandboxcharge", "commerce_paymentevent", "commerce_payment", "commerce_entitlement", "commerce_provisionjob", "commerce_ratebucket"):
+        for table in ("commerce_order", "commerce_sandboxcharge", "commerce_paymentevent", "commerce_payment", "commerce_entitlement", "commerce_provisionjob", "commerce_ratebucket", "commerce_paypalorder"):
             cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO xportal_worker")
         # These models use UUID/text keys; service roles require no sequence privileges.

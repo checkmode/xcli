@@ -9,8 +9,8 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from . import bridge, payments
-from .models import Account, CheckoutRequest, Entitlement, Order, ProvisionJob, RateBucket, SandboxCharge, SandboxPaymentRequest
+from . import bridge, payments, paypal
+from .models import Account, CheckoutRequest, Entitlement, Order, PaymentProvider, PayPalOrder, ProvisionJob, RateBucket, SandboxCharge, SandboxPaymentRequest
 
 
 def require_worker():
@@ -30,7 +30,11 @@ def prepare(request_id):
         if Order.objects.filter(pk=request_id).exists():
             return
         values = dict(request=intent, account_id=intent.account_id, amount_minor=intent.plan.amount_minor,
-                      currency=intent.plan.currency, term_seconds=intent.plan.term_seconds)
+                      currency=intent.plan.currency, term_seconds=intent.plan.term_seconds, payment_provider=intent.payment_provider)
+        if (intent.payment_provider not in PaymentProvider.values or
+                (intent.payment_provider == PaymentProvider.PAYPAL and (not settings.PAYPAL_ENABLED or intent.plan.currency != "USD"))):
+            Order.objects.create(**values, state=Order.State.REJECTED, message="所选支付方式暂不可用。")
+            return
         if not intent.plan.active or Order.objects.filter(account_id=intent.account_id, state__in=[Order.State.WAITING, Order.State.PAID, Order.State.REVIEW]).exists():
             Order.objects.create(**values, state=Order.State.REJECTED, message="请先完成或等待当前订单结束。")
             return
@@ -44,7 +48,11 @@ def prepare(request_id):
         if reservation["expires"] <= time.time():
             Order.objects.create(**values, state=Order.State.EXPIRED, message="购买意向已过期，请重新创建。")
             return
-        Order.objects.create(**values, reservation_id=reservation["reservation_id"], reservation_expires=from_epoch(reservation["expires"]))
+        order = Order.objects.create(**values, reservation_id=reservation["reservation_id"], reservation_expires=from_epoch(reservation["expires"]))
+        if order.payment_provider == PaymentProvider.PAYPAL:
+            PayPalOrder.objects.create(order=order, request_payload=paypal.order_payload(order),
+                create_request_id=bridge.operation_id("paypal-create", order.pk),
+                capture_request_id=bridge.operation_id("paypal-capture", order.pk))
 
 
 def simulate_charge(order_id):
@@ -53,7 +61,7 @@ def simulate_charge(order_id):
         order = Order.objects.select_for_update().get(pk=order_id)
         if SandboxCharge.objects.filter(order=order).exists():
             return
-        if order.state != Order.State.WAITING or order.reservation_expires <= timezone.now():
+        if order.payment_provider != PaymentProvider.SIMULATOR or order.state != Order.State.WAITING or order.reservation_expires <= timezone.now():
             return
         SandboxCharge.objects.create(order=order, merchant=settings.SANDBOX_MERCHANT, amount_minor=order.amount_minor,
                                      currency=order.currency, paid_at=timezone.now())
@@ -144,11 +152,12 @@ def provision(order_id, after_grant=None):
 def tick(deliver=None):
     require_worker()
     work = 0
-    Order.objects.filter(state=Order.State.WAITING, reservation_expires__lte=timezone.now()).update(state=Order.State.EXPIRED, message="订单支付窗口已结束；已提交的模拟付款会继续核对。")
+    Order.objects.filter(state=Order.State.WAITING, reservation_expires__lte=timezone.now()).update(state=Order.State.EXPIRED, message="订单支付窗口已结束；已提交的付款会继续核对。")
     stages = [
         (lambda: CheckoutRequest.objects.filter(order__isnull=True).order_by("created_at"), prepare),
         (lambda: SandboxPaymentRequest.objects.filter(order__sandboxcharge__isnull=True, order__state=Order.State.WAITING), simulate_charge),
         (lambda: SandboxCharge.objects.filter(delivered=False), lambda pk: deliver_charge(pk, deliver)),
+        (lambda: PayPalOrder.objects.filter(done=False, next_attempt__lte=timezone.now()) if settings.PAYPAL_ENABLED else PayPalOrder.objects.none(), paypal.process),
         (lambda: ProvisionJob.objects.filter(done=False, available_at__lte=timezone.now()), provision),
     ]
     for query, process in stages:
