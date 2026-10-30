@@ -199,6 +199,8 @@ sudo python3 deploy/webshare-pool.py expand --source "$PWD" \
 
 Clash / Mihomo 订阅使用 `direct-nameserver` 解析实际走 `DIRECT` 出站的域名，并显式关闭 `direct-nameserver-follow-policy`，避免域名专属策略覆盖直连出站解析。对于可选择直连的分类组，其专属 DNS 使用直连和代理路径均可访问的国内 DoH，查询连接跟随该分类组：组选择直连时由本机连接，选择代理时经选中的代理连接。需要使用真实 IP 的 DNS 查询可能发生在路由规则判断之前；IP / GeoIP 规则、应用自带加密 DNS 和隧道外流量不能保证完全遵循最终出站的解析方式。默认未知域名解析继续使用 `PROXY` 上的 Cloudflare DoH；当 `PROXY` 本身选择直连且无法连接该 DoH 时，这类事前查询仍可能失败。
 
+上述开关是订阅默认值。本地扩展配置可能为了保留企业内网 DNS 而启用 `direct-nameserver-follow-policy`；此时直连出站也会遵循匹配的域名专属解析策略，需检查客户端运行配置及对应解析器的可达性。
+
 ### 完整分类配置：内置 DNS 分流
 
 启用 `client_policies` 的完整小火箭配置内置 DNS 设置，要求支持 `direct-dns-server` 的小火箭版本，建议使用 2.2.92 或更新版本。先更新首页节点订阅，再更新并使用专属远程配置，保持“全局路由 → 配置”，关闭旧的“Xcli DNS 随所选节点”模块，最后断开并重新连接 VPN。只更新首页节点订阅不会更新 DNS 和分流规则。
