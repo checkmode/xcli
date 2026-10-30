@@ -79,7 +79,8 @@ def test_service_routes_are_user_scoped_and_follow_identity_rotation(fixture):
     other = subscription(fixture, other_token)
     assert set(other['rule-providers']) == {'stun-endpoints'}
     assert not any(g['name'] in ('CLAUDE', 'GITHUB') for g in other['proxy-groups'])
-    assert len(other['rules']) == 13
+    assert 'DOMAIN-SUFFIX,todesk.com,DIRECT' in other['rules']
+    assert len(other['rules']) == 14
     assert '+.claude.ai' not in other['dns']['nameserver-policy']
     assert '+.github.com' not in other['dns']['nameserver-policy']
     # Rotate credentials, preserving the same user's routing policy.

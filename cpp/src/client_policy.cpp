@@ -9,13 +9,14 @@ struct Category {
   bool direct;
   std::vector<std::string> suffixes,hosts,cidrs;
 };
-std::string independent(const std::string& name) {return "独立 · "+name;}
+std::string independent(const std::string& name) {return name=="EaseLian"?name:"独立 · "+name;}
 // Both clients consume this catalog through clash_configuration(). Keep shared
 // CDN/login domains out of AI: only service-owned suffixes or exact hosts belong here.
 // AI sources: MetaCubeX/meta-rules-dat geo/geosite/{openai,anthropic,google-gemini,
 // perplexity,xai}.list (reviewed 2026-10-20). Telegram CIDRs: core.telegram.org/resources/cidr.txt.
 const std::vector<Category>& categories() {
   static const std::vector<Category> value{
+    {"EaseLian",false,{"easelian.com"},{},{}},
     {"AI",false,
       {"openai.com","chatgpt.com","chat.com","sora.com","oaistatic.com","oaistatsig.com","oaiusercontent.com",
        "anthropic.com","clau.de","claude.ai","claude.com","claude.dev","claudemcpclient.com","claudemcpcontent.com","claudeusercontent.com",
@@ -100,6 +101,7 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   for(const auto& category:categories()) {
     if(category.direct)continue;
     Json choices=Json::array({"故障转移","自动选择"});
+    if(category.name=="EaseLian") {choices.insert(choices.begin(),"DIRECT");choices.insert(choices.begin(),"PROXY");}
     if(category.name=="AI"&&ai_default!="故障转移")choices.insert(choices.begin(),ai_default);
     for(const auto& country:countries)choices.push_back(country);
     for(const auto& node:servers)

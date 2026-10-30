@@ -97,6 +97,11 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     groups = {g["name"]: g for g in clash["proxy-groups"]}
     nodes = {p["name"] for p in clash["proxies"]}
     validate_graph({k: v["proxies"] for k, v in groups.items()}, nodes)
+    assert groups['EaseLian']['proxies'][:2] == ['PROXY', 'DIRECT']
+    assert 'DOMAIN-SUFFIX,easelian.com' in clash['rule-providers']['category-EaseLian']['payload']
+    assert 'RULE-SET,category-EaseLian,EaseLian' in clash['rules']
+    assert 'DOMAIN-SUFFIX,easelian.com,XCLI-EaseLian' in shadow
+    assert 'XCLI-EaseLian = select,XCLI-PROXY,DIRECT,' in shadow
     assert groups["PROXY"]["proxies"][:2] == ["故障转移", "自动选择"]
     assert "IPRoyal ISP 28 · 8.8.4.4" not in groups["PROXY"]["proxies"]
     assert groups["独立 · AI"]["proxies"][0] == "IPRoyal ISP 28 · 8.8.4.4"
