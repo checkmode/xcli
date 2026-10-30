@@ -1,5 +1,6 @@
 #include "client_policy.hpp"
 #include <algorithm>
+#include <functional>
 #include <set>
 
 namespace xg {
@@ -10,6 +11,21 @@ struct Category {
   std::vector<std::string> suffixes,hosts,cidrs;
 };
 std::string independent(const std::string& name) {return name=="EaseLian"?name:"独立 · "+name;}
+// A selector can reach DIRECT indirectly, for example EaseLian -> PROXY -> 直连.
+// Its DNS transport follows that selector, so its resolvers must be reachable
+// both directly and through the selected proxy.
+bool can_select_direct(const Json& groups,const std::string& target) {
+  std::set<std::string> visited;
+  std::function<bool(const std::string&)> visit=[&](const std::string& name) {
+    if(name=="DIRECT")return true;
+    if(!visited.insert(name).second)return false;
+    for(const auto& group:groups)if(group.at("name")==name)
+      for(const auto& member:group.at("proxies"))
+        if(visit(member.get<std::string>()))return true;
+    return false;
+  };
+  return visit(target);
+}
 // Both clients consume this catalog through clash_configuration(). Keep shared
 // CDN/login domains out of AI: only service-owned suffixes or exact hosts belong here.
 // AI sources: MetaCubeX/meta-rules-dat geo/geosite/{openai,anthropic,google-gemini,
@@ -124,11 +140,12 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   }
   for(const auto& category:categories()) {
     const auto target=category.direct?std::string("DIRECT"):independent(category.name);
+    const bool needs_direct_reachable_dns=category.direct||can_select_direct(groups,target);
     Json payload=Json::array();
     auto add=[&](const std::string& kind,const std::string& domain) {
       payload.push_back(kind+","+domain);
       const auto key=kind=="DOMAIN-SUFFIX"?"+."+domain:domain;
-      dns[key]=category.direct
+      dns[key]=needs_direct_reachable_dns
         ?Json::array({"https://223.5.5.5/dns-query#"+target,"https://1.12.12.12/dns-query#"+target})
         :Json::array({"https://1.1.1.1/dns-query#"+target,"https://1.0.0.1/dns-query#"+target});
     };

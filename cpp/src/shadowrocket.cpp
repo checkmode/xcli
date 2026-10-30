@@ -38,8 +38,9 @@ std::string integrated_dns(const std::string& profile,const std::string& domain,
       section=line.substr(1,line.find(']')-1);
       result+=original;if(!newline)result+=eol;
       if(section=="General") {
-        result+="# Xcli integrated DNS: DIRECT uses domestic DoH; proxy domains resolve at their selected outbound."+eol;
-        result+="# Rule-evaluation DNS uses the HTTPS node. Keep the old Xcli DNS module disabled."+eol;
+        result+="# Xcli DNS: DIRECT domain traffic uses direct-dns-server; proxy destinations normally resolve at their outbound."+eol;
+        result+="# Node bootstrap uses proxy-dns-server; rule-evaluation DNS uses the HTTPS node."+eol;
+        result+="# Keep the old Xcli DNS module disabled."+eol;
         for(const auto& [key,value]:fields)result+=key+" = "+value+eol;
       } else if(section=="Host") {
         if(host)throw HttpError(503,"Ambiguous Shadowrocket Host sections");

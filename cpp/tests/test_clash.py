@@ -27,6 +27,7 @@ def test_clash_export_and_revocation(fixture):
     domestic = ['https://223.5.5.5/dns-query#DIRECT','https://1.12.12.12/dns-query#DIRECT']
     assert value['dns']['nameserver-policy']['geosite:cn,private'] == domestic
     assert value['dns']['direct-nameserver'] == domestic
+    assert value['dns']['direct-nameserver-follow-policy'] is False
     assert value['dns']['proxy-server-nameserver'] == domestic
     assert value['proxies'][1]['ws-opts'] == {'path': '/connect/test', 'headers': {'Host': 'testserver'}}
     assert value['proxies'][1]['skip-cert-verify'] is False

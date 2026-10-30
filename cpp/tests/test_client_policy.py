@@ -100,8 +100,18 @@ def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     assert groups['EaseLian']['proxies'][:2] == ['PROXY', 'DIRECT']
     assert 'DOMAIN-SUFFIX,easelian.com' in clash['rule-providers']['category-EaseLian']['payload']
     assert 'RULE-SET,category-EaseLian,EaseLian' in clash['rules']
+    assert clash['dns']['nameserver-policy']['+.easelian.com'] == [
+        'https://223.5.5.5/dns-query#EaseLian', 'https://1.12.12.12/dns-query#EaseLian']
+    assert clash['dns']['direct-nameserver'] == [
+        'https://223.5.5.5/dns-query#DIRECT', 'https://1.12.12.12/dns-query#DIRECT']
+    assert clash['dns']['direct-nameserver-follow-policy'] is False
+    assert clash['dns']['nameserver'] == [
+        'https://1.1.1.1/dns-query#PROXY', 'https://1.0.0.1/dns-query#PROXY']
     assert 'DOMAIN-SUFFIX,easelian.com,XCLI-EaseLian' in shadow
     assert 'XCLI-EaseLian = select,XCLI-PROXY,DIRECT,' in shadow
+    assert 'direct-dns-server = https://223.5.5.5/dns-query,https://1.12.12.12/dns-query' in shadow
+    assert 'dns-direct-fallback-proxy = false' in shadow
+    assert 'use-local-host-item-for-proxy = false' in shadow
     assert groups["PROXY"]["proxies"][:2] == ["故障转移", "自动选择"]
     assert "IPRoyal ISP 28 · 8.8.4.4" not in groups["PROXY"]["proxies"]
     assert groups["独立 · AI"]["proxies"][0] == "IPRoyal ISP 28 · 8.8.4.4"

@@ -129,6 +129,7 @@ Json Backend::clash_configuration(const User& user) const {
     {"dns",{{"enable",true},{"ipv6",false},{"enhanced-mode","fake-ip"},{"fake-ip-range","198.18.0.1/16"},
       {"use-hosts",true},{"default-nameserver",Json::array({"223.5.5.5","119.29.29.29"})},
       {"proxy-server-nameserver",domestic_dns},{"direct-nameserver",domestic_dns},
+      {"direct-nameserver-follow-policy",false},
       {"nameserver-policy",dns_policy},
       {"nameserver",Json::array({"https://1.1.1.1/dns-query#PROXY","https://1.0.0.1/dns-query#PROXY"})}}},
     {"proxies",proxies},{"proxy-groups",groups},
