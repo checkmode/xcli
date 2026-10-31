@@ -120,6 +120,73 @@ def test_standard_template_custom_rules_export_to_both_clients(fixture):
     assert 'FINAL,XCLI-PROXY' in mobile
 
 
+def test_keyword_geoip_port_and_resolution_export_to_both_clients(fixture):
+    c = fixture['client']; c.login()
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    spec['rules'] = ('# keep this comment\n'
+                     'DOMAIN,media.example.com,DIRECT\n'
+                     'DOMAIN-KEYWORD,media,PROXY\n'
+                     'IP-CIDR,198.51.100.0/24,DIRECT,resolve\n'
+                     'IP-CIDR6,2001:db8::/32,PROXY,no-resolve\n'
+                     'GEOIP,US,PROXY,no-resolve\n'
+                     'DST-PORT,8443,REJECT\n')
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'new types', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    path = '/s/' + fixture['token']; config = clash(c, path); rules = config['rules']
+    assert rules.index('DOMAIN,media.example.com,DIRECT') < rules.index('DOMAIN-KEYWORD,media,PROXY')
+    assert 'IP-CIDR,198.51.100.0/24,DIRECT' in rules
+    assert 'IP-CIDR6,2001:db8::/32,PROXY,no-resolve' in rules
+    assert 'GEOIP,US,PROXY,no-resolve' in rules
+    assert 'DST-PORT,8443,REJECT' in rules
+    dns = config['dns']['nameserver-policy']; keys = list(dns)
+    assert keys.index('+.todesk.com') < keys.index('rule-set:xcli-dns-1')
+    assert keys.index('rule-set:xcli-dns-1') < keys.index('rule-set:xcli-dns-2') < keys.index('geosite:cn,private')
+    assert config['rule-providers']['xcli-dns-1']['payload'] == ['DOMAIN,media.example.com']
+    assert config['rule-providers']['xcli-dns-2']['payload'] == ['DOMAIN-KEYWORD,media']
+    assert dns['rule-set:xcli-dns-1'][0].endswith('#DIRECT')
+    assert dns['rule-set:xcli-dns-2'][0].endswith('#PROXY')
+    mobile = c.call(path + '/shadowrocket.conf')[2].decode()
+    assert 'DOMAIN-KEYWORD,media,XCLI-PROXY' in mobile
+    assert 'IP-CIDR,198.51.100.0/24,DIRECT\n' in mobile
+    assert 'IP-CIDR,2001:db8::/32,XCLI-PROXY,no-resolve' in mobile
+    assert 'GEOIP,US,XCLI-PROXY,no-resolve' in mobile
+    assert 'DST-PORT,8443,REJECT' in mobile
+
+
+def test_explicit_no_resolve_is_kept_inside_ai_udp_guard(fixture):
+    c = fixture['client']; c.login()
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    spec['rules'] = ('DOMAIN-KEYWORD,media,独立 · AI\n'
+                     'IP-CIDR,198.51.100.0/24,独立 · AI,no-resolve\n'
+                     'GEOIP,US,独立 · AI,no-resolve\n')
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'AI guard', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    path = '/s/' + fixture['token']; rules = clash(c, path)['rules']
+    assert 'AND,((DOMAIN-KEYWORD,media),(NETWORK,UDP)),REJECT' in rules
+    assert 'AND,((IP-CIDR,198.51.100.0/24,no-resolve),(NETWORK,UDP)),REJECT' in rules
+    assert 'AND,((GEOIP,US,no-resolve),(NETWORK,UDP)),REJECT' in rules
+    mobile = c.call(path + '/shadowrocket.conf')[2].decode()
+    assert 'AND,((GEOIP,US,no-resolve),(PROTOCOL,UDP)),REJECT' in mobile
+
+
+def test_rule_validation_reports_line_and_bounds(fixture):
+    c = fixture['client']; c.login()
+    standard = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    for bad in ('DOMAIN-KEYWORD,foo bar,PROXY', 'GEOIP,china,DIRECT', 'DST-PORT,65536,DIRECT',
+                'DOMAIN,example.com,DIRECT,resolve', 'IP-CIDR,192.0.2.0/24,DIRECT,unknown'):
+        result = c.json('/api/rule-templates', 'POST',
+                        {'name': 'invalid', 'spec': {**standard, 'rules': '# comment\n' + bad}}, expected=422)
+        assert '第 2 行' in result['detail']
+    rules = ''.join(f'DOMAIN,a{i}.co,DIRECT\n' for i in range(500))
+    c.json('/api/rule-templates', 'POST', {'name': 'limit', 'spec': {**standard, 'rules': rules}})
+    result = c.json('/api/rule-templates', 'POST',
+                    {'name': 'too many', 'spec': {**standard, 'rules': rules + 'DOMAIN,extra.example.com,DIRECT\n'}}, expected=422)
+    assert '500' in result['detail']
+    c.json('/api/users', 'POST', {'name': 'x' * 17000}, expected=413)
+
+
 def test_failed_publish_keeps_previous_release_and_rule_priority(fixture):
     c = fixture['client']; c.login()
     spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
