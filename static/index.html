@@ -146,16 +146,19 @@
 <dialog id="rule-template-dialog"><form id="rule-template-form">
   <div class="dialog-heading"><div><h2 id="rule-template-title">新建规则模板</h2><p id="rule-template-impact" class="small muted"></p></div><button type="button" class="close" data-close="rule-template-dialog" aria-label="关闭">×</button></div>
   <input name="id" type="hidden"><input name="revision" type="hidden">
-  <label>模板名称<input name="name" maxlength="60" required></label>
-  <div class="form-row"><label>基础模板<select name="base"><option value="standard">标准分流</option><option value="independent">独立服务分组</option></select></label><label>AI 默认出口<select name="ai_outbound"><option value="proxy">故障转移</option><option value="reality">REALITY</option><option value="websocket">HTTPS</option><option value="vmess">VMess TLS</option><option value="hysteria2">Hysteria 2</option></select></label></div>
-  <div class="form-actions"><button id="rule-template-load-base" class="secondary" type="button">载入所选基础规则</button></div>
+  <div class="rule-template-fields">
+    <label>模板名称<input name="name" maxlength="60" required></label>
+    <label>基础模板<select name="base"><option value="standard">标准分流</option><option value="independent">独立服务分组</option></select></label>
+    <label>AI 默认出口<select name="ai_outbound"><option value="proxy">故障转移</option><option value="reality">REALITY</option><option value="websocket">HTTPS</option><option value="vmess">VMess TLS</option><option value="hysteria2">Hysteria 2</option></select></label>
+    <button id="rule-template-load-base" class="secondary" type="button">载入所选基础规则</button>
+  </div>
   <section class="rule-builder" aria-labelledby="rule-builder-title">
     <div class="rule-builder-heading"><div><h3 id="rule-builder-title">添加规则</h3><p class="small muted">选择类型和目标；一次可填多行匹配内容。</p></div></div>
     <div class="rule-entry-grid"><label>规则类型<select id="rule-entry-type"><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label><label>目标策略<select id="rule-entry-target"></select></label></div>
-    <label>匹配内容<textarea id="rule-entry-value" rows="3" spellcheck="false" aria-describedby="rule-entry-hint"></textarea></label>
+    <label class="rule-entry-match">匹配内容<textarea id="rule-entry-value" rows="2" spellcheck="false" aria-describedby="rule-entry-hint"></textarea></label>
     <p id="rule-entry-hint" class="small muted"></p>
-    <div class="rule-entry-grid"><label id="rule-entry-resolution-label" hidden>IP 匹配时<select id="rule-entry-resolution"><option value="no-resolve">只匹配已有 IP，不额外解析</option><option value="resolve">允许解析域名后匹配</option></select></label><label id="rule-entry-position-label">添加位置<select id="rule-entry-position"><option value="end">列表末尾</option><option value="start">列表开头（优先匹配）</option></select></label></div>
-    <p id="rule-entry-error" class="error" role="alert"></p><div class="form-actions"><button id="rule-entry-add" type="button" class="primary">添加规则</button><button id="rule-entry-cancel" type="button" class="secondary" hidden>取消修改</button></div>
+    <div class="rule-entry-controls"><label id="rule-entry-resolution-label" hidden>IP 匹配时<select id="rule-entry-resolution"><option value="no-resolve">只匹配已有 IP，不额外解析</option><option value="resolve">允许解析域名后匹配</option></select></label><label id="rule-entry-position-label">添加位置<select id="rule-entry-position"><option value="end">列表末尾</option><option value="start">列表开头（优先匹配）</option></select></label><div class="form-actions"><button id="rule-entry-add" type="button" class="primary">添加规则</button><button id="rule-entry-cancel" type="button" class="secondary" hidden>取消修改</button></div></div>
+    <p id="rule-entry-error" class="error" role="alert"></p>
   </section>
   <section class="rule-list-section" aria-labelledby="rule-list-title">
     <div class="rule-list-heading"><div><h3 id="rule-list-title">规则列表</h3><p id="rule-list-count" class="small muted" aria-live="polite"></p></div><button id="rule-list-undo" type="button" class="secondary">撤销上一步</button></div>
