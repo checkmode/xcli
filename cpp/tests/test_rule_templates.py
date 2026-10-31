@@ -248,3 +248,109 @@ def test_template_state_restored_with_user_backup(fixture):
     assert '独立 · AI' in group_names(clash(c, '/s/' + fixture['token']))
     users = c.json('/api/rule-templates')['users']
     assert next(u for u in users if u['id'] == fixture['uid'])['template_id'] == tid
+
+
+@pytest.mark.parametrize('fixture', [POLICY], indirect=True)
+@pytest.mark.parametrize('builtin_id', ['standard', 'independent'])
+def test_builtin_draft_and_publish_affect_only_assigned_users(fixture, builtin_id):
+    c = fixture['client']; c.login()
+    assigned_id = c.json('/api/users', 'POST', {'name': 'builtin user'})['id']
+    other_id = c.json('/api/users', 'POST', {'name': 'other builtin user'})['id']
+    assigned_path, other_path = subscription(c, assigned_id), subscription(c, other_id)
+    other_builtin = 'independent' if builtin_id == 'standard' else 'standard'
+    c.json('/api/users/' + assigned_id + '/rule-template', 'POST', {'template_id': builtin_id})
+    c.json('/api/users/' + other_id + '/rule-template', 'POST', {'template_id': other_builtin})
+    legacy_path = '/s/' + fixture['token']
+    before, other_before, legacy_before = (clash(c, p) for p in (assigned_path, other_path, legacy_path))
+    old_mobile = c.call(assigned_path + '/shadowrocket.conf')
+    generic_before = c.call(assigned_path)[2]
+
+    builtin = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    assert builtin['builtin'] and builtin['revision'] == builtin['published_revision'] == 1
+    original = builtin['spec']
+    edited = {**original, 'rules': original['rules'] + 'DOMAIN-SUFFIX,builtin-test.example,DIRECT\n'}
+    result = c.json('/api/rule-templates/' + builtin_id, 'PUT',
+                    {'name': builtin['name'], 'spec': edited, 'expected_revision': 1})
+    assert result['revision'] == 2
+    draft = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    assert draft['spec'] == edited and draft['published_spec'] == draft['factory_spec'] == original
+    assert draft['revision'] == 2 and draft['published_revision'] == 1
+    assert clash(c, assigned_path) == before
+    mobile_draft = c.call(assigned_path + '/shadowrocket.conf')
+    assert (mobile_draft[0], mobile_draft[2]) == (old_mobile[0], old_mobile[2])
+    c.json('/api/rule-templates/' + builtin_id, 'PUT',
+           {'name': builtin['name'], 'spec': edited, 'expected_revision': 1}, expected=409)
+    c.json('/api/rule-templates/' + builtin_id + '/publish', 'POST', {'expected_revision': 1}, expected=409)
+
+    result = c.json('/api/rule-templates/' + builtin_id + '/publish', 'POST', {'expected_revision': 2})
+    assert result == {'published_revision': 2, 'affected_users': 1}
+    published = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    assert published['published_spec'] == edited and published['published_revision'] == 2
+    assert published['factory_spec'] == original
+    updated = clash(c, assigned_path)
+    assert 'DOMAIN-SUFFIX,builtin-test.example,DIRECT' in updated['rules']
+    assert updated['dns']['nameserver-policy']['+.builtin-test.example'][0].endswith('#DIRECT')
+    mobile = c.call(assigned_path + '/shadowrocket.conf')
+    assert mobile[0] == 200 and b'DOMAIN-SUFFIX,builtin-test.example,DIRECT' in mobile[2]
+    assert clash(c, other_path) == other_before
+    assert clash(c, legacy_path) == legacy_before
+    assert c.call(assigned_path)[2] == generic_before
+
+
+def test_builtin_failed_publish_keeps_published_rules(fixture):
+    c = fixture['client']; c.login()
+    uid, path = fixture['uid'], '/s/' + fixture['token']
+    c.json('/api/users/' + uid + '/rule-template', 'POST', {'template_id': 'independent'})
+    before = clash(c, path)
+    builtin = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    c.json('/api/rule-templates/independent', 'PUT',
+           {'name': builtin['name'], 'spec': {**builtin['spec'], 'ai_outbound': 'vmess'}, 'expected_revision': 1})
+    c.json('/api/rule-templates/independent/publish', 'POST', {'expected_revision': 2}, expected=422)
+    after = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    assert after['revision'] == 2 and after['published_revision'] == 1
+    assert after['published_spec'] == builtin['published_spec']
+    assert clash(c, path) == before
+
+
+def test_builtin_base_and_name_can_be_edited_without_reassigning(fixture):
+    c = fixture['client']; c.login()
+    uid, path = fixture['uid'], '/s/' + fixture['token']
+    c.json('/api/users/' + uid + '/rule-template', 'POST', {'template_id': 'standard'})
+    catalog = c.json('/api/rule-templates')['templates']
+    standard = next(t for t in catalog if t['id'] == 'standard')
+    independent = next(t['published_spec'] for t in catalog if t['id'] == 'independent')
+    before = clash(c, path)
+    c.json('/api/rule-templates/standard', 'PUT',
+           {'name': '我的内置模板', 'spec': independent, 'expected_revision': 1})
+    assert clash(c, path) == before
+    result = c.json('/api/rule-templates/standard/publish', 'POST', {'expected_revision': 2})
+    assert result['affected_users'] == 1
+    assert '独立 · AI' in group_names(clash(c, path))
+    catalog = c.json('/api/rule-templates')
+    updated = next(t for t in catalog['templates'] if t['id'] == 'standard')
+    assert updated['name'] == '我的内置模板' and updated['published_spec'] == independent
+    assert updated['factory_spec'] == standard['factory_spec']
+    assert next(u for u in catalog['users'] if u['id'] == uid)['template_id'] == 'standard'
+
+
+def test_builtin_versions_are_restored_with_user_backup(fixture):
+    c = fixture['client']; c.login()
+    uid, path = fixture['uid'], '/s/' + fixture['token']
+    c.json('/api/users/' + uid + '/rule-template', 'POST', {'template_id': 'standard'})
+    builtin = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    first = {**builtin['spec'], 'rules': 'DOMAIN,first.example,DIRECT\n'}
+    c.json('/api/rule-templates/standard', 'PUT', {'name': builtin['name'], 'spec': first, 'expected_revision': 1})
+    c.json('/api/rule-templates/standard/publish', 'POST', {'expected_revision': 2})
+    backup = c.json('/api/backups', 'POST', {})
+    second = {**first, 'rules': 'DOMAIN,second.example,DIRECT\n'}
+    c.json('/api/rule-templates/standard', 'PUT', {'name': builtin['name'], 'spec': second, 'expected_revision': 2})
+    c.json('/api/rule-templates/standard/publish', 'POST', {'expected_revision': 3})
+    assert 'DOMAIN,second.example,DIRECT' in clash(c, path)['rules']
+    c.json('/api/backups/restore', 'POST',
+           {'id': backup['id'], 'confirm': backup['id'], 'current_password': PASSWORD})
+    c.login()
+    restored = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    assert restored['revision'] == restored['published_revision'] == 2
+    assert restored['published_spec'] == first
+    rules = clash(c, path)['rules']
+    assert 'DOMAIN,first.example,DIRECT' in rules and 'DOMAIN,second.example,DIRECT' not in rules

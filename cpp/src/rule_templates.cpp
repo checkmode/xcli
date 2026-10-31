@@ -7,10 +7,18 @@ namespace xg {
 namespace {
 constexpr auto registry_key="rule_templates_v1";
 
+bool is_builtin(const std::string& id) {return id=="standard"||id=="independent";}
+
 Json builtin(const std::string& id) {
   if(id=="standard")return {{"base","standard"},{"ai_outbound","proxy"},{"rules",""}};
   if(id=="independent")return {{"base","independent"},{"ai_outbound","proxy"},{"rules",independent_template_rules()}};
   throw HttpError(404,"模板不存在");
+}
+
+Json builtin_default_item(const std::string& id) {
+  const auto spec=builtin(id);
+  return {{"name",id=="standard"?"标准分流":"独立服务分组"},{"draft",spec},{"revision",1},
+    {"published",spec},{"published_revision",1},{"published_at",0}};
 }
 
 Json read_registry(Database& database) {
@@ -23,6 +31,12 @@ Json read_registry(Database& database) {
     if(!registry.is_object()||registry.value("version",0)!=1||!registry.at("templates").is_object()||
        !registry.at("assignments").is_object()||registry.at("templates").size()>64||registry.at("assignments").size()>500)
       throw std::runtime_error("invalid registry");
+    if(registry.contains("builtins")) {
+      const auto& entries=registry.at("builtins");
+      if(!entries.is_object()||entries.size()>2)throw std::runtime_error("invalid builtins");
+      for(const auto& [id,item]:entries.items())
+        if(!is_builtin(id)||!item.is_object())throw std::runtime_error("invalid builtin");
+    }
     return registry;
   } catch(const std::exception&) {throw HttpError(503,"规则模板数据无法读取，现有配置未更改");}
 }
@@ -43,8 +57,30 @@ Int revision(const Json& input) {
   const auto n=input.get<Int>();if(n<1)throw HttpError(422,"模板版本不正确");return n;
 }
 
+Json builtin_item(const Json& registry,const std::string& id) {
+  if(registry.contains("builtins")&&registry.at("builtins").contains(id))return registry.at("builtins").at(id);
+  return builtin_default_item(id);
+}
+
+Json& editable_item(Json& registry,const std::string& id) {
+  if(is_builtin(id)) {
+    if(!registry.contains("builtins"))registry["builtins"]=Json::object();
+    auto& entries=registry["builtins"];
+    if(!entries.contains(id))entries[id]=builtin_default_item(id);
+    return entries[id];
+  }
+  auto& entries=registry["templates"];
+  if(!entries.contains(id))throw HttpError(404,"模板不存在");
+  return entries[id];
+}
+
 Json selected_spec(const Json& registry,const std::string& id) {
-  if(id=="standard"||id=="independent")return builtin(id);
+  if(is_builtin(id)) {
+    const auto initial=builtin(id);
+    if(!registry.contains("builtins")||!registry.at("builtins").contains(id))return initial;
+    const auto& published=registry.at("builtins").at(id).at("published");
+    return published==initial?initial:validate_rule_template(published);
+  }
   if(!std::regex_match(id,std::regex("[0-9a-f]{32}"))||!registry.at("templates").contains(id))
     throw HttpError(404,"模板不存在");
   const auto& item=registry.at("templates").at(id);
@@ -66,8 +102,15 @@ Json Backend::effective_rule_policy(Database& database,const std::string& user_i
 
 Json Backend::rule_templates(const std::string& token) {
   session(token);auto database=db();const auto registry=read_registry(database);
-  Json templates=Json::array({{{"id","standard"},{"name","标准分流"},{"builtin",true},{"published",true},{"spec",builtin("standard")}},
-                              {{"id","independent"},{"name","独立服务分组"},{"builtin",true},{"published",true},{"spec",builtin("independent")}}});
+  Json templates=Json::array();
+  for(const auto* id:{"standard","independent"}) {
+    const auto item=builtin_item(registry,id);
+    const auto draft=validate_rule_template(item.at("draft")),published=validate_rule_template(item.at("published"));
+    templates.push_back({{"id",id},{"name",item.at("name")},{"builtin",true},{"spec",draft},
+      {"revision",item.at("revision")},{"published",true},{"published_spec",published},
+      {"published_revision",item.at("published_revision")},{"published_at",item.at("published_at")},
+      {"factory_spec",builtin(id)}});
+  }
   for(const auto& [id,item]:registry.at("templates").items()) {
     if(!std::regex_match(id,std::regex("[0-9a-f]{32}")))throw HttpError(503,"规则模板数据无效");
     auto draft=validate_rule_template(item.at("draft"));
@@ -101,9 +144,7 @@ Json Backend::update_rule_template(const std::string& token,const std::string& c
   require_fields(input,{"name","spec","expected_revision"});auto name=user_name(input.at("name"));
   auto spec=validate_rule_template(input.at("spec"));auto expected=revision(input.at("expected_revision"));
   std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
-  auto registry=read_registry(database);auto& templates=registry["templates"];
-  if(!templates.contains(id))throw HttpError(404,"模板不存在");
-  auto& item=templates[id];
+  auto registry=read_registry(database);auto& item=editable_item(registry,id);
   if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
   item["name"]=name;item["draft"]=spec;item["revision"]=expected+1;
   save_registry(database,registry);audit(database,"rule_template_saved",name);transaction.commit();return {{"revision",expected+1}};
@@ -112,9 +153,7 @@ Json Backend::update_rule_template(const std::string& token,const std::string& c
 Json Backend::publish_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
   require_fields(input,{"expected_revision"});auto expected=revision(input.at("expected_revision"));
   std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
-  auto registry=read_registry(database);auto& templates=registry["templates"];
-  if(!templates.contains(id))throw HttpError(404,"模板不存在");
-  auto& item=templates[id];
+  auto registry=read_registry(database);auto& item=editable_item(registry,id);
   if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
   auto spec=validate_rule_template(item.at("draft"));spec["managed"]=true;Int affected=0;
   for(const auto& [user_id,choice]:registry.at("assignments").items())if(choice==id) {

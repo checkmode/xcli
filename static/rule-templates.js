@@ -7,9 +7,10 @@ async function loadRuleTemplates(){
   $('#rule-template-list').innerHTML='<table><thead><tr><th>模板</th><th>状态</th><th>使用人数</th><th>操作</th></tr></thead><tbody>'+
     templates.map(t=>{
       const count=users.filter(u=>u.template_id===t.id).length;
-      const status=t.builtin?'内置':!t.published?'未发布':t.revision!==t.published_revision?'已发布 · 草稿有修改':'已发布';
-      const actions=t.builtin?'<button data-template-action="copy" data-id="'+esc(t.id)+'">复制为自定义</button>':
-        '<button data-template-action="edit" data-id="'+esc(t.id)+'">编辑草稿</button> <button data-template-action="copy" data-id="'+esc(t.id)+'">复制</button>';
+      const status=t.builtin?(t.revision!==t.published_revision?'内置 · 草稿有修改':'内置 · 已发布'):
+        !t.published?'未发布':t.revision!==t.published_revision?'已发布 · 草稿有修改':'已发布';
+      const actions='<button data-template-action="edit" data-id="'+esc(t.id)+'">编辑草稿</button> '+
+        '<button data-template-action="copy" data-id="'+esc(t.id)+'">'+(t.builtin?'复制为自定义':'复制')+'</button>';
       return '<tr><td>'+esc(t.name)+'</td><td>'+status+'</td><td>'+count+'</td><td class="actions">'+actions+'</td></tr>';
     }).join('')+'</tbody></table>';
 }
@@ -244,7 +245,7 @@ $('#rule-assignment-form').onsubmit=async e=>{
 
 function showRuleEditor(item,copy){
   const form=$('#rule-template-form');form.reset();
-  const spec=item?.spec||templateById('independent').spec;
+  const spec=item?.spec||templateById('independent').published_spec;
   form.elements.id.value=copy?'':item?.id||'';
   form.elements.revision.value=copy?'':item?.revision||'';
   form.elements.name.value=copy?(item.name+' 副本'):(item?.name||'');
@@ -254,7 +255,7 @@ function showRuleEditor(item,copy){
   }
   form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;
   ruleUndo=[];ruleSelection=new Set();ruleLastText=spec.rules;$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent='';resetRuleEntry();updateRuleTargets('PROXY');updateRuleHint(true);renderRuleRows();ruleSavedSnapshot=ruleSnapshot();
-  $('#rule-template-title').textContent=form.elements.id.value?'编辑规则模板':'新建规则模板';
+  $('#rule-template-title').textContent=form.elements.id.value?(item?.builtin?'编辑内置规则模板':'编辑规则模板'):'新建规则模板';
   $('#rule-template-impact').textContent=form.elements.id.value?
     '当前有 '+templateUseCount(form.elements.id.value)+' 位用户使用该模板；保存草稿不会改变订阅，发布后下一次更新订阅生效。':
     '新模板先保存为草稿；发布后才能分配给用户。';
@@ -268,9 +269,9 @@ $('#rule-template-list').onclick=e=>{
 };
 $('#rule-template-load-base').onclick=()=>{
   const form=$('#rule-template-form'),item=templateById(form.elements.base.value);
-  if(item&&form.elements.rules.value!==item.spec.rules){
-    if(form.elements.rules.value.trim()&&!confirm('载入基础规则会替换当前规则列表。可以使用“撤销上一步”恢复。继续吗？'))return;
-    resetRuleEntry();rememberRuleText(item.spec.rules,new Set());
+  if(item&&form.elements.rules.value!==item.factory_spec.rules){
+    if(form.elements.rules.value.trim()&&!confirm('载入基础初始规则会替换当前规则列表。可以使用“撤销上一步”恢复。继续吗？'))return;
+    resetRuleEntry();rememberRuleText(item.factory_spec.rules,new Set());
   }
 };
 $('#rule-template-form').onsubmit=async e=>{
@@ -293,7 +294,7 @@ $('#rule-template-form').onsubmit=async e=>{
       const result=await api('rule-templates/'+encodeURIComponent(id)+'/publish','POST',{expected_revision:revision});
       $('#rule-template-dialog').close();toast('模板已发布，影响 '+result.affected_users+' 位用户的下一次订阅');
     }else{
-      $('#rule-template-title').textContent='编辑规则模板';
+      $('#rule-template-title').textContent=templateById(id)?.builtin?'编辑内置规则模板':'编辑规则模板';
       toast('草稿已保存，尚未更改用户订阅');
     }
     await loadRuleTemplates();
