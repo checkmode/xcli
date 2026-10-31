@@ -1,7 +1,11 @@
 #include "client_policy.hpp"
 #include <algorithm>
 #include <functional>
+#include <arpa/inet.h>
+#include <cctype>
+#include <regex>
 #include <set>
+#include <sstream>
 
 namespace xg {
 namespace {
@@ -166,5 +170,134 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   auto position=std::find(old_rules.begin(),old_rules.end(),Json("GEOSITE,private,DIRECT"));
   old_rules.insert(position,rules.begin(),rules.end());
   old_rules.back()="MATCH,其他流量";
+}
+
+namespace {
+struct EditableRule {std::string type, value, target;};
+
+std::string trim_rule(std::string text) {
+  auto first=text.find_first_not_of(" \t\r");
+  if(first==std::string::npos)return {};
+  return text.substr(first,text.find_last_not_of(" \t\r")-first+1);
+}
+
+bool valid_network(const std::string& value,bool v6) {
+  const auto slash=value.find('/');
+  if(slash==std::string::npos||slash==0||slash+1==value.size()||value.find('/',slash+1)!=std::string::npos)return false;
+  const auto prefix=value.substr(slash+1);
+  if(prefix.size()>3||prefix.empty()||!std::all_of(prefix.begin(),prefix.end(),[](unsigned char c){return std::isdigit(c);}))return false;
+  const int bits=std::stoi(prefix);
+  if(bits<0||bits>(v6?128:32))return false;
+  unsigned char bytes[16]{};
+  return ::inet_pton(v6?AF_INET6:AF_INET,value.substr(0,slash).c_str(),bytes)==1;
+}
+
+std::vector<EditableRule> parse_editable_rules(const std::string& text,const std::string& base) {
+  if(text.size()>12000)throw HttpError(422,"规则内容过长，最多 12000 字节");
+  const std::set<std::string> common={"DIRECT","REJECT","PROXY"};
+  const std::set<std::string> independent_targets={"EaseLian","独立 · AI","独立 · Telegram",
+    "独立 · YouTube","独立 · Netflix","独立 · 国外媒体","独立 · STUN","其他流量"};
+  std::vector<EditableRule> result;std::istringstream input(text);std::string line;
+  const std::regex domain(R"([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)");
+  while(std::getline(input,line)) {
+    line=trim_rule(line);if(line.empty()||line.starts_with('#'))continue;
+    if(line.size()>400||result.size()>=200)throw HttpError(422,"单条规则过长或规则超过 200 条");
+    auto first=line.find(','),second=first==std::string::npos?first:line.find(',',first+1);
+    if(first==std::string::npos||second==std::string::npos||line.find(',',second+1)!=std::string::npos)
+      throw HttpError(422,"规则格式应为 类型,内容,目标");
+    EditableRule rule{trim_rule(line.substr(0,first)),trim_rule(line.substr(first+1,second-first-1)),trim_rule(line.substr(second+1))};
+    const bool domain_rule=rule.type=="DOMAIN"||rule.type=="DOMAIN-SUFFIX";
+    if(domain_rule) {
+      if(rule.value.size()>253||!std::regex_match(rule.value,domain))throw HttpError(422,"域名规则需要小写英文域名");
+    } else if(rule.type=="IP-CIDR"||rule.type=="IP-CIDR6") {
+      if(!valid_network(rule.value,rule.type=="IP-CIDR6"))throw HttpError(422,"IP 网段格式不正确");
+    } else throw HttpError(422,"不支持的规则类型");
+    if(!common.contains(rule.target)&&!(base=="standard"&&rule.target=="STUN")&&
+       !(base=="independent"&&independent_targets.contains(rule.target)))
+      throw HttpError(422,"规则目标不属于所选模板");
+    result.push_back(std::move(rule));
+  }
+  return result;
+}
+}
+
+std::string independent_template_rules() {
+  std::string text;
+  for(const auto& category:categories()) {
+    const auto target=category.direct?std::string("DIRECT"):independent(category.name);
+    for(const auto& host:category.suffixes)text+="DOMAIN-SUFFIX,"+host+","+target+"\n";
+    for(const auto& host:category.hosts)text+="DOMAIN,"+host+","+target+"\n";
+    for(const auto& cidr:category.cidrs)text+=(cidr.find(':')==std::string::npos?"IP-CIDR,":"IP-CIDR6,")+cidr+","+target+"\n";
+  }
+  return text;
+}
+
+Json validate_rule_template(const Json& input) {
+  if(!input.is_object()||input.size()!=3||!input.contains("base")||!input.contains("ai_outbound")||!input.contains("rules")||
+     !input["base"].is_string()||!input["ai_outbound"].is_string()||!input["rules"].is_string())
+    throw HttpError(422,"模板格式不正确");
+  const auto base=input.at("base").get<std::string>(),ai=input.at("ai_outbound").get<std::string>();
+  if(base!="standard"&&base!="independent")throw HttpError(422,"模板类型不正确");
+  if(!(ai=="proxy"||ai=="reality"||ai=="websocket"||ai=="vmess"||ai=="hysteria2"||
+       std::regex_match(ai,std::regex("residential-[0-9]{2}"))))throw HttpError(422,"AI 默认出口不正确");
+  const auto rules=input.at("rules").get<std::string>();
+  (void)parse_editable_rules(rules,base);
+  return {{"base",base},{"ai_outbound",ai},{"rules",rules}};
+}
+
+void apply_template_rules(Json& config,const Json& spec,const Json& baseline_dns) {
+  const auto base=spec.at("base").get<std::string>(),text=spec.at("rules").get<std::string>();
+  if(base=="independent"&&text==independent_template_rules())return;
+  const auto parsed=parse_editable_rules(text,base);
+  auto& rules=config["rules"];auto& dns=config["dns"]["nameserver-policy"];
+  if(base=="independent") {
+    Json remaining=Json::array();
+    for(const auto& item:rules)if(item.get<std::string>().find("RULE-SET,category-")==std::string::npos)remaining.push_back(item);
+    rules=std::move(remaining);
+    for(const auto& category:categories()) {
+      config["rule-providers"].erase("category-"+category.name);
+      auto restore=[&](const std::string& key) {if(baseline_dns.contains(key))dns[key]=baseline_dns.at(key);else dns.erase(key);};
+      for(const auto& host:category.suffixes)restore("+."+host);
+      for(const auto& host:category.hosts)restore(host);
+    }
+  }
+  std::set<std::string> available={"DIRECT","REJECT"};
+  for(const auto& group:config.at("proxy-groups"))available.insert(group.at("name").get<std::string>());
+  Json inserted=Json::array();
+  for(const auto& rule:parsed) {
+    if(!available.contains(rule.target))throw HttpError(422,"模板引用的策略组当前不可用："+rule.target);
+    const auto condition=rule.type+","+rule.value;
+    const bool ip=rule.type=="IP-CIDR"||rule.type=="IP-CIDR6";
+    if(rule.target=="独立 · AI")inserted.push_back("AND,(("+condition+"),(NETWORK,UDP)),REJECT");
+    inserted.push_back(condition+","+rule.target+(ip?",no-resolve":""));
+    if(rule.target!="DIRECT"&&rule.target!="REJECT")inserted.push_back(condition+",REJECT"+(ip?",no-resolve":""));
+  }
+  // Earlier rules win. Restore DNS overrides in reverse so specific earlier rules survive.
+  for(auto it=parsed.rbegin();it!=parsed.rend();++it) {
+    if(it->type!="DOMAIN"&&it->type!="DOMAIN-SUFFIX")continue;
+    if(it->type=="DOMAIN-SUFFIX") {
+      std::vector<std::string> remove;
+      for(auto p=dns.begin();p!=dns.end();++p) {
+        const auto key=p.key();const auto name=key.starts_with("+.")?key.substr(2):key;
+        if(name==it->value||name.ends_with("."+it->value))remove.push_back(key);
+      }
+      for(const auto& key:remove)dns.erase(key);
+    }
+    const auto key=(it->type=="DOMAIN-SUFFIX"?"+.":"")+it->value;
+    const bool direct=it->target=="DIRECT"||can_select_direct(config.at("proxy-groups"),it->target);
+    const auto a=direct?"https://223.5.5.5/dns-query#":"https://1.1.1.1/dns-query#";
+    const auto b=direct?"https://1.12.12.12/dns-query#":"https://1.0.0.1/dns-query#";
+    dns[key]=Json::array({a+it->target,b+it->target});
+  }
+  // Mihomo evaluates policy entries in order. Domain-specific custom
+  // resolvers must precede broad geosite/rule-set policies.
+  Json ordered=Json::object();
+  for(auto it=dns.begin();it!=dns.end();++it)
+    if(!it.key().starts_with("geosite:")&&!it.key().starts_with("rule-set:"))ordered[it.key()]=it.value();
+  for(auto it=dns.begin();it!=dns.end();++it)
+    if(it.key().starts_with("geosite:")||it.key().starts_with("rule-set:"))ordered[it.key()]=it.value();
+  dns=std::move(ordered);
+  auto position=std::find(rules.begin(),rules.end(),Json("GEOSITE,private,DIRECT"));
+  rules.insert(position,inserted.begin(),inserted.end());
 }
 }

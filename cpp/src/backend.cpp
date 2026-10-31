@@ -310,7 +310,10 @@ Json Backend::shadowrocket_links_for(const User& user) const {
   // A fragment keeps the subscription credential out of landing-page requests.
   auto entry=origin+"/client/shadowrocket#"+user.token;
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
-  if(std::find(users.begin(),users.end(),Json(user.id))!=users.end()||client_policy_enabled(settings_,user.id))
+  auto database=db();const auto policy=effective_rule_policy(database,user.id);
+  const bool categorized=policy.at("base")=="independent"||
+    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+  if(std::find(users.begin(),users.end(),Json(user.id))!=users.end()||categorized)
     entry="shadowrocket://config/add/"+origin+"/s/"+user.token+"/shadowrocket.conf";
   return {{"shadowrocket",entry},
     {"dns",module},{"dns_install","shadowrocket://install?module="+url_quote(module)},

@@ -193,6 +193,26 @@ sudo python3 deploy/webshare-pool.py expand --source "$PWD" \
 
 诊断页提供本次面板运行期间最近 50 条状态变化，以及数据库中最近 20 条由控制器发起的核心重连原因。外部进程重启的具体原因仍需查看服务日志；诊断页不会推断重启原因，也不采集访问网站或原始访问日志。新接口 `/api/runtime` 与 `/api/diagnostics` 均要求管理员登录，只读操作不改变配置或重启服务。
 
+## 用户规则模板
+
+在管理页面的“用户管理”中，可以为每个用户选择规则模板。“沿用原配置”保留该用户原有的订阅行为；已有用户不会因为升级而自动更换模板。内置“标准分流”和“独立服务分组”可直接选择，也可以复制为自定义模板。
+
+自定义模板的修改先保存为草稿。发布后，使用该模板的用户在下次更新 Clash 订阅或小火箭配置时获取新规则；发布不会主动切换客户端的策略组或重启 Xray。保存和发布检查草稿版本，其他管理员同时修改时需要重新读取。用户可以重新选择模板或切回“沿用原配置”。
+
+编辑器中的分类规则按顺序匹配。服务器地址、私网、ToDesk、已有的 STUN 规则仍排在这些分类规则之前；后面的国内、私网和兜底规则继续使用所选基础模板的配置。支持的格式是 `DOMAIN`、`DOMAIN-SUFFIX`、`IP-CIDR`、`IP-CIDR6`，每行填写类型、内容和目标，以逗号分隔；IP 网段使用 `no-resolve`。例如：
+
+```text
+DOMAIN,office.example.com,DIRECT
+DOMAIN-SUFFIX,example.com,独立 · AI
+IP-CIDR,203.0.113.0/24,PROXY
+```
+
+上述独立 AI 目标需要选择“独立服务分组”基础模板；“标准分流”支持 `DIRECT`、`REJECT`、`PROXY` 和 `STUN`。域名使用小写英文，规则最多 200 条；当前编辑器不接受任意 Clash 专用规则、外部规则集或脚本。IPv6 网段规则需要客户端启用并接管 IPv6，默认 Clash 订阅的 IPv6 设置仍为关闭。被选择的 AI 默认出口不存在时，分配或发布会拒绝，避免静默直连。AI 分类规则的 UDP 默认拒绝；其他选择代理组的分类规则在节点不支持 UDP 时回退到拒绝。
+
+模板数据和用户选择保存在现有数据库中，随加密备份恢复。回滚到不支持模板管理的旧版程序时，旧版无法读取这些模板，订阅会回到旧版的规则行为；再次更新程序后应核对用户选择和实际客户端订阅。
+
+小火箭的分类配置由相同的分类规则生成。已有完整底稿继续保留；没有专属底稿的用户使用手机上的 `default.conf` 作为基础，需先导入或更新该用户的节点订阅，再安装专属配置。两种客户端的基础规则和客户端版本可能不同，发布后应在实际设备上验证内网访问及出口。
+
 ## DNS 与小火箭默认配置
 
 防止手机 DNS 从本地网络漏出，关键是客户端的解析路径和失败回退策略。代理服务器使用普通 DNS，并不等于手机发生 DNS 泄漏；服务器 DoH 保护的是服务器到解析器这一段，属于独立的可选设置。
@@ -363,7 +383,7 @@ HTTP 兼容性测试还需要 Python 的 pytest、FastAPI、Pydantic 和二维�
 XG_LEGACY_APP="$PWD/app.py" \
 XG_TEST_BINARY="$PWD/build/xray-gateway-panel" \
   python3 -m pytest -q cpp/tests/test_http.py cpp/tests/test_features.py cpp/tests/test_operations.py \
-  cpp/tests/test_core_integration.py cpp/tests/test_runtime.py
+  cpp/tests/test_core_integration.py cpp/tests/test_runtime.py cpp/tests/test_rule_templates.py
 
 cmake -S cpp -B build-asan -G Ninja -DXG_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-asan -j2

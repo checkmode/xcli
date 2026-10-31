@@ -1,0 +1,150 @@
+#include "gateway.hpp"
+#include "client_policy.hpp"
+#include <regex>
+#include <set>
+
+namespace xg {
+namespace {
+constexpr auto registry_key="rule_templates_v1";
+
+Json builtin(const std::string& id) {
+  if(id=="standard")return {{"base","standard"},{"ai_outbound","proxy"},{"rules",""}};
+  if(id=="independent")return {{"base","independent"},{"ai_outbound","proxy"},{"rules",independent_template_rules()}};
+  throw HttpError(404,"模板不存在");
+}
+
+Json read_registry(Database& database) {
+  auto row=database.one("SELECT value FROM metadata WHERE key=?",{std::string(registry_key)});
+  if(!row)return {{"version",1},{"templates",Json::object()},{"assignments",Json::object()}};
+  try {
+    const auto value=row->at("value").get<std::string>();
+    if(value.size()>1024*1024)throw std::runtime_error("registry too large");
+    auto registry=Json::parse(value);
+    if(!registry.is_object()||registry.value("version",0)!=1||!registry.at("templates").is_object()||
+       !registry.at("assignments").is_object()||registry.at("templates").size()>64||registry.at("assignments").size()>500)
+      throw std::runtime_error("invalid registry");
+    return registry;
+  } catch(const std::exception&) {throw HttpError(503,"规则模板数据无法读取，现有配置未更改");}
+}
+
+void save_registry(Database& database,const Json& registry) {
+  auto data=registry.dump();
+  if(data.size()>1024*1024)throw HttpError(422,"模板总内容过大");
+  database.run("INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)",{std::string(registry_key),data});
+}
+
+void require_fields(const Json& value,const std::set<std::string>& required) {
+  if(!value.is_object()||value.size()!=required.size())throw HttpError(422,"请求格式不正确");
+  for(const auto& key:required)if(!value.contains(key))throw HttpError(422,"请求格式不正确");
+}
+
+Int revision(const Json& input) {
+  if(!input.is_number_integer())throw HttpError(422,"模板版本不正确");
+  const auto n=input.get<Int>();if(n<1)throw HttpError(422,"模板版本不正确");return n;
+}
+
+Json selected_spec(const Json& registry,const std::string& id) {
+  if(id=="standard"||id=="independent")return builtin(id);
+  if(!std::regex_match(id,std::regex("[0-9a-f]{32}"))||!registry.at("templates").contains(id))
+    throw HttpError(404,"模板不存在");
+  const auto& item=registry.at("templates").at(id);
+  if(!item.contains("published")||item.at("published").is_null())throw HttpError(409,"请先发布模板，再分配给用户");
+  return validate_rule_template(item.at("published"));
+}
+}
+
+Json Backend::effective_rule_policy(Database& database,const std::string& user_id) const {
+  const auto registry=read_registry(database);const auto& assignments=registry.at("assignments");
+  if(assignments.contains(user_id)) {
+    if(!assignments.at(user_id).is_string())throw HttpError(503,"用户规则模板配置无效");
+    auto spec=selected_spec(registry,assignments.at(user_id).get<std::string>());spec["managed"]=true;return spec;
+  }
+  const bool independent=client_policy_enabled(settings_,user_id);
+  const auto ai=independent?settings_.at("client_policies").at(user_id).at("ai_outbound").get<std::string>():std::string("proxy");
+  return {{"base",independent?"independent":"standard"},{"ai_outbound",ai},{"rules",""},{"managed",false}};
+}
+
+Json Backend::rule_templates(const std::string& token) {
+  session(token);auto database=db();const auto registry=read_registry(database);
+  Json templates=Json::array({{{"id","standard"},{"name","标准分流"},{"builtin",true},{"published",true},{"spec",builtin("standard")}},
+                              {{"id","independent"},{"name","独立服务分组"},{"builtin",true},{"published",true},{"spec",builtin("independent")}}});
+  for(const auto& [id,item]:registry.at("templates").items()) {
+    if(!std::regex_match(id,std::regex("[0-9a-f]{32}")))throw HttpError(503,"规则模板数据无效");
+    auto draft=validate_rule_template(item.at("draft"));
+    auto published=item.at("published");if(!published.is_null())published=validate_rule_template(published);
+    templates.push_back({{"id",id},{"name",item.at("name")},{"builtin",false},{"spec",draft},
+      {"revision",item.at("revision")},{"published",!published.is_null()},
+      {"published_spec",published},{"published_revision",item.at("published_revision")},
+      {"published_at",item.at("published_at")}});
+  }
+  Json users=Json::array();
+  for(const auto& user:database.all("SELECT id,name FROM users WHERE deleted=0 ORDER BY created")) {
+    const auto id=user.at("id").get<std::string>();const auto& assignments=registry.at("assignments");
+    const auto choice=assignments.contains(id)?assignments.at(id).get<std::string>():std::string("legacy");
+    users.push_back({{"id",id},{"name",user.at("name")},{"template_id",choice},
+      {"legacy_independent",!assignments.contains(id)&&client_policy_enabled(settings_,id)}});
+  }
+  return {{"templates",templates},{"users",users}};
+}
+
+Json Backend::create_rule_template(const std::string& token,const std::string& csrf,const Json& input) {
+  require_fields(input,{"name","spec"});auto name=user_name(input.at("name"));auto spec=validate_rule_template(input.at("spec"));
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
+  auto registry=read_registry(database);auto& templates=registry["templates"];
+  if(templates.size()>=64)throw HttpError(409,"最多支持 64 个自定义模板");
+  auto id=random_id();templates[id]={{"name",name},{"draft",spec},{"revision",1},
+    {"published",nullptr},{"published_revision",0},{"published_at",0}};
+  save_registry(database,registry);audit(database,"rule_template_created",name);transaction.commit();return {{"id",id},{"revision",1}};
+}
+
+Json Backend::update_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  require_fields(input,{"name","spec","expected_revision"});auto name=user_name(input.at("name"));
+  auto spec=validate_rule_template(input.at("spec"));auto expected=revision(input.at("expected_revision"));
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
+  auto registry=read_registry(database);auto& templates=registry["templates"];
+  if(!templates.contains(id))throw HttpError(404,"模板不存在");
+  auto& item=templates[id];
+  if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
+  item["name"]=name;item["draft"]=spec;item["revision"]=expected+1;
+  save_registry(database,registry);audit(database,"rule_template_saved",name);transaction.commit();return {{"revision",expected+1}};
+}
+
+Json Backend::publish_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  require_fields(input,{"expected_revision"});auto expected=revision(input.at("expected_revision"));
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
+  auto registry=read_registry(database);auto& templates=registry["templates"];
+  if(!templates.contains(id))throw HttpError(404,"模板不存在");
+  auto& item=templates[id];
+  if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
+  auto spec=validate_rule_template(item.at("draft"));spec["managed"]=true;Int affected=0;
+  for(const auto& [user_id,choice]:registry.at("assignments").items())if(choice==id) {
+    auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{user_id});if(!row)continue;
+    auto user=User::from(*row);auto config=clash_configuration_for(user,spec);
+    if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
+      for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
+        throw HttpError(422,"AI 默认出口当前不可用");
+    if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())(void)categorized_shadowrocket_profile(user,spec);
+    ++affected;
+  }
+  spec.erase("managed");item["published"]=spec;item["published_revision"]=expected;item["published_at"]=now();
+  save_registry(database,registry);audit(database,"rule_template_published",item.at("name").get<std::string>());transaction.commit();
+  return {{"published_revision",expected},{"affected_users",affected}};
+}
+
+Json Backend::assign_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  require_fields(input,{"template_id"});const auto choice=checked_string(input.at("template_id"),1,32);
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
+  const auto user=get_user(database,id);auto registry=read_registry(database);
+  if(choice=="legacy")registry["assignments"].erase(id);
+  else {
+    auto spec=selected_spec(registry,choice);spec["managed"]=true;
+    auto config=clash_configuration_for(user,spec);
+    if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
+      for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
+        throw HttpError(422,"AI 默认出口当前不可用");
+    if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())(void)categorized_shadowrocket_profile(user,spec);
+    registry["assignments"][id]=choice;
+  }
+  save_registry(database,registry);audit(database,"user_rule_template_changed",user.name);transaction.commit();return {{"ok",true}};
+}
+}

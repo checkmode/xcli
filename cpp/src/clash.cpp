@@ -1,5 +1,6 @@
 #include "gateway.hpp"
 #include "client_policy.hpp"
+#include <set>
 
 namespace xg {
 namespace {
@@ -15,7 +16,7 @@ std::string yaml(const Json& value,int depth=0) {
   return text;
 }
 }
-Json Backend::clash_configuration(const User& user) const {
+Json Backend::clash_configuration_for(const User& user,const Json& policy) const {
   const auto address=settings_.at("public_ip").get<std::string>(),domain=settings_.at("domain").get<std::string>();
   Json proxies=Json::array(),names=Json::array();
   std::map<std::string,std::string> outbound_names{{"reality","REALITY"},{"websocket","HTTPS"}};
@@ -135,8 +136,24 @@ Json Backend::clash_configuration(const User& user) const {
     {"proxies",proxies},{"proxy-groups",groups},
     {"rules",rules}};
   if(!rule_providers.empty())result["rule-providers"]=rule_providers;
-  apply_client_policy(result,settings_,user,outbound_names);
+  const auto baseline_dns=result.at("dns").at("nameserver-policy");
+  auto routing_settings=settings_;
+  if(policy.value("managed",false)) {
+    if(!routing_settings.contains("client_policies"))routing_settings["client_policies"]=Json::object();
+    if(policy.at("base")=="independent") {
+      const auto routes=settings_.value("clash_service_routes",Json::object());
+      if(routes.contains(user.id))for(const auto& service:routes.at(user.id))
+        if(std::set<std::string>{"AI","CLAUDE","Telegram","YouTube","Netflix","Apple"}.contains(service.at("name").get<std::string>()))
+          throw HttpError(422,"该用户已有同名业务分流，请先处理冲突");
+      routing_settings["client_policies"][user.id]={{"ai_outbound",policy.at("ai_outbound")}};
+    } else routing_settings["client_policies"].erase(user.id);
+  }
+  apply_client_policy(result,routing_settings,user,outbound_names);
+  if(policy.value("managed",false))apply_template_rules(result,policy,baseline_dns);
   return result;
+}
+Json Backend::clash_configuration(const User& user) const {
+  auto database=db();return clash_configuration_for(user,effective_rule_policy(database,user.id));
 }
 std::pair<std::string,std::string> Backend::clash_subscription(const std::string& token) {
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});

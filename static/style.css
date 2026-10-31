@@ -32,3 +32,4 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 #proxy-import-form select{display:block;width:100%;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit;color:inherit}
 
 #proxy-manage-dialog{width:min(720px,calc(100vw - 32px));max-width:720px}#proxy-manage-vmess-fields{padding-top:8px}#proxy-manage-summary{overflow-wrap:anywhere}
+.rule-template-panel{margin-top:22px}#rule-template-dialog{width:min(820px,calc(100vw - 32px));max-width:820px}#rule-template-dialog select,#rule-assignment-dialog select{display:block;width:100%;padding:12px;border:1px solid #dce5e8;background:#fff;border-radius:6px;margin-top:8px;color:var(--ink)}#rule-template-dialog textarea{min-height:240px;line-height:1.5;font-size:12px}#rule-template-impact{margin:8px 0 0}#rule-template-list .actions{white-space:normal}

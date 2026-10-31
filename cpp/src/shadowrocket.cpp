@@ -2,6 +2,8 @@
 #include "client_policy.hpp"
 #include <map>
 #include <regex>
+#include <set>
+#include <sstream>
 
 namespace xg {
 namespace {
@@ -9,6 +11,12 @@ std::string trimmed(std::string value) {
   const auto first=value.find_first_not_of(" \t\r\n");
   if(first==std::string::npos)return {};
   return value.substr(first,value.find_last_not_of(" \t\r\n")-first+1);
+}
+void validate_node_metadata(const User& user,const std::string& domain,const std::string& address) {
+  if(domain.empty()||address.empty()||domain.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")!=std::string::npos||
+     address.find_first_not_of("0123456789abcdefABCDEF.:")!=std::string::npos||
+     !std::regex_match(user.uuid,std::regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+    throw HttpError(503,"Invalid Shadowrocket node metadata");
 }
 
 // Proxy-domain connections keep their hostname and are resolved by the selected
@@ -64,7 +72,8 @@ std::string integrated_dns(const std::string& profile,const std::string& domain,
 // Only insert the managed groups/rules and set this resource's update URL.
 std::string extend_base(const std::string& base,const std::string& groups,
                         const std::string& rules,const std::string& update_url,bool categorized=false,
-                        const std::map<std::string,std::string>& managed_targets={}) {
+                        const std::map<std::string,std::string>& managed_targets={},bool has_other=true,
+                        const std::set<std::string>& removed_targets={}) {
   if(base.empty()||base.size()>512*1024||base.find('\0')!=std::string::npos)
     throw HttpError(503,"Invalid Shadowrocket base profile");
   const std::string eol=base.find("\r\n")!=std::string::npos?"\r\n":"\n";
@@ -115,7 +124,11 @@ std::string extend_base(const std::string& base,const std::string& groups,
       // Preserve the complete base; only its generic policy references join
       // the new hierarchy. Shadowrocket's built-in PROXY remains a special word.
       std::smatch existing;
-      const std::regex generic(R"(^[ \t]*(.+),[ \t]*(PROXY|DIRECT)([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
+      const std::regex generic(R"(^[ \t]*(.+),[ \t]*(PROXY|DIRECT|REJECT)([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
+      if(std::regex_match(original,existing,generic)&&removed_targets.contains(trimmed(existing[1]))) {
+        offset=end==base.size()?end:end+1;
+        continue;
+      }
       if(std::regex_match(original,existing,generic)&&managed_targets.contains(trimmed(existing[1]))) {
         auto rewritten=original;
         rewritten.replace(static_cast<std::size_t>(existing.position(2)),existing.length(2),
@@ -126,7 +139,7 @@ std::string extend_base(const std::string& base,const std::string& groups,
       }
       const std::regex policy(R"(,PROXY([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
       result+=std::regex_replace(original,policy,
-        (line.starts_with("FINAL,")?",XCLI-其他流量":",XCLI-PROXY")+std::string("$1"));
+        (line.starts_with("FINAL,")&&has_other?",XCLI-其他流量":",XCLI-PROXY")+std::string("$1"));
     } else result+=original;
     offset=end==base.size()?end:end+1;
   }
@@ -134,7 +147,7 @@ std::string extend_base(const std::string& base,const std::string& groups,
 }
 
 std::string categorized_profile(const Json& config,const std::map<std::string,std::string>& node_names,
-                                const std::string& base,const std::string& update_url) {
+                                const std::string& base,const std::string& update_url,bool replace_categories=false) {
   auto policy=[&](const std::string& name) {
     if(name=="DIRECT"||name=="REJECT")return name;
     if(node_names.contains(name))return node_names.at(name);
@@ -146,7 +159,9 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
   };
   std::string groups,rules;
   std::map<std::string,std::string> managed_targets;
+  bool has_other=false;
   for(const auto& group:config.at("proxy-groups")) {
+    if(group.at("name")=="其他流量")has_other=true;
     const auto type=group.at("type").get<std::string>();
     groups+=safe(policy(group.at("name").get<std::string>()))+" = "+type;
     for(const auto& member:group.at("proxies"))groups+=","+safe(policy(member.get<std::string>()));
@@ -171,11 +186,12 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
   };
   auto emit=[&](std::string match,const std::string& target) {
     match=std::regex_replace(match,std::regex("NETWORK,UDP"),"PROTOCOL,UDP");
+    match=std::regex_replace(match,std::regex("IP-CIDR6,"),"IP-CIDR,");
     match=std::regex_replace(match,std::regex("DST-PORT,3478/443"),"OR,((DST-PORT,3478),(DST-PORT,443))");
     if(match.starts_with("IP-CIDR6,"))match.replace(0,9,"IP-CIDR,");
     const auto suffix=match.ends_with(",no-resolve")?std::string(",no-resolve"):std::string();
     if(!suffix.empty())match.resize(match.size()-suffix.size());
-    if(!match.starts_with("AND,"))managed_targets[match]=policy(target);
+    if(!match.starts_with("AND,"))managed_targets.emplace(match,policy(target));
     rules+=match+","+policy(target)+suffix+"\n";
   };
   for(const auto& item:config.at("rules")) {
@@ -197,7 +213,17 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
       emit(stripped.substr(0,split)+(no_resolve?",no-resolve":""),stripped.substr(split+1));
     }
   }
-  return extend_base(base,groups,rules,update_url,true,managed_targets);
+  std::set<std::string> removed_targets;
+  if(replace_categories) {
+    std::istringstream defaults(independent_template_rules());std::string line;
+    while(std::getline(defaults,line)) {
+      auto split=line.rfind(',');if(split==std::string::npos)continue;
+      auto match=line.substr(0,split);
+      if(match.starts_with("IP-CIDR6,"))match.replace(0,9,"IP-CIDR,");
+      if(!managed_targets.contains(match))removed_targets.insert(match);
+    }
+  }
+  return extend_base(base,groups,rules,update_url,true,managed_targets,has_other,removed_targets);
 }
 }
 
@@ -206,26 +232,19 @@ Json Backend::shadowrocket_setup(const std::string& token) {
   if(!row)throw HttpError(404,"Not Found");
   const auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
-  const bool enabled=std::find(users.begin(),users.end(),Json(user.id))!=users.end()||client_policy_enabled(settings_,user.id);
+  const auto policy=effective_rule_policy(database,user.id);
+  const bool categorized=policy.at("base")=="independent"||
+    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+  const bool enabled=std::find(users.begin(),users.end(),Json(user.id))!=users.end()||categorized;
   Json result={{"service_routing",enabled},{"resource",enabled?"/s/"+token+"/shadowrocket.conf":"/shadowrocket-dns.sgmodule"}};
-  if(client_policy_enabled(settings_,user.id))result["dns_routing"]="integrated";
+  if(categorized)result["dns_routing"]="integrated";
   return result;
 }
 
-std::string Backend::shadowrocket_profile(const std::string& token) {
-  if(!shadowrocket_setup(token).at("service_routing").get<bool>())throw HttpError(404,"Not Found");
-  auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});
-  if(!row)throw HttpError(404,"Not Found");
-  const auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
+std::string Backend::categorized_shadowrocket_profile(const User& user,const Json& policy) const {
   const auto address=settings_.at("public_ip").get<std::string>(),domain=settings_.at("domain").get<std::string>();
-  if(domain.empty()||address.empty()||domain.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")!=std::string::npos||
-     address.find_first_not_of("0123456789abcdefABCDEF.:")!=std::string::npos||
-     !std::regex_match(user.uuid,std::regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
-    throw HttpError(503,"Invalid Shadowrocket node metadata");
-  // Reject delimiters instead of permitting settings to inject INI fields.
+  validate_node_metadata(user,domain,address);
   const auto bases=settings_.value("shadowrocket_base_profiles",Json::object());
-  const bool complete_base=bases.contains(user.id);
-  if(client_policy_enabled(settings_,user.id)) {
     std::map<std::string,std::string> nodes{
       {"REALITY",user.name+" · REALITY"},{"HTTPS",user.name+" · HTTPS"},
       {"Hysteria 2",user.name+" · Hysteria 2"},{"VMess TLS",user.name+" · VMess TLS"}};
@@ -239,9 +258,28 @@ std::string Backend::shadowrocket_profile(const std::string& token) {
         nodes[label+" · HTTPS"]=node+" · HTTPS";
       } else nodes[label]=node;
     }
-    return integrated_dns(categorized_profile(clash_configuration(user),nodes,bases.at(user.id).get<std::string>(),
-      settings_.at("origin").get<std::string>()+"/s/"+token+"/shadowrocket.conf"),domain,address,nodes.at("HTTPS"));
-  }
+    const std::string fallback="[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n";
+    const auto base=bases.contains(user.id)?bases.at(user.id).get<std::string>():fallback;
+    const bool replace_categories=policy.value("managed",false)&&policy.at("base")=="independent"&&
+      policy.at("rules").get<std::string>()!=independent_template_rules();
+    return integrated_dns(categorized_profile(clash_configuration_for(user,policy),nodes,base,
+      settings_.at("origin").get<std::string>()+"/s/"+user.token+"/shadowrocket.conf",replace_categories),domain,address,nodes.at("HTTPS"));
+}
+
+std::string Backend::shadowrocket_profile(const std::string& token) {
+  auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});
+  if(!row)throw HttpError(404,"Not Found");
+  const auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
+  const auto policy=effective_rule_policy(database,user.id);
+  const bool categorized=policy.at("base")=="independent"||
+    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+  if(categorized)return categorized_shadowrocket_profile(user,policy);
+  const auto users=settings_.value("shadowrocket_service_users",Json::array());
+  if(std::find(users.begin(),users.end(),Json(user.id))==users.end())throw HttpError(404,"Not Found");
+  const auto address=settings_.at("public_ip").get<std::string>(),domain=settings_.at("domain").get<std::string>();
+  validate_node_metadata(user,domain,address);
+  const auto bases=settings_.value("shadowrocket_base_profiles",Json::object());
+  const bool complete_base=bases.contains(user.id);
   std::string proxies,groups,rules;
   for(const auto& service:settings_.at("clash_service_routes").at(user.id)) {
     const auto name=service.at("name").get<std::string>(),tag=service.at("outbound").get<std::string>();

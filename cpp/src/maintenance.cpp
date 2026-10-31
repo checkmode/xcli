@@ -118,7 +118,11 @@ void Backend::restore_backup(const std::string& token,const std::string& csrf,co
   auto bundle=open_backup(id);
   if(!secure_equal(sha256(bundle.at("settings").dump()),sha256(settings_.dump())))throw HttpError(409,"备份来自不同的服务器配置；请使用离线恢复工具");
   Temporary candidate{options_.state/("restore-"+random_id()+".sqlite")};write_private_file(candidate.path,unbase64(bundle.at("database").get<std::string>(),40*1024*1024));
-  Json users;{Database copy(candidate.path,true);if(copy.one("PRAGMA quick_check")->begin().value()!="ok")throw HttpError(422,"备份数据库损坏");users=copy.all("SELECT * FROM users");for(const auto& row:users)(void)User::from(row);}
+  Json users;std::optional<std::string> rule_templates;
+  {Database copy(candidate.path,true);if(copy.one("PRAGMA quick_check")->begin().value()!="ok")throw HttpError(422,"备份数据库损坏");users=copy.all("SELECT * FROM users");for(const auto& row:users)(void)User::from(row);
+    auto saved=copy.one("SELECT value FROM metadata WHERE key='rule_templates_v1'");
+    if(saved)rule_templates=saved->at("value").get<std::string>();
+  }
   // Flush current traffic when possible, without changing runtime authorization yet.
   if(core_){auto gen=core_->generation();auto counters=core_->counters();if(core_->generation()!=gen)throw HttpError(503,"核心正在重启，请稍后恢复");Transaction stats(database);apply_stats(database,gen,counters);stats.commit();}
   make_backup("before-restore");
@@ -130,6 +134,8 @@ void Backend::restore_backup(const std::string& token,const std::string& csrf,co
     database.run("INSERT INTO users(id,name,uuid,token,enabled,quota,expires,upload,download,created,deleted) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       {user.id,user.name,user.uuid,user.token,Int(user.enabled),user.quota,user.expires,std::max(user.upload,previous.first),std::max(user.download,previous.second),user.created,Int(user.deleted)});
   }
+  if(rule_templates)database.run("INSERT OR REPLACE INTO metadata(key,value) VALUES('rule_templates_v1',?)",{*rule_templates});
+  else database.run("DELETE FROM metadata WHERE key='rule_templates_v1'");
   database.run("DELETE FROM sessions");database.run("DELETE FROM mfa_sessions");database.run("DELETE FROM device_activity");database.run("DELETE FROM metadata WHERE key='activity_sample'");
   audit(database,"backup_restored",id);transaction.commit();
 }

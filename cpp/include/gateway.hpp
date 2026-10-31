@@ -166,6 +166,11 @@ class Backend {
   void reset_traffic(const std::string& token, const std::string& csrf, const std::string& id);
   Json links(const std::string& token, const std::string& id);
   Json shadowrocket_links(const std::string& token, const std::string& id);
+  Json rule_templates(const std::string& token);
+  Json create_rule_template(const std::string& token, const std::string& csrf, const Json& input);
+  Json update_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
+  Json publish_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
+  Json assign_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
   std::string shadowrocket_dns() const;
   Json shadowrocket_setup(const std::string& token);
   std::string shadowrocket_profile(const std::string& token);
@@ -173,6 +178,8 @@ class Backend {
   void change_password(const std::string& token, const std::string& csrf, const Json& input);
   std::pair<std::string, std::string> subscription(const std::string& token);
   Json clash_configuration(const User& user) const;
+  Json clash_configuration_for(const User& user, const Json& policy) const;
+  std::string categorized_shadowrocket_profile(const User& user, const Json& policy) const;
   std::pair<std::string, std::string> clash_subscription(const std::string& token);
   Json links_for(const User& user) const;
   Json shadowrocket_links_for(const User& user) const;
@@ -227,6 +234,7 @@ class Backend {
   Int backup_retry_after_ = 0;
   Int operations_started_ = now();
   Database db() const { return Database(options_.state / "gateway.sqlite"); }
+  Json effective_rule_policy(Database& database, const std::string& user_id) const;
   User get_user(Database& db, const std::string& id);
   void audit(Database& db, const std::string& action, const std::string& detail = "");
   static Json validated_user(const Json& input);
