@@ -78,10 +78,10 @@ def test_service_routes_are_user_scoped_and_follow_identity_rotation(fixture):
     with fixture['legacy'].db() as db:
         other_token = db.execute('SELECT token FROM users WHERE id=?', (other_id,)).fetchone()[0]
     other = subscription(fixture, other_token)
-    assert set(other['rule-providers']) == {'stun-endpoints'}
+    assert set(other['rule-providers']) == {'stun-endpoints', 'xcli-oracle-cloud'}
     assert not any(g['name'] in ('CLAUDE', 'GITHUB') for g in other['proxy-groups'])
     assert 'DOMAIN-SUFFIX,todesk.com,DIRECT' in other['rules']
-    assert len(other['rules']) == 14
+    assert len(other['rules']) == 15
     assert '+.claude.ai' not in other['dns']['nameserver-policy']
     assert '+.github.com' not in other['dns']['nameserver-policy']
     # Rotate credentials, preserving the same user's routing policy.

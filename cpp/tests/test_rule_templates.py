@@ -23,6 +23,52 @@ def group_names(config):
     return {item['name'] for item in config['proxy-groups']}
 
 
+def test_oracle_cloud_system_group_precedes_template_and_uses_direct_dns(fixture):
+    c = fixture['client']; c.login()
+    path = '/s/' + fixture['token']
+    initial = clash(c, path)
+    generic_before = c.call(path)[2]
+
+    def verify(config):
+        groups = {group['name']: group for group in config['proxy-groups']}
+        assert groups['oracle-cloud'] == {'name': 'oracle-cloud', 'type': 'select', 'proxies': ['DIRECT']}
+        provider = config['rule-providers']['xcli-oracle-cloud']
+        assert provider['type'] == 'inline' and provider['behavior'] == 'classical'
+        for entry in ('DOMAIN-SUFFIX,oracle.com', 'DOMAIN-SUFFIX,oraclecloud.com',
+                      'DOMAIN-SUFFIX,oraclecloudapps.com', 'DOMAIN-SUFFIX,oraclecloud.net',
+                      'DOMAIN-SUFFIX,oraclegovcloud.com', 'DOMAIN-SUFFIX,oracleinfinity.io',
+                      'DOMAIN-SUFFIX,oracleimg.com', 'DOMAIN-SUFFIX,ocir.io',
+                      'DOMAIN,oracle.112.2o7.net', 'DOMAIN,consent.trustarc.com'):
+            assert entry in provider['payload']
+        rules = config['rules']
+        assert rules.index('DOMAIN-SUFFIX,todesk.com,DIRECT') < rules.index('RULE-SET,xcli-oracle-cloud,oracle-cloud')
+        assert rules.index('RULE-SET,xcli-oracle-cloud,oracle-cloud') < rules.index('GEOSITE,private,DIRECT')
+        dns = config['dns']['nameserver-policy']
+        assert next(iter(dns)) == 'rule-set:xcli-oracle-cloud'
+        assert all(server.endswith('#DIRECT') for server in dns['rule-set:xcli-oracle-cloud'])
+
+    verify(initial)
+    spec = {'base': 'standard', 'ai_outbound': 'proxy',
+            'rules': 'DOMAIN,cloud.oracle.com,PROXY\nDOMAIN-SUFFIX,example.org,PROXY\n'}
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'custom policy', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    managed = clash(c, path); verify(managed)
+    assert managed['rules'].index('RULE-SET,xcli-oracle-cloud,oracle-cloud') < managed['rules'].index('DOMAIN,cloud.oracle.com,PROXY')
+    assert c.call(path)[2] == generic_before
+
+
+@pytest.mark.parametrize('fixture', [POLICY], indirect=True)
+def test_oracle_cloud_group_in_categorized_shadowrocket(fixture):
+    c = fixture['client']; c.login()
+    path = '/s/' + fixture['token']
+    profile = c.call(path + '/shadowrocket.conf')[2].decode()
+    assert 'XCLI-oracle-cloud = select,DIRECT' in profile
+    assert 'DOMAIN-SUFFIX,oraclecloud.com,XCLI-oracle-cloud' in profile
+    assert 'DOMAIN,consent.trustarc.com,XCLI-oracle-cloud' in profile
+    assert 'DOMAIN-SUFFIX,trustarc.com,XCLI-oracle-cloud' not in profile
+
+
 @pytest.mark.parametrize('fixture', [POLICY], indirect=True)
 def test_drafts_publish_assignment_and_paired_subscriptions(fixture):
     c = fixture['client']; c.login()

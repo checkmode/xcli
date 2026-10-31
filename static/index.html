@@ -178,7 +178,7 @@
       <details class="rule-raw-editor"><summary>批量导入或直接编辑规则文本</summary><label>分类规则文本<textarea name="rules" rows="18" spellcheck="false" aria-describedby="rule-template-help"></textarea></label><p id="rule-template-help" class="small muted">每行：类型,内容,目标；IP 网段和 GEOIP 可附加 resolve 或 no-resolve。旧的三字段 IP 网段规则仍不额外解析。以 # 开头的行是注释，最多 500 条、14000 字节。</p></details>
     </div>
   </div>
-  <p class="small muted">规则用于生成 Clash 和小火箭配置。IPv6 规则需要客户端启用 IPv6；没有专属小火箭底稿时以手机的 default.conf 为基础。</p>
+  <p class="small muted">系统规则将 Oracle Cloud 相关域名交给 oracle-cloud 直连分组，优先于模板规则。规则用于生成 Clash 和小火箭配置；IPv6 规则需要客户端启用 IPv6，没有专属小火箭底稿时以手机的 default.conf 为基础。</p>
   <p id="rule-template-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" class="secondary" data-close="rule-template-dialog">关闭</button><button name="action" value="save" class="secondary">保存草稿</button><button id="rule-template-publish" name="action" value="publish" class="primary">保存并发布</button></div>
 </form></dialog>
 <div id="toast" role="status" hidden></div>

@@ -1,5 +1,6 @@
 #include "gateway.hpp"
 #include "client_policy.hpp"
+#include <algorithm>
 #include <set>
 
 namespace xg {
@@ -14,6 +15,37 @@ std::string yaml(const Json& value,int depth=0) {
   }
   else if(value.is_array())for(const auto& item:value)text+=indent+"- "+item.dump()+"\n";
   return text;
+}
+
+// OCI's documented console allowlist includes two shared-service hosts. Keep
+// those as exact matches so their parent domains do not change routing.
+void apply_oracle_cloud_policy(Json& config) {
+  std::set<std::string> names;
+  for(const auto& proxy:config.at("proxies"))names.insert(proxy.at("name").get<std::string>());
+  for(const auto& group:config.at("proxy-groups"))names.insert(group.at("name").get<std::string>());
+  std::string group="oracle-cloud";
+  for(int n=2;names.contains(group);++n)group="oracle-cloud · 直连 "+std::to_string(n);
+  config["proxy-groups"].push_back({{"name",group},{"type","select"},{"proxies",Json::array({"DIRECT"})}});
+
+  auto& providers=config["rule-providers"];
+  std::string provider="xcli-oracle-cloud";
+  for(int n=2;providers.contains(provider);++n)provider="xcli-oracle-cloud-"+std::to_string(n);
+  const auto payload=Json::array({
+    "DOMAIN-SUFFIX,oracle.com","DOMAIN-SUFFIX,oraclecloud.com","DOMAIN-SUFFIX,oraclecloudapps.com",
+    "DOMAIN-SUFFIX,oraclecloud.net","DOMAIN-SUFFIX,oraclegovcloud.com","DOMAIN-SUFFIX,oracleinfinity.io",
+    "DOMAIN-SUFFIX,oracleimg.com","DOMAIN-SUFFIX,ocir.io",
+    "DOMAIN,oracle.112.2o7.net","DOMAIN,consent.trustarc.com"});
+  providers[provider]={{"type","inline"},{"behavior","classical"},{"payload",payload}};
+  auto& rules=config["rules"];
+  auto position=std::find(rules.begin(),rules.end(),Json("DOMAIN-SUFFIX,todesk.com,DIRECT"));
+  if(position!=rules.end())++position;
+  rules.insert(position,"RULE-SET,"+provider+","+group);
+
+  auto& dns=config["dns"]["nameserver-policy"];
+  Json ordered=Json::object();
+  ordered["rule-set:"+provider]=Json::array({"https://223.5.5.5/dns-query#DIRECT","https://1.12.12.12/dns-query#DIRECT"});
+  for(auto it=dns.begin();it!=dns.end();++it)ordered[it.key()]=it.value();
+  dns=std::move(ordered);
 }
 }
 Json Backend::clash_configuration_for(const User& user,const Json& policy) const {
@@ -150,6 +182,7 @@ Json Backend::clash_configuration_for(const User& user,const Json& policy) const
   }
   apply_client_policy(result,routing_settings,user,outbound_names);
   if(policy.value("managed",false))apply_template_rules(result,policy,baseline_dns);
+  apply_oracle_cloud_policy(result);
   return result;
 }
 Json Backend::clash_configuration(const User& user) const {

@@ -226,7 +226,10 @@ int main() {
       check(panel.webshare_status(session).dump().find("must-not-leak")==std::string::npos,"Provider data escaped public allowlist");
       panel.configure_webshare(session,csrf,{{"plan_id",17},{"enabled",true}});
       auto clash=panel.clash_configuration(u);check(clash.at("proxies").size()==19,"Clash must include all sixteen enabled dynamic entries");
-      check(clash.at("proxy-groups").size()==18,"Country/STUN groups missing from Clash export");
+      check(clash.at("proxy-groups").size()==19,"Country/STUN/Oracle groups missing from Clash export");
+      check(std::any_of(clash.at("proxy-groups").begin(),clash.at("proxy-groups").end(),[](const Json& group){
+        return group.at("name")=="oracle-cloud"&&group.at("proxies")==Json::array({"DIRECT"});
+      }),"Oracle Cloud group must default to DIRECT");
       check(panel.webshare_status(session).at("regions").size()==16,"Installed country registry missing");
       check(clash.at("proxies").at(0).at("reality-opts").at("public-key")==settings.at("reality_public"),"Clash Reality key differs");
       check(clash.at("proxies").at(1).at("ws-opts").at("path")==settings.at("ws_path"),"Clash WebSocket path differs");
