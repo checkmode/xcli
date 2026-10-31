@@ -60,3 +60,25 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 #rule-entry-error{margin:6px 0 0}
 @media(max-width:760px){.rule-template-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.rule-template-fields>label:first-child{grid-column:1/-1}.rule-template-fields>button{justify-self:start}}
 @media(max-width:600px){#rule-template-dialog{padding:16px}.rule-entry-grid{gap:8px}.rule-entry-controls label{max-width:none}#rule-template-dialog select,#rule-template-form input[name=name]{min-height:38px}}
+
+#rule-template-dialog{width:min(1440px,calc(100vw - 32px));max-width:1440px}
+.rule-heading-actions{display:flex;align-items:flex-start;justify-content:flex-end;gap:7px;flex-wrap:wrap}
+.rule-heading-actions .secondary{padding:7px 10px;white-space:nowrap}
+.rule-workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:14px;align-items:start;margin-top:14px}
+.rule-list-section,.rule-editor-pane{min-width:0;margin:0}
+.rule-editor-pane .rule-builder{margin:0}
+.rule-editor-pane .rule-batch-editor{margin:0 0 12px}
+.rule-editor-pane .rule-batch-fields{grid-template-columns:1fr;gap:0}
+.rule-editor-pane .rule-batch-fields label{margin-top:8px}
+.rule-editor-pane .rule-raw-editor{margin:12px 0 0}
+.rule-editor-pane textarea[name=rules]{min-height:180px}
+.rule-list-section .rule-search{margin:8px 0}
+.rule-list-section .rule-batch-toolbar{margin:8px 0}
+.rule-list-section .rule-list{max-height:min(52vh,500px)}
+.rule-list-section .rule-list table{min-width:600px}
+.rule-list-section .rule-list th,.rule-list-section .rule-list td{padding:5px 6px}
+.rule-list-section .rule-list .rule-select-cell{width:45px}
+.rule-list-section .rule-list td.rule-type small{display:none}
+.rule-list-section .rule-list tr.rule-editing td{background:#e8f6f2}
+@media(max-width:1000px){.rule-workspace{grid-template-columns:1fr}.rule-list-section .rule-list{max-height:320px}}
+@media(max-width:600px){.rule-heading-actions{max-width:50%}.rule-heading-actions .secondary{font-size:11px;padding:6px 8px}}

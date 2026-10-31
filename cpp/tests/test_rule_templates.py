@@ -354,3 +354,56 @@ def test_builtin_versions_are_restored_with_user_backup(fixture):
     assert restored['published_spec'] == first
     rules = clash(c, path)['rules']
     assert 'DOMAIN,first.example,DIRECT' in rules and 'DOMAIN,second.example,DIRECT' not in rules
+
+
+@pytest.mark.parametrize('fixture', [POLICY], indirect=True)
+@pytest.mark.parametrize('builtin_id', ['standard', 'independent'])
+def test_builtin_reset_and_undo_preserve_published_and_draft_versions(fixture, builtin_id):
+    c = fixture['client']; c.login()
+    uid = c.json('/api/users', 'POST', {'name': 'reset user'})['id']
+    path, legacy = subscription(c, uid), '/s/' + fixture['token']
+    c.json('/api/users/' + uid + '/rule-template', 'POST', {'template_id': builtin_id})
+    original_clash, legacy_before = clash(c, path), clash(c, legacy)
+    original_mobile = c.call(path + '/shadowrocket.conf')
+    builtin = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    factory = builtin['factory_spec']
+    published = {**factory, 'rules': factory['rules'] + 'DOMAIN,reset-check.example,DIRECT\n'}
+    c.json('/api/rule-templates/' + builtin_id, 'PUT',
+           {'name': builtin['name'], 'spec': published, 'expected_revision': 1})
+    c.json('/api/rule-templates/' + builtin_id + '/publish', 'POST', {'expected_revision': 2})
+    published_clash = clash(c, path)
+    draft = {**published, 'rules': published['rules'] + 'DOMAIN,draft-check.example,REJECT\n'}
+    c.json('/api/rule-templates/' + builtin_id, 'PUT',
+           {'name': '重置前名称', 'spec': draft, 'expected_revision': 2})
+    c.json('/api/rule-templates/' + builtin_id + '/reset', 'POST', {'expected_revision': 2}, expected=409)
+    c.json('/api/rule-templates/' + builtin_id + '/reset', 'POST', {'expected_revision': 3},
+           headers={'X-CSRF-Token': 'wrong'}, expected=403)
+    result = c.json('/api/rule-templates/' + builtin_id + '/reset', 'POST', {'expected_revision': 3})
+    assert result == {'unchanged': False, 'revision': 4, 'affected_users': 1}
+    reset = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    assert reset['name'] == builtin['name'] and reset['spec'] == reset['published_spec'] == factory
+    assert reset['revision'] == reset['published_revision'] == 4 and reset['can_undo_reset']
+    assert clash(c, path) == original_clash and clash(c, legacy) == legacy_before
+    mobile = c.call(path + '/shadowrocket.conf')
+    assert (mobile[0], mobile[2]) == (original_mobile[0], original_mobile[2])
+    again = c.json('/api/rule-templates/' + builtin_id + '/reset', 'POST', {'expected_revision': 4})
+    assert again['unchanged'] and again['revision'] == 4
+    c.json('/api/rule-templates/' + builtin_id, 'PUT',
+           {'name': builtin['name'], 'spec': factory, 'expected_revision': 4})
+    c.json('/api/rule-templates/' + builtin_id + '/reset', 'POST', {'expected_revision': 5})
+    c.json('/api/rule-templates/' + builtin_id + '/undo-reset', 'POST', {'expected_revision': 5}, expected=409)
+    result = c.json('/api/rule-templates/' + builtin_id + '/undo-reset', 'POST', {'expected_revision': 6})
+    assert result == {'revision': 7, 'affected_users': 1}
+    restored = next(t for t in c.json('/api/rule-templates')['templates'] if t['id'] == builtin_id)
+    assert restored['name'] == '重置前名称' and restored['spec'] == draft and restored['published_spec'] == published
+    assert restored['revision'] == 7 and restored['published_revision'] == 6 and not restored['can_undo_reset']
+    assert clash(c, path) == published_clash and clash(c, legacy) == legacy_before
+    c.json('/api/rule-templates/' + builtin_id + '/undo-reset', 'POST', {'expected_revision': 7}, expected=409)
+
+
+def test_reset_is_limited_to_builtins(fixture):
+    c = fixture['client']; c.login()
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'custom', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/reset', 'POST', {'expected_revision': 1}, expected=404)
+    c.json('/api/rule-templates/' + tid + '/undo-reset', 'POST', {'expected_revision': 1}, expected=404)

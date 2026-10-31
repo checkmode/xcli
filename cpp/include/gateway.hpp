@@ -170,6 +170,8 @@ class Backend {
   Json create_rule_template(const std::string& token, const std::string& csrf, const Json& input);
   Json update_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
   Json publish_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
+  Json reset_builtin_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
+  Json undo_builtin_rule_template_reset(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
   Json assign_rule_template(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
   std::string shadowrocket_dns() const;
   Json shadowrocket_setup(const std::string& token);

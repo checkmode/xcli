@@ -10,7 +10,9 @@ async function loadRuleTemplates(){
       const status=t.builtin?(t.revision!==t.published_revision?'内置 · 草稿有修改':'内置 · 已发布'):
         !t.published?'未发布':t.revision!==t.published_revision?'已发布 · 草稿有修改':'已发布';
       const actions='<button data-template-action="edit" data-id="'+esc(t.id)+'">编辑草稿</button> '+
-        '<button data-template-action="copy" data-id="'+esc(t.id)+'">'+(t.builtin?'复制为自定义':'复制')+'</button>';
+        '<button data-template-action="copy" data-id="'+esc(t.id)+'">'+(t.builtin?'复制为自定义':'复制')+'</button>'+
+        (t.builtin?' <button data-template-action="reset" data-id="'+esc(t.id)+'">恢复默认</button>':'')+
+        (t.builtin&&t.can_undo_reset?' <button data-template-action="undo-reset" data-id="'+esc(t.id)+'">撤销恢复</button>':'');
       return '<tr><td>'+esc(t.name)+'</td><td>'+status+'</td><td>'+count+'</td><td class="actions">'+actions+'</td></tr>';
     }).join('')+'</tbody></table>';
 }
@@ -63,6 +65,7 @@ function updateRuleHint(resetResolution=false){
 }
 function resetRuleEntry(){
   ruleEditing=null;$('#rule-entry-value').value='';$('#rule-entry-error').textContent='';
+  $('#rule-builder-title').textContent='添加规则';$$('#rule-list tr.rule-editing').forEach(row=>row.classList.remove('rule-editing'));
   $('#rule-entry-add').textContent='添加规则';$('#rule-entry-cancel').hidden=true;$('#rule-entry-position-label').hidden=false;
 }
 function rememberRuleText(value,nextSelection=ruleSelection){
@@ -96,7 +99,7 @@ function renderRuleRows(){
     const detail=r.valid?esc(f[1]):esc(r.text),option=r.valid&&f[3]?' <span class="muted">('+esc(f[3])+')</span>':'';
     const edit=r.valid?'<button type="button" data-rule-action="edit" data-index="'+r.index+'" aria-label="编辑第 '+(n+1)+' 条规则">编辑</button> ':'';
     const targetWarning=r.valid&&!ruleTargets($('#rule-template-form').elements.base.value).includes(f[2])?'<small class="error">当前模板不可用</small>':'';
-    return '<tr><td class="rule-select-cell"><input type="checkbox" data-rule-select="'+r.index+'" aria-label="选择第 '+(n+1)+' 条规则" '+(ruleSelection.has(r.index)?'checked':'')+'></td><td>'+(n+1)+'</td><td class="rule-type">'+esc(type)+'<small>'+esc(f[0]||'')+'</small></td><td class="rule-value">'+detail+option+'</td><td>'+esc(r.valid?f[2]:'—')+targetWarning+'</td><td class="rule-row-actions">'+edit+
+    return '<tr'+(ruleEditing===r.index?' class="rule-editing"':'')+'><td class="rule-select-cell"><input type="checkbox" data-rule-select="'+r.index+'" aria-label="选择第 '+(n+1)+' 条规则" '+(ruleSelection.has(r.index)?'checked':'')+'></td><td>'+(n+1)+'</td><td class="rule-type">'+esc(type)+'<small>'+esc(f[0]||'')+'</small></td><td class="rule-value">'+detail+option+'</td><td>'+esc(r.valid?f[2]:'—')+targetWarning+'</td><td class="rule-row-actions">'+edit+
       '<button type="button" data-rule-action="up" data-index="'+r.index+'" aria-label="上移第 '+(n+1)+' 条规则" '+(n===0?'disabled':'')+'>↑</button> '+
       '<button type="button" data-rule-action="down" data-index="'+r.index+'" aria-label="下移第 '+(n+1)+' 条规则" '+(n===all.length-1?'disabled':'')+'>↓</button> '+
       '<button type="button" data-rule-action="delete" data-index="'+r.index+'" aria-label="删除第 '+(n+1)+' 条规则">删除</button></td></tr>';
@@ -139,8 +142,9 @@ $('#rule-batch-open').onclick=()=>{if($('#rule-batch-editor').hidden){$('#rule-b
 $('#rule-batch-cancel').onclick=()=>{$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent=''};
 function batchReady(){
   const error=$('#rule-batch-error');error.textContent='';
-  if(!ruleSelection.size){error.textContent='请先选择规则。';return false}
-  if(ruleEditing!==null||$('#rule-entry-value').value.trim()){error.textContent='请先应用或取消正在编辑的规则，或清空添加框。';return false}
+  const reject=message=>{error.textContent=message;if($('#rule-batch-editor').hidden)toast(message);return false};
+  if(!ruleSelection.size)return reject('请先选择规则。');
+  if(ruleEditing!==null||$('#rule-entry-value').value.trim())return reject('请先应用或取消正在编辑的规则，或清空添加框。');
   return true;
 }
 $('#rule-batch-delete').onclick=()=>{
@@ -199,7 +203,7 @@ $('#rule-list').onclick=e=>{
   const button=e.target.closest('[data-rule-action]');if(!button)return;
   const index=Number(button.dataset.index),action=button.dataset.ruleAction,all=parsedRuleLines(),item=all.find(r=>r.index===index);
   if(!item)return;
-  if(ruleEditing!==null||$('#rule-entry-value').value.trim()){$('#rule-entry-error').textContent='请先应用或取消正在编辑的规则，或清空添加框。';return}
+  if(ruleEditing!==null||$('#rule-entry-value').value.trim()){$('#rule-entry-error').textContent='请先应用或取消正在编辑的规则，或清空添加框。';$('#rule-entry-value').focus();return}
   if(action==='edit'){
     if(!item.valid)return;
     const [type,value,target,option]=item.fields;ruleEditing=index;
@@ -207,14 +211,15 @@ $('#rule-list').onclick=e=>{
     $('#rule-entry-value').value=value;
     $('#rule-entry-resolution').value=option||((type==='GEOIP')?'resolve':'no-resolve');
     $('#rule-entry-add').textContent='应用修改';$('#rule-entry-cancel').hidden=false;$('#rule-entry-position-label').hidden=true;
-    $('#rule-entry-error').textContent='';$('#rule-entry-value').focus();return;
+    $('#rule-builder-title').textContent='修改第 '+(all.indexOf(item)+1)+' 条规则';
+    $('#rule-entry-error').textContent='';renderRuleRows();$('#rule-entry-value').focus();return;
   }
   const lines=ruleLines(),at=all.findIndex(r=>r.index===index);let nextSelection;
   if(action==='delete'){lines.splice(index,1);nextSelection=new Set([...ruleSelection].filter(i=>i!==index).map(i=>i>index?i-1:i))}
   else{const other=all[at+(action==='up'?-1:1)];if(!other)return;[lines[index],lines[other.index]]=[lines[other.index],lines[index]];nextSelection=new Set([...ruleSelection].map(i=>i===index?other.index:i===other.index?index:i))}
   resetRuleEntry();rememberRuleText(lines.join('\n'),nextSelection);
 };
-$('#rule-list-undo').onclick=()=>{if(!ruleUndo.length)return;if(ruleEditing!==null||$('#rule-entry-value').value.trim()){$('#rule-entry-error').textContent='请先应用或取消正在编辑的规则，或清空添加框。';return}if(pendingBatchEdit()){$('#rule-batch-error').textContent='请先应用或取消批量修改。';return}const previous=ruleUndo.pop();ruleText().value=previous.text;ruleSelection=new Set(previous.selection);ruleLastText=ruleText().value;resetRuleEntry();renderRuleRows()};
+$('#rule-list-undo').onclick=()=>{if(!ruleUndo.length)return;if(ruleEditing!==null||$('#rule-entry-value').value.trim()){$('#rule-entry-error').textContent='请先应用或取消正在编辑的规则，或清空添加框。';$('#rule-entry-value').focus();return}if(pendingBatchEdit()){$('#rule-batch-error').textContent='请先应用或取消批量修改。';return}const previous=ruleUndo.pop();ruleText().value=previous.text;ruleSelection=new Set(previous.selection);ruleLastText=ruleText().value;resetRuleEntry();renderRuleRows()};
 ruleText().addEventListener('input',()=>{if(ruleText().value!==ruleLastText){ruleUndo.push({text:ruleLastText,selection:[...ruleSelection]});if(ruleUndo.length>30)ruleUndo.shift();ruleLastText=ruleText().value;if(ruleSelection.size){ruleSelection.clear();toast('文本已修改，已清空规则选择')}}if(ruleEditing!==null)resetRuleEntry();renderRuleRows()});
 $('#rule-list-search').addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault()});
 $$('[data-close="rule-template-dialog"]').forEach(button=>button.onclick=()=>{if(mayCloseRuleEditor())$('#rule-template-dialog').close()});
@@ -256,17 +261,45 @@ function showRuleEditor(item,copy){
   form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;
   ruleUndo=[];ruleSelection=new Set();ruleLastText=spec.rules;$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent='';resetRuleEntry();updateRuleTargets('PROXY');updateRuleHint(true);renderRuleRows();ruleSavedSnapshot=ruleSnapshot();
   $('#rule-template-title').textContent=form.elements.id.value?(item?.builtin?'编辑内置规则模板':'编辑规则模板'):'新建规则模板';
+  $('#rule-template-reset').hidden=!(item?.builtin&&!copy);
+  $('#rule-template-undo-reset').hidden=!(item?.builtin&&!copy&&item.can_undo_reset);
   $('#rule-template-impact').textContent=form.elements.id.value?
     '当前有 '+templateUseCount(form.elements.id.value)+' 位用户使用该模板；保存草稿不会改变订阅，发布后下一次更新订阅生效。':
     '新模板先保存为草稿；发布后才能分配给用户。';
   $('#rule-template-error').textContent='';$('#rule-template-dialog').showModal();
 }
 
+async function changeBuiltinDefault(item,action,fromEditor,button){
+  if(!item?.builtin)return;
+  const form=$('#rule-template-form'),undo=action==='undo-reset',revision=fromEditor?Number(form.elements.revision.value):item.revision;
+  const effect=undo?'撤销上一次恢复，并用恢复前的草稿和已发布版本覆盖当前版本':
+    '将名称、基础模板、AI 默认出口及规则恢复为系统默认，并立即发布';
+  const pending=fromEditor&&ruleEditorDirty()?'当前编辑器中尚未保存的内容也会丢失。':'';
+  if(!confirm('确定对“'+item.name+'”'+effect+'？\n当前有 '+templateUseCount(item.id)+' 位用户使用；所有使用此模板的用户将在下次更新订阅时生效。'+pending))return;
+  const controls=fromEditor?[...form.querySelectorAll('button,input,select,textarea')]:[button],disabled=controls.map(c=>c.disabled);
+  let restored=false,completed=false;
+  const restore=()=>{controls.forEach((c,i)=>c.disabled=disabled[i]);restored=true};
+  controls.forEach(c=>c.disabled=true);
+  try{
+    const result=await api('rule-templates/'+encodeURIComponent(item.id)+'/'+action,'POST',{expected_revision:revision});completed=true;
+    await loadRuleTemplates();
+    if(fromEditor){restore();$('#rule-template-dialog').close();showRuleEditor(templateById(item.id),false)}
+    toast(result.unchanged?'该模板已经是默认状态':(undo?'已撤销恢复':'已恢复默认并发布')+'，影响 '+result.affected_users+' 位用户的下一次订阅');
+  }catch(err){
+    const message=completed?'操作已完成，但列表刷新失败；请重新加载页面。':err.message;
+    if(fromEditor)$('#rule-template-error').textContent=message;else toast(message);
+  }finally{if(!restored)restore()}
+}
+
 $('#rule-template-new').onclick=async()=>{try{await loadRuleTemplates();showRuleEditor(null,false)}catch(err){toast(err.message)}};
-$('#rule-template-list').onclick=e=>{
+$('#rule-template-list').onclick=async e=>{
   const button=e.target.closest('[data-template-action]');if(!button)return;
-  const item=templateById(button.dataset.id);if(item)showRuleEditor(item,button.dataset.templateAction==='copy');
+  const item=templateById(button.dataset.id),action=button.dataset.templateAction;if(!item)return;
+  if(action==='reset'||action==='undo-reset')await changeBuiltinDefault(item,action,false,button);
+  else showRuleEditor(item,action==='copy');
 };
+$('#rule-template-reset').onclick=()=>changeBuiltinDefault(templateById($('#rule-template-form').elements.id.value),'reset',true,$('#rule-template-reset'));
+$('#rule-template-undo-reset').onclick=()=>changeBuiltinDefault(templateById($('#rule-template-form').elements.id.value),'undo-reset',true,$('#rule-template-undo-reset'));
 $('#rule-template-load-base').onclick=()=>{
   const form=$('#rule-template-form'),item=templateById(form.elements.base.value);
   if(item&&form.elements.rules.value!==item.factory_spec.rules){

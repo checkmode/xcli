@@ -1,5 +1,6 @@
 #include "gateway.hpp"
 #include "client_policy.hpp"
+#include <limits>
 #include <regex>
 #include <set>
 
@@ -87,6 +88,24 @@ Json selected_spec(const Json& registry,const std::string& id) {
   if(!item.contains("published")||item.at("published").is_null())throw HttpError(409,"请先发布模板，再分配给用户");
   return validate_rule_template(item.at("published"));
 }
+
+void validate_for_user(const Backend& backend,const User& user,const Json& spec) {
+  const auto config=backend.clash_configuration_for(user,spec);
+  if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
+    for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
+      throw HttpError(422,"AI 默认出口当前不可用");
+  if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())
+    (void)backend.categorized_shadowrocket_profile(user,spec);
+}
+
+Int validate_for_assignments(const Backend& backend,Database& database,const Json& registry,const std::string& id,Json spec) {
+  spec["managed"]=true;Int affected=0;
+  for(const auto& [user_id,choice]:registry.at("assignments").items())if(choice==id) {
+    auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{user_id});if(!row)continue;
+    validate_for_user(backend,User::from(*row),spec);++affected;
+  }
+  return affected;
+}
 }
 
 Json Backend::effective_rule_policy(Database& database,const std::string& user_id) const {
@@ -109,7 +128,7 @@ Json Backend::rule_templates(const std::string& token) {
     templates.push_back({{"id",id},{"name",item.at("name")},{"builtin",true},{"spec",draft},
       {"revision",item.at("revision")},{"published",true},{"published_spec",published},
       {"published_revision",item.at("published_revision")},{"published_at",item.at("published_at")},
-      {"factory_spec",builtin(id)}});
+      {"factory_spec",builtin(id)},{"can_undo_reset",item.contains("reset_backup")&&item.at("reset_backup").is_object()}});
   }
   for(const auto& [id,item]:registry.at("templates").items()) {
     if(!std::regex_match(id,std::regex("[0-9a-f]{32}")))throw HttpError(503,"规则模板数据无效");
@@ -155,19 +174,50 @@ Json Backend::publish_rule_template(const std::string& token,const std::string& 
   std::lock_guard guard(mutation_mutex_);session(token,csrf,true);auto database=db();Transaction transaction(database);
   auto registry=read_registry(database);auto& item=editable_item(registry,id);
   if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
-  auto spec=validate_rule_template(item.at("draft"));spec["managed"]=true;Int affected=0;
-  for(const auto& [user_id,choice]:registry.at("assignments").items())if(choice==id) {
-    auto row=database.one("SELECT * FROM users WHERE id=? AND deleted=0",{user_id});if(!row)continue;
-    auto user=User::from(*row);auto config=clash_configuration_for(user,spec);
-    if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
-      for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
-        throw HttpError(422,"AI 默认出口当前不可用");
-    if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())(void)categorized_shadowrocket_profile(user,spec);
-    ++affected;
-  }
-  spec.erase("managed");item["published"]=spec;item["published_revision"]=expected;item["published_at"]=now();
+  const auto spec=validate_rule_template(item.at("draft"));
+  const auto affected=validate_for_assignments(*this,database,registry,id,spec);
+  item["published"]=spec;item["published_revision"]=expected;item["published_at"]=now();
   save_registry(database,registry);audit(database,"rule_template_published",item.at("name").get<std::string>());transaction.commit();
   return {{"published_revision",expected},{"affected_users",affected}};
+}
+
+Json Backend::reset_builtin_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  require_fields(input,{"expected_revision"});const auto expected=revision(input.at("expected_revision"));
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
+  if(!is_builtin(id))throw HttpError(404,"只能恢复内置模板");
+  auto database=db();Transaction transaction(database);auto registry=read_registry(database);auto& item=editable_item(registry,id);
+  if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
+  const auto initial=builtin_default_item(id);
+  const bool initial_content=item.at("name")==initial.at("name")&&item.at("draft")==initial.at("draft")&&item.at("published")==initial.at("published");
+  if(initial_content&&item.at("revision")==item.at("published_revision"))
+    return {{"unchanged",true},{"revision",expected},{"affected_users",0}};
+  if(expected==std::numeric_limits<Int>::max())throw HttpError(422,"模板版本已达上限");
+  const auto affected=validate_for_assignments(*this,database,registry,id,initial.at("published"));
+  const Json backup=initial_content&&item.contains("reset_backup")?item.at("reset_backup"):
+    Json{{"name",item.at("name")},{"draft",item.at("draft")},{"published",item.at("published")},
+      {"draft_dirty",item.at("revision")!=item.at("published_revision")},{"published_at",item.at("published_at")}};
+  item["name"]=initial.at("name");item["draft"]=initial.at("draft");item["published"]=initial.at("published");
+  item["revision"]=expected+1;item["published_revision"]=expected+1;item["published_at"]=now();item["reset_backup"]=backup;
+  save_registry(database,registry);audit(database,"rule_template_reset",item.at("name").get<std::string>());transaction.commit();
+  return {{"unchanged",false},{"revision",expected+1},{"affected_users",affected}};
+}
+
+Json Backend::undo_builtin_rule_template_reset(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
+  require_fields(input,{"expected_revision"});const auto expected=revision(input.at("expected_revision"));
+  std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
+  if(!is_builtin(id))throw HttpError(404,"只能撤销内置模板的恢复");
+  auto database=db();Transaction transaction(database);auto registry=read_registry(database);auto& item=editable_item(registry,id);
+  if(item.at("revision").get<Int>()!=expected)throw HttpError(409,"模板已被其他操作修改，请重新读取");
+  if(!item.contains("reset_backup")||!item.at("reset_backup").is_object())throw HttpError(409,"没有可撤销的恢复记录");
+  if(expected==std::numeric_limits<Int>::max())throw HttpError(422,"模板版本已达上限");
+  const auto backup=item.at("reset_backup");
+  const auto draft=validate_rule_template(backup.at("draft")),published=validate_rule_template(backup.at("published"));
+  const auto affected=validate_for_assignments(*this,database,registry,id,published);
+  item["name"]=backup.at("name");item["draft"]=draft;item["published"]=published;item["revision"]=expected+1;
+  item["published_revision"]=backup.at("draft_dirty").get<bool>()?expected:expected+1;
+  item["published_at"]=backup.at("published_at");item.erase("reset_backup");
+  save_registry(database,registry);audit(database,"rule_template_reset_undone",item.at("name").get<std::string>());transaction.commit();
+  return {{"revision",expected+1},{"affected_users",affected}};
 }
 
 Json Backend::assign_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
@@ -176,12 +226,7 @@ Json Backend::assign_rule_template(const std::string& token,const std::string& c
   const auto user=get_user(database,id);auto registry=read_registry(database);
   if(choice=="legacy")registry["assignments"].erase(id);
   else {
-    auto spec=selected_spec(registry,choice);spec["managed"]=true;
-    auto config=clash_configuration_for(user,spec);
-    if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
-      for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
-        throw HttpError(422,"AI 默认出口当前不可用");
-    if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())(void)categorized_shadowrocket_profile(user,spec);
+    auto spec=selected_spec(registry,choice);spec["managed"]=true;validate_for_user(*this,user,spec);
     registry["assignments"][id]=choice;
   }
   save_registry(database,registry);audit(database,"user_rule_template_changed",user.name);transaction.commit();return {{"ok",true}};

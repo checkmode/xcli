@@ -144,7 +144,7 @@
 <dialog id="restore-dialog"><form id="restore-form"><div class="dialog-heading"><h2>恢复用户配置</h2><button type="button" class="close" data-close="restore-dialog" aria-label="关闭">×</button></div><p id="restore-preview"></p><div class="notice">将恢复此备份的用户、配额和订阅凭据；后来创建的用户会被移除。当前管理密码、二次验证和已累计流量下限会保留。恢复前自动保存快照；恢复后需要重新登录，节点可能短暂重连。</div><input name="id" type="hidden"><label>再次输入备份编号<input name="confirm" required autocomplete="off"></label><label>当前管理密码<input name="current_password" type="password" autocomplete="current-password" required></label><label>二次验证码或恢复码<input name="code" autocomplete="one-time-code" maxlength="128" placeholder="未启用时留空"></label><p id="restore-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" class="secondary" data-close="restore-dialog">取消</button><button class="primary">确认恢复</button></div></form></dialog>
 <dialog id="rule-assignment-dialog"><form id="rule-assignment-form"><div class="dialog-heading"><h2 id="rule-assignment-title">用户规则模板</h2><button type="button" class="close" data-close="rule-assignment-dialog" aria-label="关闭">×</button></div><input name="user_id" type="hidden"><label>使用的模板<select id="rule-assignment-choice" name="template_id"></select></label><p id="rule-assignment-current" class="small muted"></p><p class="notice">应用后会改变此用户下一次获取的 Clash 规则；支持的小火箭配置也会随之更新。当前客户端需要更新订阅或配置才会生效。</p><p class="error" id="rule-assignment-error" role="alert"></p><div class="dialog-actions"><button type="button" class="secondary" data-close="rule-assignment-dialog">取消</button><button class="primary">应用到该用户</button></div></form></dialog>
 <dialog id="rule-template-dialog"><form id="rule-template-form">
-  <div class="dialog-heading"><div><h2 id="rule-template-title">新建规则模板</h2><p id="rule-template-impact" class="small muted"></p></div><button type="button" class="close" data-close="rule-template-dialog" aria-label="关闭">×</button></div>
+  <div class="dialog-heading"><div><h2 id="rule-template-title">新建规则模板</h2><p id="rule-template-impact" class="small muted"></p></div><div class="rule-heading-actions"><button id="rule-template-reset" type="button" class="secondary" hidden>恢复默认</button><button id="rule-template-undo-reset" type="button" class="secondary" hidden>撤销恢复</button><button type="button" class="close" data-close="rule-template-dialog" aria-label="关闭">×</button></div></div>
   <input name="id" type="hidden"><input name="revision" type="hidden">
   <div class="rule-template-fields">
     <label>模板名称<input name="name" maxlength="60" required></label>
@@ -152,26 +152,31 @@
     <label>AI 默认出口<select name="ai_outbound"><option value="proxy">故障转移</option><option value="reality">REALITY</option><option value="websocket">HTTPS</option><option value="vmess">VMess TLS</option><option value="hysteria2">Hysteria 2</option></select></label>
     <button id="rule-template-load-base" class="secondary" type="button">载入基础初始规则</button>
   </div>
-  <section class="rule-builder" aria-labelledby="rule-builder-title">
-    <div class="rule-builder-heading"><div><h3 id="rule-builder-title">添加规则</h3><p class="small muted">选择类型和目标；一次可填多行匹配内容。</p></div></div>
-    <div class="rule-entry-grid"><label>规则类型<select id="rule-entry-type"><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label><label>目标策略<select id="rule-entry-target"></select></label></div>
-    <label class="rule-entry-match">匹配内容<textarea id="rule-entry-value" rows="2" spellcheck="false" aria-describedby="rule-entry-hint"></textarea></label>
-    <p id="rule-entry-hint" class="small muted"></p>
-    <div class="rule-entry-controls"><label id="rule-entry-resolution-label" hidden>IP 匹配时<select id="rule-entry-resolution"><option value="no-resolve">只匹配已有 IP，不额外解析</option><option value="resolve">允许解析域名后匹配</option></select></label><label id="rule-entry-position-label">添加位置<select id="rule-entry-position"><option value="end">列表末尾</option><option value="start">列表开头（优先匹配）</option></select></label><div class="form-actions"><button id="rule-entry-add" type="button" class="primary">添加规则</button><button id="rule-entry-cancel" type="button" class="secondary" hidden>取消修改</button></div></div>
-    <p id="rule-entry-error" class="error" role="alert"></p>
-  </section>
-  <section class="rule-list-section" aria-labelledby="rule-list-title">
-    <div class="rule-list-heading"><div><h3 id="rule-list-title">规则列表</h3><p id="rule-list-count" class="small muted" aria-live="polite"></p></div><button id="rule-list-undo" type="button" class="secondary">撤销上一步</button></div>
-    <label class="rule-search">搜索规则<input id="rule-list-search" type="search" placeholder="搜索类型、内容或目标" autocomplete="off"></label>
-    <div class="rule-batch-toolbar" role="group" aria-label="批量操作"><span id="rule-selection-count" aria-live="polite">已选择 0 条</span><button id="rule-selection-clear" type="button" class="secondary">清空选择</button><button id="rule-batch-open" type="button" class="secondary">批量修改</button><button id="rule-batch-delete" type="button" class="secondary rule-batch-danger">删除所选</button></div>
-    <div id="rule-batch-editor" class="rule-batch-editor" hidden><strong>批量修改所选规则</strong><div class="rule-batch-fields">
-      <label>规则类型<select id="rule-batch-type"><option value="">保持不变</option><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label>
-      <label>目标策略<select id="rule-batch-target"></select></label><label>IP 匹配时<select id="rule-batch-resolution"><option value="">保持不变</option><option value="no-resolve">只匹配已有 IP</option><option value="resolve">允许解析域名</option></select></label>
-    </div><p class="small muted">保留未修改的字段；IP 解析方式只适用于网段和 GeoIP。匹配内容不符合新类型时不会应用任何修改。</p><div class="form-actions"><button id="rule-batch-apply" type="button" class="primary">应用到所选规则</button><button id="rule-batch-cancel" type="button" class="secondary">取消</button></div></div>
-    <p id="rule-batch-error" class="error" role="alert"></p><div id="rule-list" class="rule-list table-wrap" tabindex="0" role="region" aria-label="规则列表"></div>
-    <p class="small muted">表头全选仅选择当前筛选结果；切换搜索条件会保留之前的选择。批量操作作用于所有已选规则，搜索时排序仍按完整列表调整。规则从上到下匹配；服务器地址、私网、ToDesk 和已有 STUN 保护规则优先。</p>
-  </section>
-  <details class="rule-raw-editor"><summary>批量导入或直接编辑规则文本</summary><label>分类规则文本<textarea name="rules" rows="18" spellcheck="false" aria-describedby="rule-template-help"></textarea></label><p id="rule-template-help" class="small muted">每行：类型,内容,目标；IP 网段和 GEOIP 可附加 resolve 或 no-resolve。旧的三字段 IP 网段规则仍不额外解析。以 # 开头的行是注释，最多 500 条、14000 字节。</p></details>
+  <div class="rule-workspace">
+    <section class="rule-list-section" aria-labelledby="rule-list-title">
+      <div class="rule-list-heading"><div><h3 id="rule-list-title">规则列表</h3><p id="rule-list-count" class="small muted" aria-live="polite"></p></div><button id="rule-list-undo" type="button" class="secondary">撤销上一步</button></div>
+      <label class="rule-search">搜索规则<input id="rule-list-search" type="search" placeholder="搜索类型、内容或目标" autocomplete="off"></label>
+      <div class="rule-batch-toolbar" role="group" aria-label="批量操作"><span id="rule-selection-count" aria-live="polite">已选择 0 条</span><button id="rule-selection-clear" type="button" class="secondary">清空选择</button><button id="rule-batch-open" type="button" class="secondary">批量修改</button><button id="rule-batch-delete" type="button" class="secondary rule-batch-danger">删除所选</button></div>
+      <div id="rule-list" class="rule-list table-wrap" tabindex="0" role="region" aria-label="规则列表"></div>
+      <p class="small muted">表头全选仅选择当前筛选结果；切换搜索条件会保留之前的选择。批量操作作用于所有已选规则，搜索时排序仍按完整列表调整。规则从上到下匹配；服务器地址、私网、ToDesk 和已有 STUN 保护规则优先。</p>
+    </section>
+    <div class="rule-editor-pane">
+      <div id="rule-batch-editor" class="rule-batch-editor" hidden><strong>批量修改所选规则</strong><div class="rule-batch-fields">
+        <label>规则类型<select id="rule-batch-type"><option value="">保持不变</option><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label>
+        <label>目标策略<select id="rule-batch-target"></select></label><label>IP 匹配时<select id="rule-batch-resolution"><option value="">保持不变</option><option value="no-resolve">只匹配已有 IP</option><option value="resolve">允许解析域名</option></select></label>
+      </div><p class="small muted">保留未修改的字段；IP 解析方式只适用于网段和 GeoIP。匹配内容不符合新类型时不会应用任何修改。</p><div class="form-actions"><button id="rule-batch-apply" type="button" class="primary">应用到所选规则</button><button id="rule-batch-cancel" type="button" class="secondary">取消</button></div></div>
+      <p id="rule-batch-error" class="error" role="alert"></p>
+      <section class="rule-builder" aria-labelledby="rule-builder-title">
+        <div class="rule-builder-heading"><div><h3 id="rule-builder-title">添加规则</h3><p class="small muted">选择类型和目标；一次可填多行匹配内容。</p></div></div>
+        <div class="rule-entry-grid"><label>规则类型<select id="rule-entry-type"><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label><label>目标策略<select id="rule-entry-target"></select></label></div>
+        <label class="rule-entry-match">匹配内容<textarea id="rule-entry-value" rows="2" spellcheck="false" aria-describedby="rule-entry-hint"></textarea></label>
+        <p id="rule-entry-hint" class="small muted"></p>
+        <div class="rule-entry-controls"><label id="rule-entry-resolution-label" hidden>IP 匹配时<select id="rule-entry-resolution"><option value="no-resolve">只匹配已有 IP，不额外解析</option><option value="resolve">允许解析域名后匹配</option></select></label><label id="rule-entry-position-label">添加位置<select id="rule-entry-position"><option value="end">列表末尾</option><option value="start">列表开头（优先匹配）</option></select></label><div class="form-actions"><button id="rule-entry-add" type="button" class="primary">添加规则</button><button id="rule-entry-cancel" type="button" class="secondary" hidden>取消修改</button></div></div>
+        <p id="rule-entry-error" class="error" role="alert"></p>
+      </section>
+      <details class="rule-raw-editor"><summary>批量导入或直接编辑规则文本</summary><label>分类规则文本<textarea name="rules" rows="18" spellcheck="false" aria-describedby="rule-template-help"></textarea></label><p id="rule-template-help" class="small muted">每行：类型,内容,目标；IP 网段和 GEOIP 可附加 resolve 或 no-resolve。旧的三字段 IP 网段规则仍不额外解析。以 # 开头的行是注释，最多 500 条、14000 字节。</p></details>
+    </div>
+  </div>
   <p class="small muted">规则用于生成 Clash 和小火箭配置。IPv6 规则需要客户端启用 IPv6；没有专属小火箭底稿时以手机的 default.conf 为基础。</p>
   <p id="rule-template-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" class="secondary" data-close="rule-template-dialog">关闭</button><button name="action" value="save" class="secondary">保存草稿</button><button id="rule-template-publish" name="action" value="publish" class="primary">保存并发布</button></div>
 </form></dialog>
