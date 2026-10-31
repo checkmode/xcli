@@ -11,6 +11,7 @@ async function loadRuleTemplates(){
         !t.published?'未发布':t.revision!==t.published_revision?'已发布 · 草稿有修改':'已发布';
       const actions='<button data-template-action="edit" data-id="'+esc(t.id)+'">编辑草稿</button> '+
         '<button data-template-action="copy" data-id="'+esc(t.id)+'">'+(t.builtin?'复制为自定义':'复制')+'</button>'+
+        ' <button data-template-action="export" data-id="'+esc(t.id)+'" title="导出已保存的草稿">导出</button>'+
         (t.builtin?' <button data-template-action="reset" data-id="'+esc(t.id)+'">恢复默认</button>':'')+
         (t.builtin&&t.can_undo_reset?' <button data-template-action="undo-reset" data-id="'+esc(t.id)+'">撤销恢复</button>':'');
       return '<tr><td>'+esc(t.name)+'</td><td>'+status+'</td><td>'+count+'</td><td class="actions">'+actions+'</td></tr>';
@@ -19,6 +20,52 @@ async function loadRuleTemplates(){
 
 function templateById(id){return ruleTemplateState?.templates.find(t=>t.id===id)}
 function templateUseCount(id){return ruleTemplateState?.users.filter(u=>u.template_id===id).length||0}
+
+const ruleTemplateFileFormat='xdistribute-rule-template';
+function ruleTemplateFileContents(name,spec){
+  return {format:ruleTemplateFileFormat,version:1,template:{name,spec:{base:spec.base,ai_outbound:spec.ai_outbound,rules:spec.rules}}};
+}
+function downloadRuleTemplate(name,spec){
+  const contents=JSON.stringify(ruleTemplateFileContents(name,spec),null,2)+'\n';
+  const url=URL.createObjectURL(new Blob([contents],{type:'application/json;charset=utf-8'}));
+  const link=document.createElement('a');link.href=url;
+  const filename=name.replace(/[\\/:*?"<>|\u0000-\u001f]/g,'_').replace(/[. ]+$/,'').trim().slice(0,80)||'规则模板';
+  link.download='Xdistribute-'+filename+'.json';document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function validateTransferTemplate(name,spec){
+  const input={name,spec};
+  if(new TextEncoder().encode(JSON.stringify(input)).length>16384)throw new Error('模板内容超过请求大小限制，请减少规则或注释。');
+  return await api('rule-templates/validate','POST',input);
+}
+function parseRuleTemplateFile(text){
+  let data;try{data=JSON.parse(text)}catch{throw new Error('文件不是有效的 JSON。')}
+  const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+  if(!object(data)||data.format!==ruleTemplateFileFormat||data.version!==1)
+    throw new Error('文件格式或版本不受支持，请选择 Xdistribute 导出的规则模板。');
+  const item=data.template;
+  if(!object(item)||Object.keys(item).sort().join(',')!=='name,spec'||typeof item.name!=='string'||
+     !object(item.spec)||Object.keys(item.spec).sort().join(',')!=='ai_outbound,base,rules'||
+     !['base','ai_outbound','rules'].every(key=>typeof item.spec[key]==='string'))
+    throw new Error('模板内容不完整或包含不支持的字段。');
+  return {name:item.name,spec:{base:item.spec.base,ai_outbound:item.spec.ai_outbound,rules:item.spec.rules}};
+}
+async function readRuleTemplateFile(file){
+  if(file.size>65536)throw new Error('模板文件不能超过 64 KB。');
+  let contents;try{contents=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer())}
+  catch{throw new Error('请使用 UTF-8 编码的模板文件。')}
+  const item=parseRuleTemplateFile(contents);
+  return await validateTransferTemplate(item.name,item.spec);
+}
+function uniqueImportedTemplateName(name){
+  const names=new Set(ruleTemplateState.templates.map(item=>item.name));
+  if(!names.has(name))return name;
+  for(let n=1;;n++){
+    const suffix=n===1?'（导入）':'（导入 '+n+'）';
+    const candidate=Array.from(name).slice(0,60-Array.from(suffix).length).join('')+suffix;
+    if(!names.has(candidate))return candidate;
+  }
+}
 
 const ruleKinds={
   'DOMAIN-SUFFIX':{label:'域名及子域名',hint:'例如 example.com，匹配该域名及其子域名。'},
@@ -29,7 +76,7 @@ const ruleKinds={
   'GEOIP':{label:'IP 所在国家或地区',hint:'输入两位国家或地区代码，例如 CN、US；匹配结果取决于客户端的 GeoIP 数据。'},
   'DST-PORT':{label:'目标端口',hint:'输入 1–65535 的单个目标端口；该规则会匹配所有使用此端口的连接。'}
 };
-let ruleEditing=null,ruleUndo=[],ruleSelection=new Set(),ruleLastText='',ruleSavedSnapshot='';
+let ruleEditing=null,ruleUndo=[],ruleSelection=new Set(),ruleLastText='',ruleSavedSnapshot='',ruleTransferLoading=false;
 const ruleText=()=>$('#rule-template-form').elements.rules;
 const ruleLines=()=>ruleText().value.replace(/\r\n/g,'\n').split('\n');
 function ruleSnapshot(){const f=$('#rule-template-form');return JSON.stringify([f.elements.name.value,f.elements.base.value,f.elements.ai_outbound.value,f.elements.rules.value])}
@@ -223,7 +270,7 @@ $('#rule-list-undo').onclick=()=>{if(!ruleUndo.length)return;if(ruleEditing!==nu
 ruleText().addEventListener('input',()=>{if(ruleText().value!==ruleLastText){ruleUndo.push({text:ruleLastText,selection:[...ruleSelection]});if(ruleUndo.length>30)ruleUndo.shift();ruleLastText=ruleText().value;if(ruleSelection.size){ruleSelection.clear();toast('文本已修改，已清空规则选择')}}if(ruleEditing!==null)resetRuleEntry();renderRuleRows()});
 $('#rule-list-search').addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault()});
 $$('[data-close="rule-template-dialog"]').forEach(button=>button.onclick=()=>{if(mayCloseRuleEditor())$('#rule-template-dialog').close()});
-$('#rule-template-dialog').addEventListener('cancel',e=>{if(!mayCloseRuleEditor())e.preventDefault()});
+$('#rule-template-dialog').addEventListener('cancel',e=>{if(ruleTransferLoading||!mayCloseRuleEditor())e.preventDefault()});
 
 async function showRuleAssignment(user){
   await loadRuleTemplates();
@@ -266,7 +313,7 @@ function showRuleEditor(item,copy){
   $('#rule-template-impact').textContent=form.elements.id.value?
     '当前有 '+templateUseCount(form.elements.id.value)+' 位用户使用该模板；保存草稿不会改变订阅，发布后下一次更新订阅生效。':
     '新模板先保存为草稿；发布后才能分配给用户。';
-  $('#rule-template-error').textContent='';$('#rule-template-dialog').showModal();
+  $('#rule-template-error').textContent='';$('#rule-template-transfer-error').textContent='';$('#rule-template-dialog').showModal();
 }
 
 async function changeBuiltinDefault(item,action,fromEditor,button){
@@ -292,11 +339,67 @@ async function changeBuiltinDefault(item,action,fromEditor,button){
 }
 
 $('#rule-template-new').onclick=async()=>{try{await loadRuleTemplates();showRuleEditor(null,false)}catch(err){toast(err.message)}};
+$('#rule-template-import').onclick=()=>{$('#rule-template-import-error').textContent='';$('#rule-template-file').click()};
+$('#rule-template-file').onchange=async e=>{
+  const file=e.target.files?.[0];e.target.value='';if(!file)return;
+  const button=$('#rule-template-import'),error=$('#rule-template-import-error');button.disabled=true;error.textContent='';
+  try{
+    const validated=await readRuleTemplateFile(file);
+    await loadRuleTemplates();
+    if($('#rule-template-dialog').open)throw new Error('请先关闭当前模板编辑器，再导入文件。');
+    const originalName=validated.name;validated.name=uniqueImportedTemplateName(originalName);
+    showRuleEditor(validated,false);ruleSavedSnapshot='';
+    $('#rule-template-title').textContent='导入规则模板';
+    $('#rule-template-impact').textContent='已导入预览，尚未保存；保存后创建新的自定义草稿，不会覆盖现有模板。'+
+      (validated.name!==originalName?'名称已调整以避免重复，可自行修改。':'')+'跨环境使用时请检查 AI 默认出口。';
+  }catch(err){error.textContent=err.message}finally{button.disabled=false}
+};
+$('#rule-template-editor-import').onclick=()=>{
+  const error=$('#rule-template-transfer-error');error.textContent='';
+  if(ruleEditing!==null||$('#rule-entry-value').value.trim()){error.textContent='请先添加、应用或取消正在编辑的规则，再导入。';return}
+  if(pendingBatchEdit()){error.textContent='请先应用或取消批量修改，再导入。';return}
+  $('#rule-template-editor-file').click();
+};
+$('#rule-template-editor-file').onchange=async e=>{
+  const file=e.target.files?.[0];e.target.value='';if(!file)return;
+  const form=$('#rule-template-form'),error=$('#rule-template-transfer-error');
+  const controls=[...form.querySelectorAll('button,input,select,textarea')],disabled=controls.map(c=>c.disabled);
+  let restored=false;const restore=()=>{controls.forEach((c,i)=>c.disabled=disabled[i]);restored=true};
+  controls.forEach(c=>c.disabled=true);ruleTransferLoading=true;error.textContent='';
+  try{
+    const item=await readRuleTemplateFile(file);
+    if(ruleEditorDirty()&&!confirm('导入会替换当前编辑器的基础模板、AI 默认出口和规则，尚未保存的修改会丢失。继续吗？'))return;
+    restore();const spec=item.spec,keptName=Boolean(form.elements.name.value.trim());if(!keptName)form.elements.name.value=item.name;
+    form.elements.base.value=spec.base;
+    if(![...form.elements.ai_outbound.options].some(o=>o.value===spec.ai_outbound)){
+      const option=document.createElement('option');option.value=spec.ai_outbound;option.textContent=transportLabel(spec.ai_outbound);form.elements.ai_outbound.append(option);
+    }
+    form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;
+    ruleUndo=[];ruleSelection=new Set();ruleLastText=spec.rules;$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent='';
+    resetRuleEntry();updateRuleTargets('PROXY');updateRuleHint(true);renderRuleRows();
+    const id=form.elements.id.value,users=id?'当前有 '+templateUseCount(id)+' 位用户使用；发布后下次更新订阅生效。':'保存后将创建新模板。';
+    $('#rule-template-impact').textContent='已将文件载入当前编辑器，'+(keptName?'保留当前模板名称':'采用文件中的模板名称')+'；尚未保存或发布。'+users+'跨环境使用时请检查 AI 默认出口。';
+  }catch(err){error.textContent=err.message}finally{if(!restored)restore();ruleTransferLoading=false}
+};
 $('#rule-template-list').onclick=async e=>{
   const button=e.target.closest('[data-template-action]');if(!button)return;
   const item=templateById(button.dataset.id),action=button.dataset.templateAction;if(!item)return;
   if(action==='reset'||action==='undo-reset')await changeBuiltinDefault(item,action,false,button);
+  else if(action==='export'){
+    button.disabled=true;
+    try{await loadRuleTemplates();const current=templateById(item.id);if(!current)throw new Error('模板已不存在，请刷新列表。');downloadRuleTemplate(current.name,current.spec);toast('已导出保存的草稿')}
+    catch(err){toast(err.message)}finally{button.disabled=false}
+  }
   else showRuleEditor(item,action==='copy');
+};
+$('#rule-template-export').onclick=async()=>{
+  const form=$('#rule-template-form'),error=$('#rule-template-transfer-error'),button=$('#rule-template-export');error.textContent='';
+  if(ruleEditing!==null||$('#rule-entry-value').value.trim()){error.textContent='请先添加、应用或取消正在编辑的规则，再导出。';return}
+  if(pendingBatchEdit()){error.textContent='请先应用或取消批量修改，再导出。';return}
+  const name=form.elements.name.value,spec={base:form.elements.base.value,ai_outbound:form.elements.ai_outbound.value,rules:form.elements.rules.value};
+  button.disabled=true;
+  try{const item=await validateTransferTemplate(name,spec);downloadRuleTemplate(item.name,item.spec);toast('已导出当前编辑内容')}
+  catch(err){error.textContent=err.message}finally{button.disabled=false}
 };
 $('#rule-template-reset').onclick=()=>changeBuiltinDefault(templateById($('#rule-template-form').elements.id.value),'reset',true,$('#rule-template-reset'));
 $('#rule-template-undo-reset').onclick=()=>changeBuiltinDefault(templateById($('#rule-template-form').elements.id.value),'undo-reset',true,$('#rule-template-undo-reset'));

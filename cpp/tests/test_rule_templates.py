@@ -233,6 +233,37 @@ def test_validation_auth_and_stale_revision(fixture):
     c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid}, expected=409)
 
 
+def test_transfer_validation_is_read_only_and_import_creates_unassigned_draft(fixture):
+    c = fixture['client']
+    candidate = {'name': '  可复用模板  ', 'spec': {'base': 'standard', 'ai_outbound': 'proxy',
+                 'rules': '# 保留注释\nDOMAIN-SUFFIX,example.org,DIRECT\n'}}
+    c.json('/api/rule-templates/validate', 'POST', candidate, expected=401)
+    c.login()
+    before = c.json('/api/rule-templates')
+    path = '/s/' + fixture['token']
+    subscription_before = c.call(path + '/clash.yaml')[2]
+    c.json('/api/rule-templates/validate', 'POST', candidate,
+           headers={'X-CSRF-Token': 'wrong'}, expected=403)
+    for bad in ({**candidate, 'name': ''},
+                {**candidate, 'spec': {**candidate['spec'], 'base': 'unknown'}},
+                {**candidate, 'spec': {**candidate['spec'], 'ai_outbound': 'unknown'}},
+                {**candidate, 'spec': {**candidate['spec'], 'rules': 'DOMAIN,invalid,DIRECT'}},
+                {**candidate, 'spec': {**candidate['spec'], 'extra': True}},
+                {**candidate, 'extra': True}):
+        c.json('/api/rule-templates/validate', 'POST', bad, expected=422)
+    valid = c.json('/api/rule-templates/validate', 'POST', candidate)
+    assert valid == {'name': '可复用模板', 'spec': candidate['spec']}
+    assert c.json('/api/rule-templates') == before
+    assert c.call(path + '/clash.yaml')[2] == subscription_before
+
+    tid = c.json('/api/rule-templates', 'POST', valid)['id']
+    after = c.json('/api/rule-templates')
+    imported = next(item for item in after['templates'] if item['id'] == tid)
+    assert imported['name'] == valid['name'] and imported['spec'] == valid['spec']
+    assert imported['published'] is False and after['users'] == before['users']
+    assert c.call(path + '/clash.yaml')[2] == subscription_before
+
+
 def test_template_state_restored_with_user_backup(fixture):
     c = fixture['client']; c.login()
     independent = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')

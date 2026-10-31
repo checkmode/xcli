@@ -159,6 +159,11 @@ Json Backend::create_rule_template(const std::string& token,const std::string& c
   save_registry(database,registry);audit(database,"rule_template_created",name);transaction.commit();return {{"id",id},{"revision",1}};
 }
 
+Json Backend::validate_rule_template_input(const std::string& token,const std::string& csrf,const Json& input) {
+  session(token,csrf,true);require_fields(input,{"name","spec"});
+  return {{"name",user_name(input.at("name"))},{"spec",validate_rule_template(input.at("spec"))}};
+}
+
 Json Backend::update_rule_template(const std::string& token,const std::string& csrf,const std::string& id,const Json& input) {
   require_fields(input,{"name","spec","expected_revision"});auto name=user_name(input.at("name"));
   auto spec=validate_rule_template(input.at("spec"));auto expected=revision(input.at("expected_revision"));

@@ -82,3 +82,6 @@ aside{overflow-y:auto}.sidebar-bottom{flex-shrink:0}
 .rule-list-section .rule-list tr.rule-editing td{background:#e8f6f2}
 @media(max-width:1000px){.rule-workspace{grid-template-columns:1fr}.rule-list-section .rule-list{max-height:320px}}
 @media(max-width:600px){.rule-heading-actions{max-width:50%}.rule-heading-actions .secondary{font-size:11px;padding:6px 8px}}
+.rule-template-toolbar{display:flex;gap:8px;flex-wrap:wrap}
+#rule-template-import-error:empty,#rule-template-transfer-error:empty{display:none}
+@media(max-width:600px){.rule-template-panel .panel-heading{align-items:flex-start;flex-wrap:wrap}}
