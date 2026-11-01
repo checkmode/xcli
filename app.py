@@ -96,7 +96,8 @@ def links(u):
     port=s.get('public_port',443)
     reality=f"vless://{u['uuid']}@{s['public_ip']}:{port}?{urlencode(common)}#{quote(name+' · REALITY')}"
     ws={'encryption':'none','security':'tls','sni':domain,'type':'ws','host':domain,'path':s['ws_path']}
-    websocket=f"vless://{u['uuid']}@{domain}:{port}?{urlencode(ws)}#{quote(name+' · HTTPS')}"
+    node_host=s['public_ip'] if s.get('node_address_ip',False) else domain
+    websocket=f"vless://{u['uuid']}@{node_host}:{port}?{urlencode(ws)}#{quote(name+' · HTTPS')}"
     return {'reality':reality,'websocket':websocket,'subscription':f"{s['origin']}/s/{u['token']}"}
 
 def xapi(command, *args):

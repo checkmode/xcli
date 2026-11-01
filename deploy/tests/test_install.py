@@ -60,6 +60,9 @@ class ConfigurationTests(unittest.TestCase):
         firewall = provision.render_firewall('8.8.4.4', ['127.0.0.53'], 1443)
         self.assertIn('--dports 80,1443', firewall)
         self.assertIn('-p udp --dport 1443 -j ACCEPT', firewall)
+        relayed = provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
+            'PrivateKey: ' + 'a' * 43 + '\nPassword: ' + 'b' * 43, 1443, True)
+        self.assertTrue(relayed['node_address_ip'])
         for port in (0, 65536, True, '1443'):
             with self.subTest(port=port), self.assertRaises(ValueError):
                 provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',

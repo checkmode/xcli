@@ -152,7 +152,7 @@ int main() {
     }
     {
       Temp alternate;Options config;config.state=alternate.path/"state";config.settings=alternate.path/"settings.json";config.offline=true;
-      auto alt=settings;alt["origin"]="https://testserver:1443";alt["public_port"]=1443;alt["hysteria2_port"]=1443;
+      auto alt=settings;alt["origin"]="https://testserver:1443";alt["public_port"]=1443;alt["hysteria2_port"]=1443;alt["node_address_ip"]=true;
       alt["vmess_ws_path"]="/connect/test/vmess";alt["vmess_port"]=10081;
       std::ofstream(config.settings)<<alt.dump();Backend panel(config,std::make_unique<FakeCore>());
       {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
@@ -161,7 +161,11 @@ int main() {
       User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
       const auto links=panel.links(session,uid);check(links.at("subscription")=="https://testserver:1443/s/"+u.token,"Subscription lost alternate port");
       for(const auto& key:{"reality","websocket","hysteria2"})check(links.at(key).get<std::string>().find(":1443")!=std::string::npos,"Node link lost alternate port");
-      const auto vmess=links.at("vmess").get<std::string>();check(Json::parse(unbase64(vmess.substr(8)))["port"]=="1443","VMess lost alternate port");
+      check(links.at("websocket").get<std::string>().find("@203.0.113.2:1443?")!=std::string::npos,"WebSocket node did not use the direct IP");
+      check(links.at("websocket").get<std::string>().find("sni=testserver")!=std::string::npos,"WebSocket lost certificate SNI");
+      check(links.at("hysteria2").get<std::string>().find("@203.0.113.2:1443/")!=std::string::npos,"Hysteria node did not use the direct IP");
+      const auto vmess=links.at("vmess").get<std::string>();const auto vmess_json=Json::parse(unbase64(vmess.substr(8)));
+      check(vmess_json["port"]=="1443"&&vmess_json["add"]=="203.0.113.2"&&vmess_json["sni"]=="testserver","VMess lost direct IP or certificate SNI");
       const auto clash=panel.clash_configuration(u);for(const auto& node:clash.at("proxies"))check(node.at("port")==1443,"Clash node lost alternate port");
       check(unbase64(panel.subscription(u.token).first).find(links.at("reality").get<std::string>())!=std::string::npos,"Alternate port subscription missing node");
     }

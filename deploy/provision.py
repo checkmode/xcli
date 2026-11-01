@@ -37,10 +37,12 @@ def public_ipv4(value):
     return str(address)
 
 
-def settings_for(domain, address, sni, key_output, public_port=443):
+def settings_for(domain, address, sni, key_output, public_port=443, node_address_ip=False):
     domain, address, sni = domain_name(domain), public_ipv4(address), domain_name(sni)
     if type(public_port) is not int or not 1 <= public_port <= 65535:
         raise ValueError('公网入口端口必须为 1..65535')
+    if type(node_address_ip) is not bool:
+        raise ValueError('节点地址选项无效')
     if domain == sni:
         raise ValueError('REALITY 目标域名不能与面板域名相同')
     fields = dict(line.split(':', 1) for line in key_output.splitlines() if ':' in line)
@@ -53,6 +55,8 @@ def settings_for(domain, address, sni, key_output, public_port=443):
             'ws_path': '/connect/' + secrets.token_hex(12), 'hysteria2_port': public_port, 'xray_version': XRAY_VERSION}
     if public_port != 443:
         result['public_port'] = public_port
+    if node_address_ip:
+        result['node_address_ip'] = True
     return result
 
 

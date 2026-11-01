@@ -388,7 +388,8 @@ fi''' if self.args.coexist else ''
         monitor = self.directory('/etc/xcli-monitor', 0o750, group='xgmonitor')
         self.directory('/var/lib/xray-gateway-monitor', 0o750, 'xgprobe', 'xgmonitor')
         key_output = self.run([base / 'xray', 'x25519'], capture=True).decode()
-        self.settings = settings_for(self.args.domain, self.args.public_ip, self.args.reality_sni, key_output, self.args.public_port)
+        self.settings = settings_for(self.args.domain, self.args.public_ip, self.args.reality_sni, key_output,
+                                     self.args.public_port, bool(self.args.dns_relay_ip))
         write_json(config / 'settings.json', self.settings)
         write_json(config / 'core.json', core_config(self.settings))
         private_file(config / 'security.key', os.urandom(32), 0o640)
