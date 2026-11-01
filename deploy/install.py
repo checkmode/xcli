@@ -38,6 +38,14 @@ OWNED_PATHS = ('/etc/xray-gateway', '/etc/xcli-monitor', '/var/lib/xray-gateway'
 PORTS = (80, 443, 8080, 8443, 10080, 10085, 10443)
 PACKAGES = (Path(__file__).with_name('build-packages.txt').read_text().split()
             + 'nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod'.split())
+# These package names are specific to Ubuntu 26.04 and are only used with a
+# matching prebuilt release.  No compiler or upgrade of installed packages is
+# needed on a small, already occupied host.
+BUNDLE_PACKAGES_2604 = ('nginx libnginx-mod-stream certbot ca-certificates curl iptables iproute2 kmod '
+                        'libprotobuf32t64 libgrpc++1.51t64 libcpp-httplib0.26 libqrencode4 '
+                        'python3-cryptography python3-yaml').split()
+COEXIST_NGINX = Path('/etc/nginx/xcli.conf')
+COEXIST_DROPIN = Path('/etc/systemd/system/nginx.service.d/90-xcli.conf')
 
 
 def arguments(argv=None):
@@ -46,11 +54,16 @@ def arguments(argv=None):
     parser.add_argument('--commit', default='local')
     parser.add_argument('--domain')
     parser.add_argument('--email')
+    parser.add_argument('--no-email', action='store_true', help='不提供证书到期通知邮箱')
     parser.add_argument('--public-ip')
     parser.add_argument('--reality-sni', default='www.bing.com')
     parser.add_argument('--agree-tos', action='store_true')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--coexist', action='store_true', help='使用独立端口和 Nginx 配置，保留现有服务')
+    parser.add_argument('--public-port', type=int, default=443)
+    parser.add_argument('--bundle', type=Path, help='已构建并通过校验的完整发布包')
+    parser.add_argument('--sha256', help='发布包的独立 SHA-256 摘要')
     parser.add_argument('--certificate', type=Path)
     parser.add_argument('--private-key', type=Path)
     parser.add_argument('--tune-network', action=argparse.BooleanOptionalAction, default=None,
@@ -100,8 +113,10 @@ def check_udp_port(port=443):
             raise ValueError(f'UDP {port} 已被占用或无法绑定，请先处理端口冲突') from error
 
 
-def existing_paths(root=Path('/')):
-    paths = list(OWNED_PATHS)
+def existing_paths(root=Path('/'), coexist=False):
+    paths = [value for value in OWNED_PATHS if not coexist or value != '/etc/nginx']
+    if coexist:
+        paths.extend((str(COEXIST_NGINX), str(COEXIST_DROPIN.parent)))
     for service in SERVICES:
         for base in ('/etc/systemd/system', '/usr/lib/systemd/system', '/lib/systemd/system'):
             paths.extend((f'{base}/{service}.service', f'{base}/{service}.service.d'))
@@ -111,13 +126,36 @@ def existing_paths(root=Path('/')):
 def preflight(args):
     if os.geteuid() != 0 or platform.system() != 'Linux' or not Path('/run/systemd/system').is_dir():
         raise ValueError('需要 root 权限和使用 systemd 的 Ubuntu 服务器')
-    release = platform.freedesktop_os_release()
-    if release.get('ID') != 'ubuntu' or release.get('VERSION_ID') not in ('24.04', '26.04'):
+    os_release = platform.freedesktop_os_release()
+    if os_release.get('ID') != 'ubuntu' or os_release.get('VERSION_ID') not in ('24.04', '26.04'):
         raise ValueError('当前支持 Ubuntu 24.04 / 26.04')
     arch = {'arm64': 'aarch64'}.get(platform.machine(), platform.machine())
     if arch not in XRAY_ASSETS:
         raise ValueError('当前支持 AMD64 / ARM64')
-    found = existing_paths()
+    if type(args.public_port) is not int or not 1 <= args.public_port <= 65535:
+        raise ValueError('公网入口端口必须为 1..65535')
+    if args.public_port in (80, 8080, 8443, 10080, 10085, 10443):
+        raise ValueError('公网入口端口与内部服务冲突')
+    if args.coexist and args.public_port == 443:
+        raise ValueError('共存安装需要使用 443 以外的独立公网端口')
+    if bool(args.bundle) != bool(args.sha256):
+        raise ValueError('--bundle 和 --sha256 必须一起提供')
+    if args.coexist and not args.bundle:
+        raise ValueError('共存安装需要经过校验的预构建发布包')
+    if args.bundle:
+        if os_release.get('VERSION_ID') != '26.04' or arch != 'x86_64':
+            raise ValueError('预构建包安装目前仅支持 Ubuntu 26.04 AMD64')
+        if args.bundle.is_symlink() or not args.bundle.is_file() or not re.fullmatch('[0-9a-f]{64}', args.sha256):
+            raise ValueError('发布包或其 SHA-256 无效')
+        with tempfile.TemporaryDirectory(prefix='xcli-install-verify-') as temp:
+            manifest = release.extract_bundle(args.bundle, args.sha256, Path(temp))
+            if manifest.get('provenance', {}).get('kind') != 'git-build' or manifest['provenance'].get('revision') != args.commit:
+                raise ValueError('发布包的源码提交与安装目标不一致')
+            templates = manifest['provenance'].get('service_templates', {})
+            for unit in release.BASE_UNITS:
+                if templates.get(unit) != release.digest(args.source / 'deploy' / (unit + '.service')):
+                    raise ValueError('发布包与安装器的服务定义不一致')
+    found = existing_paths(coexist=args.coexist)
     if found:
         raise ValueError('拒绝覆盖已有配置：' + ', '.join(found))
     for name in ('xgateway', 'xgprobe', BUILD_USER):
@@ -136,8 +174,16 @@ def preflight(args):
         for chain in ('XG_IN', 'XG_OUT'):
             if subprocess.run(['iptables', '-w', '-S', chain], capture_output=True, timeout=15).returncode == 0:
                 raise ValueError(f'防火墙链 {chain} 已存在，拒绝覆盖')
-    check_ports()
-    check_udp_port()
+    if args.coexist and subprocess.run(['systemctl', 'is-active', '--quiet', 'nginx']).returncode == 0:
+        raise ValueError('系统 nginx 服务正在运行，拒绝接管')
+    if args.coexist:
+        enabled = subprocess.run(['systemctl', 'is-enabled', 'nginx'], capture_output=True, text=True).stdout.strip()
+        if enabled not in ('disabled', 'not-found'):
+            raise ValueError('系统 nginx 服务不是禁用状态，拒绝接管')
+    if args.coexist and Path('/etc/nginx').is_symlink():
+        raise ValueError('系统 Nginx 配置目录是符号链接，拒绝修改')
+    check_ports((80, args.public_port, 8080, 8443, 10080, 10085, 10443))
+    check_udp_port(args.public_port)
     if bool(args.certificate) != bool(args.private_key):
         raise ValueError('--certificate 和 --private-key 必须一起提供')
     if not args.check and not re.fullmatch('[0-9a-f]{40}', args.commit):
@@ -174,9 +220,12 @@ def prepare_input(args):
             if path.exists() or path.is_symlink():
                 raise ValueError('已有证书配置，拒绝覆盖：' + str(path))
         if not args.check:
-            args.email = args.email or (ask("Let's Encrypt 账户邮箱") if not args.yes else '')
-            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
-                raise ValueError('请提供有效的证书账户邮箱')
+            if args.no_email and args.email:
+                raise ValueError('--email 和 --no-email 不能同时使用')
+            if not args.no_email:
+                args.email = args.email or (ask("Let's Encrypt 账户邮箱") if not args.yes else '')
+                if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
+                    raise ValueError('请提供有效的证书账户邮箱')
             if not args.agree_tos:
                 if args.yes or ask('同意 https://letsencrypt.org/repository/ 中的服务条款？输入 yes') != 'yes':
                     raise ValueError('申请证书需同意服务条款；无人值守使用 --agree-tos')
@@ -199,6 +248,7 @@ def prepare_input(args):
 class Installer:
     def __init__(self, args, arch, resolvers):
         self.args, self.arch, self.resolvers = args, arch, resolvers
+        self.nginx_target = COEXIST_NGINX if args.coexist else Path('/etc/nginx/nginx.conf')
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         self.backup = Path('/var/backups/xcli/install') / stamp
         self.backup.mkdir(parents=True, mode=0o700)
@@ -237,7 +287,7 @@ class Installer:
         os.chmod(target, mode)
 
     def rollback_script(self):
-        private_file(self.backup / 'rollback.sh', '''#!/bin/sh
+        script = '''#!/bin/sh
 # Stops only this new installation; keeps credentials, database, packages and logs.
 set -u
 systemctl disable --now xray-gateway-import xray-gateway-monitor xray-gateway-panel xray-gateway-core 2>/dev/null || true
@@ -249,30 +299,62 @@ if [ -f /etc/xray-gateway/network-before.json ]; then
 fi
 backup=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$backup/nginx.conf.before" ]; then cp "$backup/nginx.conf.before" /etc/nginx/nginx.conf; fi
+@@COEXIST_ROLLBACK@@
 echo '新安装的服务已停止；账号、数据库、证书和日志保留，未卸载系统软件包。'
-''', 0o700)
+'''
+        coexist = '''if [ -f "$backup/nginx.dropin.expected" ] && cmp -s "$backup/nginx.dropin.expected" /etc/systemd/system/nginx.service.d/90-xcli.conf; then
+    mv /etc/systemd/system/nginx.service.d/90-xcli.conf "$backup/nginx.dropin.retained"
+    systemctl daemon-reload
+else
+    echo '独立 Nginx 覆盖配置已变更或不存在；请人工核对。'
+fi''' if self.args.coexist else ''
+        private_file(self.backup / 'rollback.sh', script.replace('@@COEXIST_ROLLBACK@@', coexist), 0o700)
 
     def packages_and_build(self):
-        self.step('安装系统依赖并构建 C++ 管理服务')
+        self.step('安装系统依赖并准备 C++ 管理服务')
         self.rollback_script()
         self.packages_started = True
         self.run(['apt-get', 'update'])
-        self.run(['apt-get', 'install', '-y', '--no-install-recommends', *PACKAGES])
-        self.copy('/etc/nginx/nginx.conf', self.backup / 'nginx.conf.before', 0o600)
+        packages = BUNDLE_PACKAGES_2604 if self.args.bundle else PACKAGES
+        command = ['apt-get', 'install', '-y', '--no-install-recommends']
+        if self.args.bundle:
+            command.append('--no-upgrade')
+        self.run([*command, *packages])
+        if self.args.coexist:
+            self.copy('/etc/nginx/nginx.conf', self.backup / 'nginx.conf.reference', 0o600)
+        else:
+            self.copy('/etc/nginx/nginx.conf', self.backup / 'nginx.conf.before', 0o600)
         self.run(['systemctl', 'stop', 'nginx'])
+        if self.args.coexist:
+            COEXIST_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+            dropin = ('[Service]\nExecStartPre=\n'
+                      'ExecStartPre=/usr/sbin/nginx -t -q -c /etc/nginx/xcli.conf -g "daemon on; master_process on;"\n'
+                      'ExecStart=\nExecStart=/usr/sbin/nginx -c /etc/nginx/xcli.conf -g "daemon on; master_process on;"\n'
+                      'ExecReload=\nExecReload=/usr/sbin/nginx -c /etc/nginx/xcli.conf -g "daemon on; master_process on;" -s reload\n')
+            private_file(COEXIST_DROPIN, dropin, 0o644)
+            self.copy(COEXIST_DROPIN, self.backup / 'nginx.dropin.expected', 0o600)
+            self.run(['systemctl', 'daemon-reload'])
         self.run(['groupadd', '--system', 'xgateway'])
         self.run(['useradd', '--system', '--no-create-home', '--home-dir', '/var/lib/xray-gateway',
                   '--shell', '/usr/sbin/nologin', '--gid', 'xgateway', 'xgateway'])
         self.run(['groupadd', '--system', 'xgmonitor'])
         self.run(['useradd', '--system', '--no-create-home', '--home-dir', '/nonexistent',
                   '--shell', '/usr/sbin/nologin', '--gid', 'xgmonitor', 'xgprobe'])
-        # Fresh install, source update and CI all use the same bundle builder.
-        builder = ensure_build_user(self.run)
         cache = self.directory('/var/cache/xcli/builds')
-        self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), 0o700, user=builder, group=builder)
+        if self.args.bundle:
+            self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), 0o700)
+        else:
+            # Fresh source builds use the same unprivileged builder as updates.
+            builder = ensure_build_user(self.run)
+            self.build = self.directory(tempfile.mkdtemp(prefix='install-', dir=cache), 0o700, user=builder, group=builder)
         self.bundle = self.build / 'release.tar.gz'
-        self.run(['runuser', '-u', builder, '-g', builder, '--', 'bash', self.args.source / 'deploy/build-source-release.sh',
-                  self.args.source, self.args.commit, self.bundle])
+        if self.args.bundle:
+            self.copy(self.args.bundle, self.bundle, 0o600)
+            if release.digest(self.bundle) != self.args.sha256:
+                raise ValueError('复制后的发布包 SHA-256 不匹配')
+        else:
+            self.run(['runuser', '-u', builder, '-g', builder, '--', 'bash', self.args.source / 'deploy/build-source-release.sh',
+                      self.args.source, self.args.commit, self.bundle])
         version = re.search(r'project\([^\n]*VERSION\s+([0-9.]+)', (self.args.source / 'cpp/CMakeLists.txt').read_text())
         if not version:
             raise ValueError('未找到管理服务版本')
@@ -292,7 +374,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             private_file(base / 'xray', zipped.read('xray'), 0o755)
         self.manager = release.Manager()
         with self.manager.lock():
-            staged = self.manager.stage(self.bundle, release.digest(self.bundle))
+            staged = self.manager.stage(self.bundle, self.args.sha256 or release.digest(self.bundle))
         self.release_id = staged['staged']
         host = self.directory('/usr/local/lib/xcli/host')
         for name in ('certificate.py', 'network.py'):
@@ -303,7 +385,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         monitor = self.directory('/etc/xcli-monitor', 0o750, group='xgmonitor')
         self.directory('/var/lib/xray-gateway-monitor', 0o750, 'xgprobe', 'xgmonitor')
         key_output = self.run([base / 'xray', 'x25519'], capture=True).decode()
-        self.settings = settings_for(self.args.domain, self.args.public_ip, self.args.reality_sni, key_output)
+        self.settings = settings_for(self.args.domain, self.args.public_ip, self.args.reality_sni, key_output, self.args.public_port)
         write_json(config / 'settings.json', self.settings)
         write_json(config / 'core.json', core_config(self.settings))
         private_file(config / 'security.key', os.urandom(32), 0o640)
@@ -311,12 +393,12 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             shutil.chown(config / name, 'root', 'xgateway')
         write_json(monitor / 'monitor.json', monitor_config(self.settings))
         shutil.chown(monitor / 'monitor.json', 'root', 'xgmonitor')
-        initialize_admin(state / 'gateway.sqlite', config / 'initial-admin.txt', self.args.domain)
+        initialize_admin(state / 'gateway.sqlite', config / 'initial-admin.txt', self.args.domain, self.settings['origin'])
         shutil.chown(state / 'gateway.sqlite', 'xgateway', 'xgateway')
         write_json(config / 'installation.json', {'version': self.version, 'commit': self.args.commit,
             'architecture': self.arch, 'xray': XRAY_VERSION, 'installed': int(time.time()),
             'certificate': 'provided' if self.args.certificate else 'letsencrypt'}, 0o600)
-        private_file(host / 'firewall.sh', render_firewall(self.args.public_ip, self.resolvers), 0o755)
+        private_file(host / 'firewall.sh', render_firewall(self.args.public_ip, self.resolvers, self.args.public_port), 0o755)
         release.atomic_json(host / 'manifest.json', {p.name: release.digest(p) for p in host.iterdir()}, 0o444)
         for tool, name in (('iptables-save', 'iptables.v4.before'), ('ip6tables-save', 'iptables.v6.before')):
             private_file(self.backup / name, self.run([tool], capture=True))
@@ -336,11 +418,11 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         shutil.rmtree(self.build)
 
     def nginx_config(self, certificate=None, key=None):
-        target = Path('/etc/nginx/nginx.conf')
+        target = self.nginx_target
         new = target.with_suffix('.conf.xcli-new')
         private_file(new, render_nginx(self.args.source, self.settings, certificate, key), 0o644)
         new.replace(target)
-        self.run(['nginx', '-t'])
+        self.run(['nginx', '-t', '-c', target])
 
     def certificate(self):
         self.step('配置 HTTPS 证书和自动续期')
@@ -360,13 +442,14 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         else:
             self.nginx_config()
             self.run(['systemctl', 'enable', '--now', 'nginx'])
+            contact = ['--register-unsafely-without-email'] if self.args.no_email else ['--email', self.args.email]
             self.run(['certbot', 'certonly', '--webroot', '-w', '/var/www/acme', '--cert-name', self.args.domain,
-                      '-d', self.args.domain, '--email', self.args.email, '--agree-tos', '--non-interactive'], timeout=300)
+                      '-d', self.args.domain, *contact, '--agree-tos', '--non-interactive'], timeout=300)
             live = Path('/etc/letsencrypt/live') / self.args.domain
             cert, key = live / 'fullchain.pem', live / 'privkey.pem'
             hook = self.directory('/etc/letsencrypt/renewal-hooks/deploy') / 'xcli-nginx'
             private_file(hook, '#!/bin/sh\nset -eu\n/usr/bin/python3 /opt/xray-gateway/deploy/certificate.py\n'
-                '/usr/sbin/nginx -t\n/usr/bin/systemctl reload nginx\n', 0o755)
+                '/usr/sbin/nginx -t -c ' + str(self.nginx_target) + '\n/usr/bin/systemctl reload nginx\n', 0o755)
             self.run(['systemctl', 'enable', '--now', 'certbot.timer'])
         install_tls(self.args.domain, cert, key, Path('/etc/xray-gateway/hysteria-tls'), 'xgateway')
         self.run(['runuser', '-u', 'xgateway', '--', '/usr/local/lib/xray-gateway/xray', 'run', '-test',
@@ -387,7 +470,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
         else:
             raise RuntimeError('管理接口未就绪')
         self.run(['curl', '-q', '-fsS', '--noproxy', '*', '--max-time', '15', '--resolve',
-                  self.args.domain + ':443:127.0.0.1', 'https://' + self.args.domain + '/healthz'], timeout=20)
+                  self.args.domain + ':' + str(self.args.public_port) + ':127.0.0.1', self.settings['origin'] + '/healthz'], timeout=20)
         for attempt in range(15):
             output = self.run(['runuser', '-u', 'xgateway', '-g', 'xgateway', '-G', 'xgmonitor', '--',
                 '/usr/local/lib/xray-gateway/panel-current', '--secret-key', '/etc/xray-gateway/security.key',
@@ -432,7 +515,7 @@ echo '新安装的服务已停止；账号、数据库、证书和日志保留�
             print(f'\n安装在“{self.phase}”阶段停止。新服务已停用，数据保留。\n日志与回退脚本：{self.backup}\n'
                   '请根据日志处理，勿删除已有配置后盲目重试。', file=sys.stderr, flush=True)
             raise
-        print(f'\n安装完成： https://{self.args.domain}/\n'
+        print(f'\n安装完成： {self.settings["origin"]}/\n'
               '管理员用户名：admin\n初始密码文件：/etc/xray-gateway/initial-admin.txt（仅 root 可读）\n'
               '查看凭据：sudo cat /etc/xray-gateway/initial-admin.txt\n'
               f'日志与停用脚本：{self.backup}\n'
@@ -446,11 +529,11 @@ def main(argv=None):
     arch = preflight(args)
     resolvers = prepare_input(args)
     print(f'检查通过：Ubuntu {platform.freedesktop_os_release()["VERSION_ID"]} / {arch}\n'
-          f'面板：https://{args.domain}  公网 IPv4：{args.public_ip}\n'
+          f'面板：https://{args.domain}{":" + str(args.public_port) if args.public_port != 443 else ""}  公网 IPv4：{args.public_ip}\n'
           f'REALITY 目标：{args.reality_sni}\n'
           f'网络调优：{"启用并保存原值" if args.tune_network else "保留现有参数"}\n'
           '将安装依赖、Xray、C++ 面板、Nginx、专用账号、探测服务及专属防火墙规则。\n'
-          '请确保云安全组和上游网络允许 TCP 80 / 443 及 UDP 443 入站。', flush=True)
+          f'请确保云安全组和上游网络允许 TCP 80 / {args.public_port} 及 UDP {args.public_port} 入站。', flush=True)
     if args.check:
         print('只检查模式结束；未安装软件或修改系统配置。')
         return 0

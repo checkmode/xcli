@@ -40,10 +40,11 @@ REGISTRY = [
 REGIONS = [(row[0], row[1]) for row in REGISTRY]
 SERVICE = 'xray-gateway-webshare'
 LOCATIONS = Path('/etc/nginx/xcli-webshare-locations.conf')
+NGINX_CONFIG = Path('/etc/nginx/xcli.conf') if Path('/etc/nginx/xcli.conf').is_file() else Path('/etc/nginx/nginx.conf')
 FILES = {
     'settings.json': Path('/etc/xray-gateway/settings.json'),
     'core.json': Path('/etc/xray-gateway/core.json'),
-    'nginx.conf': Path('/etc/nginx/nginx.conf'),
+    'nginx.conf': NGINX_CONFIG,
     'firewall.sh': Path('/opt/xray-gateway/deploy/firewall.sh'),
     'locations.conf': LOCATIONS,
     'webshare.py': Path('/opt/xray-gateway/scripts/webshare.py'),
@@ -181,7 +182,7 @@ def rollback(backup):
     run('systemctl', 'daemon-reload')
     if 'webshare.service' in manifest['existing']:
         run('systemctl', 'start', SERVICE)
-    run('nginx', '-t')
+    run('nginx', '-t', '-c', FILES['nginx.conf'])
     since = int(time.time())
     run('systemctl', 'restart', 'xray-gateway-core')
     run('systemctl', 'start', 'xray-gateway-panel')
@@ -278,7 +279,7 @@ def install(args):
             run('iptables', '-w', '-D', 'XG_OUT', *LEGACY_ALLOW)
         install_file(LOCATIONS, locations)
         replace(FILES['nginx.conf'], nginx)
-        run('nginx', '-t')
+        run('nginx', '-t', '-c', FILES['nginx.conf'])
         since = int(time.time())
         run('systemctl', 'restart', 'xray-gateway-core')
         run('systemctl', 'start', 'xray-gateway-panel')

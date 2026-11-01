@@ -47,6 +47,24 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotEqual(provision.monitor_config(self.settings)['uuid'], provision.monitor_config(self.settings)['uuid'])
         self.assertNotIn('reality_private', provision.monitor_config(self.settings))
 
+    def test_alternate_public_port_reaches_every_generated_component(self):
+        settings = provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
+            'PrivateKey: ' + 'a' * 43 + '\nPassword (PublicKey): ' + 'b' * 43, 1443)
+        self.assertEqual(settings['origin'], 'https://panel.example.com:1443')
+        self.assertEqual(settings['public_port'], 1443)
+        self.assertEqual(settings['hysteria2_port'], 1443)
+        self.assertEqual(provision.monitor_config(settings)['public_port'], 1443)
+        self.assertEqual(next(x for x in provision.core_config(settings)['inbounds'] if x['tag'] == 'hysteria2')['port'], 1443)
+        nginx = provision.render_nginx(SOURCE, settings, '/test/fullchain.pem', '/test/privkey.pem')
+        self.assertIn('listen 1443; ssl_preread', nginx)
+        firewall = provision.render_firewall('8.8.4.4', ['127.0.0.53'], 1443)
+        self.assertIn('--dports 80,1443', firewall)
+        self.assertIn('-p udp --dport 1443 -j ACCEPT', firewall)
+        for port in (0, 65536, True, '1443'):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
+                    'PrivateKey: ' + 'a' * 43 + '\nPassword: ' + 'b' * 43, port)
+
     def test_nginx_routes_both_entries_without_fixed_host_values(self):
         value = provision.render_nginx(SOURCE, self.settings, '/test/fullchain.pem', '/test/privkey.pem')
         self.assertIn('panel.example.com 127.0.0.1:8443', value)
@@ -126,6 +144,32 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 install.check_ports([listener.getsockname()[1]])
 
+    def test_coexist_allows_unrelated_nginx_but_not_its_own_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            nginx = root / 'etc/nginx'
+            nginx.mkdir(parents=True)
+            (nginx / 'nginx.conf').write_text('existing configuration')
+            self.assertEqual(install.existing_paths(root, coexist=True), [])
+            (nginx / 'xcli.conf').write_text('existing xcli configuration')
+            self.assertEqual(install.existing_paths(root, coexist=True), [str(nginx / 'xcli.conf')])
+
+    def test_prebuilt_bundle_must_match_the_requested_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = pathlib.Path(directory) / 'release.tar.gz'
+            bundle.write_bytes(b'fixture')
+            args = install.arguments(['--coexist', '--public-port', '1443', '--bundle', str(bundle),
+                                      '--sha256', 'a' * 64, '--commit', 'b' * 40])
+            manifest = {'provenance': {'kind': 'git-build', 'revision': 'c' * 40}}
+            with patch.object(install.os, 'geteuid', return_value=0), \
+                 patch.object(install.platform, 'system', return_value='Linux'), \
+                 patch.object(install.platform, 'machine', return_value='x86_64'), \
+                 patch.object(install.platform, 'freedesktop_os_release', return_value={'ID': 'ubuntu', 'VERSION_ID': '26.04'}, create=True), \
+                 patch.object(pathlib.Path, 'is_dir', return_value=True), \
+                 patch.object(install.release, 'extract_bundle', return_value=manifest), \
+                 self.assertRaisesRegex(ValueError, '源码提交'):
+                install.preflight(args)
+
     def test_occupied_udp_port_is_detected(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
             listener.bind(('127.0.0.1', 0))
@@ -140,6 +184,17 @@ class PreflightTests(unittest.TestCase):
                 install.resolve_domain('panel.example.com', '8.8.4.4')
         with patch.object(socket, 'getaddrinfo', side_effect=records(['8.8.4.4'], [])):
             install.resolve_domain('panel.example.com', '8.8.4.4')
+
+    def test_certificate_can_use_the_existing_no_email_practice(self):
+        args = install.arguments(['--yes', '--domain', 'panel.example.com', '--public-ip', '8.8.4.4', '--no-email', '--agree-tos'])
+        with patch.object(install, 'resolve_domain'), patch.object(pathlib.Path, 'exists', return_value=False), \
+             patch.object(pathlib.Path, 'is_symlink', return_value=False), \
+             patch.object(pathlib.Path, 'read_text', return_value='nameserver 1.1.1.1\n'):
+            self.assertEqual(install.prepare_input(args), ['1.1.1.1'])
+        args.email = 'operator@example.com'
+        with patch.object(install, 'resolve_domain'), patch.object(pathlib.Path, 'exists', return_value=False), \
+             patch.object(pathlib.Path, 'is_symlink', return_value=False), self.assertRaises(ValueError):
+            install.prepare_input(args)
 
     def test_readonly_check_does_not_construct_installer(self):
         with patch.object(install, 'preflight', return_value='x86_64'), \

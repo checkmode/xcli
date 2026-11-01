@@ -50,15 +50,16 @@ void apply_oracle_cloud_policy(Json& config) {
 }
 Json Backend::clash_configuration_for(const User& user,const Json& policy) const {
   const auto address=settings_.at("public_ip").get<std::string>(),domain=settings_.at("domain").get<std::string>();
+  const auto public_port=settings_.value("public_port",443);
   Json proxies=Json::array(),names=Json::array();
   std::map<std::string,std::string> outbound_names{{"reality","REALITY"},{"websocket","HTTPS"}};
   auto add=[&](Json proxy){names.push_back(proxy.at("name"));proxies.push_back(std::move(proxy));};
-  add({{"name","REALITY"},{"type","vless"},{"server",address},{"port",443},{"uuid",user.uuid},
+  add({{"name","REALITY"},{"type","vless"},{"server",address},{"port",public_port},{"uuid",user.uuid},
     {"udp",true},{"tls",true},{"network","tcp"},{"flow","xtls-rprx-vision"},{"packet-encoding","xudp"},
     {"servername",settings_.at("reality_sni")},{"client-fingerprint","chrome"},
     {"reality-opts",{{"public-key",settings_.at("reality_public")},{"short-id",settings_.at("short_id")},{"support-x25519mlkem768",true}}}});
   auto websocket=[&](const std::string& name,const std::string& path,bool udp){
-    add({{"name",name},{"type","vless"},{"server",address},{"port",443},{"uuid",user.uuid},
+    add({{"name",name},{"type","vless"},{"server",address},{"port",public_port},{"uuid",user.uuid},
       {"udp",udp},{"tls",true},{"skip-cert-verify",false},{"servername",domain},{"client-fingerprint","chrome"},
       {"network","ws"},{"ws-opts",{{"path",path},{"headers",{{"Host",domain}}}}}});
   };
@@ -66,7 +67,7 @@ Json Backend::clash_configuration_for(const User& user,const Json& policy) const
   if(const auto port=settings_.value("hysteria2_port",0);port>0)
     add({{"name","Hysteria 2"},{"type","hysteria2"},{"server",address},{"port",port},{"password",user.uuid},{"sni",domain},{"skip-cert-verify",false}});
   if(settings_.contains("vmess_ws_path"))
-    add({{"name","VMess TLS"},{"type","vmess"},{"server",address},{"port",443},{"uuid",user.uuid},{"alterId",0},{"cipher","auto"},
+    add({{"name","VMess TLS"},{"type","vmess"},{"server",address},{"port",public_port},{"uuid",user.uuid},{"alterId",0},{"cipher","auto"},
       {"udp",true},{"tls",true},{"skip-cert-verify",false},{"servername",domain},{"network","ws"},
       {"ws-opts",{{"path",settings_["vmess_ws_path"]},{"headers",{{"Host",domain}}}}}});
   const bool dynamic_enabled=dynamic_residential_enabled();

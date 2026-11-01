@@ -122,7 +122,7 @@ def client_config(config, kind, port):
     elif transport in ('reality', 'websocket','vmess'):
         if transport=='vmess':user={'id':config['uuid'],'security':'auto'}
         outbound = {'protocol': 'vmess' if transport=='vmess' else 'vless', 'settings': {'vnext': [
-            {'address': host, 'port': 443, 'users': [user]}]}, 'streamSettings': stream}
+            {'address': host, 'port': config.get('public_port', 443), 'users': [user]}]}, 'streamSettings': stream}
     else:
         raise ValueError('Unsupported transport')
     return {'log': {'loglevel': 'none'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port,

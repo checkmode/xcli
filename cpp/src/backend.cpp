@@ -47,6 +47,8 @@ Backend::Backend(Options options,std::unique_ptr<Core> core,WebhookSender sender
     if(!settings_.contains(key)||!settings_[key].is_string())throw std::runtime_error("Required settings are missing");
   auto hy2=settings_.value("hysteria2_port",Json(0));
   if(!hy2.is_number_integer()||hy2<0||hy2>65535)throw std::runtime_error("Invalid Hysteria 2 port");
+  const auto public_port=settings_.value("public_port",Json(443));
+  if(!public_port.is_number_integer()||public_port<1||public_port>65535)throw std::runtime_error("Invalid public port");
   if(settings_.contains("vmess_ws_path")) {
     auto path=checked_string(settings_["vmess_ws_path"],1,256);
     if(path!=settings_.at("ws_path").get<std::string>()+"/vmess"||settings_.value("vmess_port",0)!=10081)
@@ -279,13 +281,14 @@ void Backend::reset_traffic(const std::string& token,const std::string& csrf,con
 }
 Json Backend::links_for(const User& user) const {
   auto s=[&](const char* key){return settings_.at(key).get<std::string>();};
-  std::string reality="vless://"+user.uuid+"@"+s("public_ip")+":443?encryption=none&fp=chrome&sni="+url_quote(s("reality_sni"),true)+"&pbk="+url_quote(s("reality_public"),true)+"&sid="+url_quote(s("short_id"),true)+"&type=tcp&security=reality&flow=xtls-rprx-vision#"+url_quote(user.name+" · REALITY",false,true);
-  std::string websocket="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(s("ws_path"),true)+"#"+url_quote(user.name+" · HTTPS",false,true);
-  Json result={{"reality",reality},{"websocket",websocket},{"subscription","https://"+s("domain")+"/s/"+user.token}};
+  const auto public_port=std::to_string(settings_.value("public_port",443));
+  std::string reality="vless://"+user.uuid+"@"+s("public_ip")+":"+public_port+"?encryption=none&fp=chrome&sni="+url_quote(s("reality_sni"),true)+"&pbk="+url_quote(s("reality_public"),true)+"&sid="+url_quote(s("short_id"),true)+"&type=tcp&security=reality&flow=xtls-rprx-vision#"+url_quote(user.name+" · REALITY",false,true);
+  std::string websocket="vless://"+user.uuid+"@"+s("domain")+":"+public_port+"?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(s("ws_path"),true)+"#"+url_quote(user.name+" · HTTPS",false,true);
+  Json result={{"reality",reality},{"websocket",websocket},{"subscription",s("origin")+"/s/"+user.token}};
   if(auto port=settings_.value("hysteria2_port",0);port>0)
     result["hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+s("domain")+":"+std::to_string(port)+"/?sni="+url_quote(s("domain"))+"#"+url_quote(user.name+" · Hysteria 2",false,true);
   if(settings_.contains("vmess_ws_path")) {
-    Json node={{"v","2"},{"ps",user.name+" · VMess TLS"},{"add",s("domain")},{"port","443"},{"id",user.uuid},
+    Json node={{"v","2"},{"ps",user.name+" · VMess TLS"},{"add",s("domain")},{"port",public_port},{"id",user.uuid},
       {"aid","0"},{"scy","auto"},{"net","ws"},{"type","none"},{"host",s("domain")},{"path",s("vmess_ws_path")},{"tls","tls"},{"sni",s("domain")}};
     result["vmess"]="vmess://"+base64(node.dump());
   }
@@ -298,7 +301,7 @@ Json Backend::links_for(const User& user) const {
       // Retain the existing Hysteria display name used by installed Shadowrocket service groups.
       result[tag+"-hy2"]="hysteria2://"+url_quote(user.uuid+"."+tag+"-hy2")+"@"+s("domain")+":"+std::to_string(settings_.at("hysteria2_port").get<int>())+"/?sni="+url_quote(s("domain"))+"#"+url_quote(name,false,true);
     }
-    result[tag]="vless://"+user.uuid+"@"+s("domain")+":443?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(name+(exit.value("hysteria2",false)?" · HTTPS":""),false,true);
+    result[tag]="vless://"+user.uuid+"@"+s("domain")+":"+public_port+"?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(name+(exit.value("hysteria2",false)?" · HTTPS":""),false,true);
   }
   return result;
 }

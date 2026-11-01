@@ -37,8 +37,10 @@ def public_ipv4(value):
     return str(address)
 
 
-def settings_for(domain, address, sni, key_output):
+def settings_for(domain, address, sni, key_output, public_port=443):
     domain, address, sni = domain_name(domain), public_ipv4(address), domain_name(sni)
+    if type(public_port) is not int or not 1 <= public_port <= 65535:
+        raise ValueError('公网入口端口必须为 1..65535')
     if domain == sni:
         raise ValueError('REALITY 目标域名不能与面板域名相同')
     fields = dict(line.split(':', 1) for line in key_output.splitlines() if ':' in line)
@@ -46,9 +48,12 @@ def settings_for(domain, address, sni, key_output):
     public = next((fields[key].strip() for key in ('Password (PublicKey)', 'Password', 'PublicKey') if key in fields), '')
     if not all(re.fullmatch(r'[A-Za-z0-9_-]{43}', value) for value in (private, public)):
         raise ValueError('Xray 未返回预期的 X25519 密钥')
-    return {'domain': domain, 'origin': 'https://' + domain, 'public_ip': address, 'reality_sni': sni,
+    result = {'domain': domain, 'origin': 'https://' + domain + (':' + str(public_port) if public_port != 443 else ''), 'public_ip': address, 'reality_sni': sni,
             'reality_private': private, 'reality_public': public, 'short_id': secrets.token_hex(8),
-            'ws_path': '/connect/' + secrets.token_hex(12), 'hysteria2_port': 443, 'xray_version': XRAY_VERSION}
+            'ws_path': '/connect/' + secrets.token_hex(12), 'hysteria2_port': public_port, 'xray_version': XRAY_VERSION}
+    if public_port != 443:
+        result['public_port'] = public_port
+    return result
 
 
 def core_config(settings):
@@ -93,13 +98,19 @@ def monitor_config(settings):
     result['uuid'] = str(uuid.uuid4())
     if settings.get('hysteria2_port', 0):
         result['hysteria2_port'] = settings['hysteria2_port']
+    if settings.get('public_port', 443) != 443:
+        result['public_port'] = settings['public_port']
     return result
 
 
 def render_nginx(source, settings, certificate=None, private_key=None):
     name = 'nginx.conf' if certificate else 'nginx-acme.conf'
     text = (source / 'deploy' / 'templates' / name).read_text()
+    port = settings.get('public_port', 443)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('公网入口端口必须为 1..65535')
     values = {'DOMAIN': domain_name(settings['domain']), 'SNI': domain_name(settings['reality_sni']),
+              'PUBLIC_PORT': str(port),
               'WS_PATH': settings['ws_path'], 'CERTIFICATE': certificate or '', 'PRIVATE_KEY': private_key or ''}
     if not re.fullmatch(r'/connect/[0-9a-f]{24}', values['WS_PATH']):
         raise ValueError('WebSocket 路径格式不正确')
@@ -113,8 +124,10 @@ def render_nginx(source, settings, certificate=None, private_key=None):
     return text
 
 
-def render_firewall(address, resolvers):
+def render_firewall(address, resolvers, public_port=443):
     address = public_ipv4(address)
+    if type(public_port) is not int or not 1 <= public_port <= 65535:
+        raise ValueError('公网入口端口必须为 1..65535')
     dns = sorted({str(ipaddress.IPv4Address(value)) for value in resolvers})
     # Only the system's actual IPv4 DNS servers can bypass private-destination filtering on port 53.
     exceptions = '\n'.join('    iptables -w -A XG_OUT -d ' + value + '/32 -p ' + protocol + ' --dport 53 -j RETURN'
@@ -126,8 +139,8 @@ case "${1:-start}" in
 start)
     iptables -w -N XG_IN 2>/dev/null || true
     iptables -w -F XG_IN
-    iptables -w -A XG_IN -p tcp -m multiport --dports 80,443 -j ACCEPT
-    iptables -w -A XG_IN -p udp --dport 443 -j ACCEPT
+    iptables -w -A XG_IN -p tcp -m multiport --dports 80,@@PUBLIC_PORT@@ -j ACCEPT
+    iptables -w -A XG_IN -p udp --dport @@PUBLIC_PORT@@ -j ACCEPT
     iptables -w -C INPUT -j XG_IN 2>/dev/null || iptables -w -I INPUT 1 -j XG_IN
     iptables -w -N XG_OUT 2>/dev/null || true
     iptables -w -F XG_OUT
@@ -149,7 +162,7 @@ stop)
     ;;
 *) exit 2 ;;
 esac
-'''.replace('@@DNS@@', exceptions).replace('@@NETWORKS@@', networks)
+'''.replace('@@DNS@@', exceptions).replace('@@NETWORKS@@', networks).replace('@@PUBLIC_PORT@@', str(public_port))
 
 
 def private_file(path, data, mode=0o600):
@@ -159,10 +172,14 @@ def private_file(path, data, mode=0o600):
         stream.write(data.encode() if isinstance(data, str) else data)
 
 
-def initialize_admin(database, credentials, domain):
+def initialize_admin(database, credentials, domain, origin=None):
     """Create only the admin table. The C++ backend creates the remaining schema at first start."""
     if database.exists() or credentials.exists():
         raise ValueError('管理员凭据或数据库已存在，拒绝覆盖')
+    domain = domain_name(domain)
+    url = origin or 'https://' + domain
+    if not re.fullmatch(r'https://' + re.escape(domain) + r'(?::[0-9]{1,5})?', url):
+        raise ValueError('管理员面板地址格式不正确')
     password = secrets.token_urlsafe(24)
     salt = secrets.token_bytes(16)
     encoded = salt.hex() + ':' + hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32).hex()
@@ -170,7 +187,7 @@ def initialize_admin(database, credentials, domain):
     with contextlib.closing(sqlite3.connect(database)) as db, db:
         db.execute('CREATE TABLE admin(id INTEGER PRIMARY KEY CHECK(id=1),password TEXT NOT NULL)')
         db.execute('INSERT INTO admin VALUES(1,?)', (encoded,))
-    private_file(credentials, 'URL: https://' + domain_name(domain) + '/\nUsername: admin\nPassword: ' + password + '\n')
+    private_file(credentials, 'URL: ' + url + '/\nUsername: admin\nPassword: ' + password + '\n')
 
 
 def write_json(path, value, mode=0o640):

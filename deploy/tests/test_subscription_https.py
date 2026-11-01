@@ -27,6 +27,13 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual((rule['network'], rule['port']), ('tcp', '443'))
         self.assertEqual(len(rule['user']), 1)
 
+    def test_custom_public_port_stays_scoped_to_self_address(self):
+        result = s.core_candidate(self.core, '8.8.4.4', self.user, 1443)
+        self.assertEqual(result['routing']['rules'][0]['port'], '1443')
+        self.assertEqual(result['routing']['rules'][0]['ip'], ['8.8.4.4/32'])
+        source = '#!/bin/sh\n    for net in 10.0.0.0/8 8.8.4.4/32; do iptables -w -A XG_OUT -d "$net" -j REJECT; done\n'
+        self.assertIn('--dport 1443 -j RETURN', s.firewall_candidate(source, '8.8.4.4', 1443))
+
     def test_missing_or_conflicting_policy_fails_closed(self):
         result = s.core_candidate(self.core, '8.8.4.4', self.user)
         with self.assertRaises(ValueError):

@@ -151,6 +151,21 @@ int main() {
       Backend missing(config);check(missing.monitor_status().at("status")=="unknown","Missing Hy2 probe claimed healthy");
     }
     {
+      Temp alternate;Options config;config.state=alternate.path/"state";config.settings=alternate.path/"settings.json";config.offline=true;
+      auto alt=settings;alt["origin"]="https://testserver:1443";alt["public_port"]=1443;alt["hysteria2_port"]=1443;
+      alt["vmess_ws_path"]="/connect/test/vmess";alt["vmess_port"]=10081;
+      std::ofstream(config.settings)<<alt.dump();Backend panel(config,std::make_unique<FakeCore>());
+      {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+      std::string session;auto auth=panel.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",session);
+      auto guard=auth.at("csrf").get<std::string>();auto uid=panel.create_user(session,guard,{{"name","端口测试"}}).at("id").get<std::string>();
+      User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
+      const auto links=panel.links(session,uid);check(links.at("subscription")=="https://testserver:1443/s/"+u.token,"Subscription lost alternate port");
+      for(const auto& key:{"reality","websocket","hysteria2"})check(links.at(key).get<std::string>().find(":1443")!=std::string::npos,"Node link lost alternate port");
+      const auto vmess=links.at("vmess").get<std::string>();check(Json::parse(unbase64(vmess.substr(8)))["port"]=="1443","VMess lost alternate port");
+      const auto clash=panel.clash_configuration(u);for(const auto& node:clash.at("proxies"))check(node.at("port")==1443,"Clash node lost alternate port");
+      check(unbase64(panel.subscription(u.token).first).find(links.at("reality").get<std::string>())!=std::string::npos,"Alternate port subscription missing node");
+    }
+    {
       Temp vmess;Options config;config.state=vmess.path/"state";config.settings=vmess.path/"settings.json";config.offline=true;
       auto vm_settings=settings;vm_settings["vmess_ws_path"]="/connect/test/vmess";vm_settings["vmess_port"]=10081;
       std::ofstream(config.settings)<<vm_settings.dump();auto adapter=std::make_unique<FakeCore>();auto live=adapter.get();Backend panel(config,std::move(adapter));

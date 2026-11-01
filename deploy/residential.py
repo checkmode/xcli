@@ -14,11 +14,12 @@ import subprocess
 import sys
 import time
 
+NGINX_CONFIG = Path('/etc/nginx/xcli.conf') if Path('/etc/nginx/xcli.conf').is_file() else Path('/etc/nginx/nginx.conf')
 FILES = {
     'settings.json': Path('/etc/xray-gateway/settings.json'),
     'core.json': Path('/etc/xray-gateway/core.json'),
     'monitor.json': Path('/etc/xcli-monitor/monitor.json'),
-    'nginx.conf': Path('/etc/nginx/nginx.conf'),
+    'nginx.conf': NGINX_CONFIG,
     'probe.py': Path('/opt/xray-gateway/scripts/probe.py'),
 }
 LOCATIONS = Path('/etc/nginx/xcli-residential-locations.conf')
@@ -144,7 +145,7 @@ def rollback(backup):
     since = int(time.time())
     run('systemctl', 'restart', 'xray-gateway-core')
     run('systemctl', 'restart', 'xray-gateway-panel')
-    run('nginx', '-t')
+    run('nginx', '-t', '-c', FILES['nginx.conf'])
     run('systemctl', 'reload', 'nginx')
     time.sleep(6)
     run('systemctl', 'start', 'xray-gateway-monitor')
@@ -230,7 +231,7 @@ def install(args):
         since = int(time.time())
         run('systemctl', 'restart', 'xray-gateway-core')
         run('systemctl', 'start', 'xray-gateway-panel')
-        run('nginx', '-t')
+        run('nginx', '-t', '-c', FILES['nginx.conf'])
         run('systemctl', 'reload', 'nginx')
         # Initial account synchronization occurs before the first public probes.
         time.sleep(6)
@@ -239,7 +240,7 @@ def install(args):
     except Exception:
         rollback(args.backup)
         raise
-    print(json.dumps({'residential_exits': len(new_settings['residential_exits']), 'subscription_nodes': 3 + len(new_settings['residential_exits']), 'public_port': 443, 'verification': 'all nodes healthy', 'rollback': str(args.backup / 'rollback.sh')}))
+    print(json.dumps({'residential_exits': len(new_settings['residential_exits']), 'subscription_nodes': 3 + len(new_settings['residential_exits']), 'public_port': new_settings.get('public_port', 443), 'verification': 'all nodes healthy', 'rollback': str(args.backup / 'rollback.sh')}))
 
 
 def main():

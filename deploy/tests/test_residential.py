@@ -76,6 +76,15 @@ class ResidentialTests(unittest.TestCase):
         cfg = probe.client_config(monitor, 'residential-01', 12345)
         self.assertEqual(cfg['outbounds'][0]['streamSettings']['wsSettings']['path'], settings['residential_exits'][0]['ws_path'])
 
+    def test_probes_use_the_configured_public_port(self):
+        self.monitor['public_port'] = 1443
+        self.monitor['hysteria2_port'] = 1443
+        for kind in ('reality', 'websocket'):
+            cfg = probe.client_config(self.monitor, kind, 12345)
+            self.assertEqual(cfg['outbounds'][0]['settings']['vnext'][0]['port'], 1443)
+        cfg = probe.client_config(self.monitor, 'hysteria2', 12345)
+        self.assertEqual(cfg['outbounds'][0]['settings']['port'], 1443)
+
 
 if __name__ == '__main__':
     unittest.main()

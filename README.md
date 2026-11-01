@@ -65,6 +65,20 @@ sudo nginx -t && sudo systemctl reload nginx
 
 安装测试覆盖 Ubuntu 24.04 / 26.04 与 AMD64 / ARM64 的临时机器，使用受测试系统信任的临时证书；公网 Let's Encrypt 签发仍取决于实际域名解析、80 端口可达性及签发方限制。
 
+### 与现有入口共存
+
+当其他服务已经占用 TCP 443 时，可以在 Ubuntu 26.04 AMD64 主机上使用匹配系统和源码提交的预构建版本包，并为 Xdistribute 指定独立公网端口。共存安装使用 `/etc/nginx/xcli.conf` 和独立的 `nginx.service` 覆盖配置，保留原 `/etc/nginx/nginx.conf`；系统的 `nginx.service` 必须处于停止状态，其他现有入口须使用独立服务。安装器仍要求 TCP 80、所选端口及其内部端口空闲，并要求所选 UDP 端口空闲。
+
+先准备与源码提交一致的发布包和独立确认的 SHA-256，再将下面的域名、IP、提交、包路径及摘要替换为实际值。域名的 A 记录必须只指向目标主机，且不能有 AAAA 记录；TCP 80 用于证书签发，所选 TCP / UDP 端口用于面板和节点。
+
+```bash
+sudo python3 deploy/install.py --commit FULL_COMMIT --coexist --public-port 1443 \
+  --bundle /absolute/path/xcli-release.tar.gz --sha256 BUNDLE_SHA256 \
+  --domain panel.example.com --public-ip PUBLIC_IPV4 --no-email --agree-tos --yes
+```
+
+访问地址和订阅链接包含 `:1443`。`--no-email` 不提供证书到期通知地址，安装器仍会启用证书自动续期；也可改用 `--email` 指定通知邮箱。安装失败时保留日志、数据库和证书，并停止本次新增服务。需要停用时，运行安装日志目录中的 `rollback.sh`；脚本仅在覆盖配置未被修改时移走该配置，原 Nginx 配置和其他服务保留。
+
 ## 功能
 
 | 功能 | 行为 |

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 main() {
-    local ref='' check_only=0 work sha
+    local ref='' check_only=0 coexist=0 work sha
     local -a args=()
     while (($#)); do
         case "$1" in
@@ -18,6 +18,7 @@ xcli 一键安装（无需 git clone）
 选项：
   --domain DOMAIN       面板域名，A 记录应只指向本机公网 IPv4
   --email EMAIL         Let's Encrypt 账户邮箱
+  --no-email            不提供证书到期通知邮箱（仍启用自动续期）
   --public-ip IPV4      公网 IPv4；省略时自动检测并供确认
   --reality-sni DOMAIN  REALITY 目标，默认 www.bing.com
   --agree-tos           同意 Let's Encrypt 服务条款
@@ -26,16 +27,21 @@ xcli 一键安装（无需 git clone）
   --private-key FILE    已有证书的私钥；文件须可供 root 读取
   --tune-network        可选 BBR / fq 与 UDP 缓冲调优，保存原值以便回退
   --no-tune-network     保留现有网络参数（无人值守时默认）
+  --coexist             在已有服务的主机使用独立 Nginx 配置
+  --public-port PORT    独立的 TCP / UDP 入口端口（默认 443）
+  --bundle FILE         使用匹配系统及提交的预构建版本包
+  --sha256 SHA256       预构建版本包的 SHA-256
   --check               只检查环境、端口和 DNS，不安装软件或改配置
   --ref COMMIT          安装指定的 40 位 Git 提交，默认解析 main
   --help                显示帮助
 
-安装器遇到已有 xcli 或 Nginx 配置会退出，不覆盖现有站点。
+安装器遇到已有 xcli 配置会退出；共存模式保留已有 Nginx 配置。
 HELP
                 return 0 ;;
             --ref) [[ $# -ge 2 ]] || { echo '--ref 缺少提交编号' >&2; return 1; }; ref=$2; shift 2 ;;
             --source|--commit) echo '该选项仅供仓库内安装器使用' >&2; return 1 ;;
             --check) check_only=1; args+=("$1"); shift ;;
+            --coexist) coexist=1; args+=("$1"); shift ;;
             *) args+=("$1"); shift ;;
         esac
     done
@@ -46,6 +52,7 @@ HELP
     [[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo '当前支持 Ubuntu 24.04 / 26.04。' >&2; return 1; }
     case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) echo '当前支持 AMD64 / ARM64。' >&2; return 1 ;; esac
     for work in /etc/xray-gateway /var/lib/xray-gateway /usr/local/lib/xray-gateway /opt/xray-gateway /opt/xcli /usr/local/lib/xcli /var/lib/xcli /var/backups/xcli /var/cache/xcli /etc/nginx/nginx.conf; do
+        [[ $coexist == 0 || "$work" != /etc/nginx/nginx.conf ]] || continue
         [[ ! -e "$work" && ! -L "$work" ]] || { echo "检测到已有配置：$work；安装已停止，请使用 README 中的升级流程。" >&2; return 1; }
     done
     if ! command -v python3 >/dev/null; then

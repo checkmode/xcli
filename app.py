@@ -93,10 +93,11 @@ def get_user(c, uid):
 def links(u):
     s=config(); domain=s['domain']; name=u['name']
     common={'encryption':'none','fp':'chrome','sni':s['reality_sni'],'pbk':s['reality_public'],'sid':s['short_id'],'type':'tcp','security':'reality','flow':'xtls-rprx-vision'}
-    reality=f"vless://{u['uuid']}@{s['public_ip']}:443?{urlencode(common)}#{quote(name+' · REALITY')}"
+    port=s.get('public_port',443)
+    reality=f"vless://{u['uuid']}@{s['public_ip']}:{port}?{urlencode(common)}#{quote(name+' · REALITY')}"
     ws={'encryption':'none','security':'tls','sni':domain,'type':'ws','host':domain,'path':s['ws_path']}
-    websocket=f"vless://{u['uuid']}@{domain}:443?{urlencode(ws)}#{quote(name+' · HTTPS')}"
-    return {'reality':reality,'websocket':websocket,'subscription':f"https://{domain}/s/{u['token']}"}
+    websocket=f"vless://{u['uuid']}@{domain}:{port}?{urlencode(ws)}#{quote(name+' · HTTPS')}"
+    return {'reality':reality,'websocket':websocket,'subscription':f"{s['origin']}/s/{u['token']}"}
 
 def xapi(command, *args):
     result=subprocess.run([XRAY,'api',command,'--server='+API,'--timeout=3',*args],capture_output=True,text=True,timeout=5)
