@@ -20,6 +20,7 @@ xcli 一键安装（无需 git clone）
   --email EMAIL         Let's Encrypt 账户邮箱
   --no-email            不提供证书到期通知邮箱（仍启用自动续期）
   --public-ip IPV4      公网 IPv4；省略时自动检测并供确认
+  --dns-relay-ip IPV4   域名通过另一台主机转发时，该主机的公网 IPv4
   --reality-sni DOMAIN  REALITY 目标，默认 www.bing.com
   --agree-tos           同意 Let's Encrypt 服务条款
   --yes                 确认安装；无人值守时还需提供全部必填参数

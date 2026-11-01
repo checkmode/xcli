@@ -79,6 +79,8 @@ sudo python3 deploy/install.py --commit FULL_COMMIT --coexist --public-port 1443
 
 访问地址和订阅链接包含 `:1443`。`--no-email` 不提供证书到期通知地址，安装器仍会启用证书自动续期；也可改用 `--email` 指定通知邮箱。安装失败时保留日志、数据库和证书，并停止本次新增服务。需要停用时，运行安装日志目录中的 `rollback.sh`；脚本仅在覆盖配置未被修改时移走该配置，原 Nginx 配置和其他服务保留。
 
+域名通过另一台公网主机转发时，额外传入 `--dns-relay-ip` 指定该主机的 IPv4；安装器会核对域名只解析到这个地址。转发主机须将 TCP 80 及选定的 TCP / UDP 端口转发到 Xdistribute 主机，安装器不会创建这些转发。
+
 ## 功能
 
 | 功能 | 行为 |

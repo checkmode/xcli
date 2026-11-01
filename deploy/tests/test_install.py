@@ -196,6 +196,15 @@ class PreflightTests(unittest.TestCase):
              patch.object(pathlib.Path, 'is_symlink', return_value=False), self.assertRaises(ValueError):
             install.prepare_input(args)
 
+    def test_dns_relay_requires_the_explicit_relay_address(self):
+        args = install.arguments(['--yes', '--domain', 'panel.example.com', '--public-ip', '8.8.4.4',
+                                  '--dns-relay-ip', '1.1.1.1', '--no-email', '--agree-tos'])
+        with patch.object(install, 'resolve_domain') as resolve, patch.object(pathlib.Path, 'exists', return_value=False), \
+             patch.object(pathlib.Path, 'is_symlink', return_value=False), \
+             patch.object(pathlib.Path, 'read_text', return_value='nameserver 1.1.1.1\n'):
+            install.prepare_input(args)
+        resolve.assert_called_once_with('panel.example.com', '1.1.1.1')
+
     def test_readonly_check_does_not_construct_installer(self):
         with patch.object(install, 'preflight', return_value='x86_64'), \
              patch.object(install, 'prepare_input', return_value=['127.0.0.53']), \

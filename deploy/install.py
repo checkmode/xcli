@@ -56,6 +56,7 @@ def arguments(argv=None):
     parser.add_argument('--email')
     parser.add_argument('--no-email', action='store_true', help='不提供证书到期通知邮箱')
     parser.add_argument('--public-ip')
+    parser.add_argument('--dns-relay-ip', help='域名指向独立转发主机时，其公网 IPv4')
     parser.add_argument('--reality-sni', default='www.bing.com')
     parser.add_argument('--agree-tos', action='store_true')
     parser.add_argument('--yes', action='store_true')
@@ -207,7 +208,9 @@ def prepare_input(args):
             detected = None
         args.public_ip = detected if args.yes else ask('本机公网 IPv4', detected)
     args.public_ip = public_ipv4(args.public_ip or '')
-    resolve_domain(args.domain, args.public_ip)
+    if args.dns_relay_ip:
+        args.dns_relay_ip = public_ipv4(args.dns_relay_ip)
+    resolve_domain(args.domain, args.dns_relay_ip or args.public_ip)
     if args.certificate:
         args.certificate = args.certificate.resolve(strict=True)
         args.private_key = args.private_key.resolve(strict=True)
@@ -530,6 +533,7 @@ def main(argv=None):
     resolvers = prepare_input(args)
     print(f'检查通过：Ubuntu {platform.freedesktop_os_release()["VERSION_ID"]} / {arch}\n'
           f'面板：https://{args.domain}{":" + str(args.public_port) if args.public_port != 443 else ""}  公网 IPv4：{args.public_ip}\n'
+          + (f'DNS 转发主机 IPv4：{args.dns_relay_ip}\n' if args.dns_relay_ip else '') +
           f'REALITY 目标：{args.reality_sni}\n'
           f'网络调优：{"启用并保存原值" if args.tune_network else "保留现有参数"}\n'
           '将安装依赖、Xray、C++ 面板、Nginx、专用账号、探测服务及专属防火墙规则。\n'
