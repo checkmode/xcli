@@ -108,7 +108,7 @@ def client_config(config, kind, port):
             'serverName': config['reality_sni'], 'fingerprint': 'chrome',
             'publicKey': config['reality_public'], 'shortId': config['short_id']}}
     elif transport in ('websocket','vmess'):
-        host = config['domain']
+        host = config['public_ip'] if config.get('node_address_ip', False) else config['domain']
         stream = {'network': 'ws', 'security': 'tls',
             'tlsSettings': {'serverName': config['domain'], 'allowInsecure': False, 'useSystemCA': True},
             'wsSettings': {'path': exit['ws_path'] if exit else config['vmess_ws_path'] if transport=='vmess' else config['ws_path'], 'headers': {'Host': config['domain']}}}

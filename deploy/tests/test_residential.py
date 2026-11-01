@@ -85,6 +85,17 @@ class ResidentialTests(unittest.TestCase):
         cfg = probe.client_config(self.monitor, 'hysteria2', 12345)
         self.assertEqual(cfg['outbounds'][0]['settings']['port'], 1443)
 
+    def test_relayed_websocket_probes_use_node_address_and_domain_sni(self):
+        self.monitor['vmess_ws_path'] = '/connect/test-vmess'
+        for kind in ('websocket', 'vmess'):
+            with self.subTest(kind=kind):
+                default = probe.client_config(self.monitor, kind, 12345)['outbounds'][0]
+                self.assertEqual(default['settings']['vnext'][0]['address'], self.settings['domain'])
+                direct = probe.client_config({**self.monitor, 'node_address_ip': True}, kind, 12345)['outbounds'][0]
+                self.assertEqual(direct['settings']['vnext'][0]['address'], self.settings['public_ip'])
+                self.assertEqual(direct['streamSettings']['tlsSettings']['serverName'], self.settings['domain'])
+                self.assertEqual(direct['streamSettings']['wsSettings']['headers']['Host'], self.settings['domain'])
+
 
 if __name__ == '__main__':
     unittest.main()

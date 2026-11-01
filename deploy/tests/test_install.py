@@ -63,6 +63,7 @@ class ConfigurationTests(unittest.TestCase):
         relayed = provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
             'PrivateKey: ' + 'a' * 43 + '\nPassword: ' + 'b' * 43, 1443, True)
         self.assertTrue(relayed['node_address_ip'])
+        self.assertTrue(provision.monitor_config(relayed)['node_address_ip'])
         for port in (0, 65536, True, '1443'):
             with self.subTest(port=port), self.assertRaises(ValueError):
                 provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',

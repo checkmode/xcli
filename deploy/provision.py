@@ -104,6 +104,8 @@ def monitor_config(settings):
         result['hysteria2_port'] = settings['hysteria2_port']
     if settings.get('public_port', 443) != 443:
         result['public_port'] = settings['public_port']
+    if settings.get('node_address_ip', False):
+        result['node_address_ip'] = True
     return result
 
 
