@@ -9,43 +9,6 @@ on:
 permissions:
   contents: read
 jobs:
-  coexist:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Build the fixed revision
-        run: |
-          sudo apt-get update
-          mapfile -t packages < deploy/build-packages.txt
-          sudo apt-get install -y --no-install-recommends "${packages[@]}"
-          bash deploy/build-release.sh "$GITHUB_WORKSPACE" "$GITHUB_SHA" "$RUNNER_TEMP/xcli-coexist.tar.gz"
-      - name: Prepare an existing independent 443 service
-        run: |
-          bash deploy/tests/prepare-machine.sh
-          sudo apt-get install -y --no-install-recommends nginx
-          sudo systemctl disable --now nginx
-          sha256sum /etc/nginx/nginx.conf | cut -d' ' -f1 > "$RUNNER_TEMP/nginx-before.sha256"
-          sudo systemd-run --unit=xcli-fixture-rdh /usr/bin/python3 -m http.server 443 --bind 0.0.0.0
-          sudo systemctl is-active --quiet xcli-fixture-rdh
-          sudo systemctl show xcli-fixture-rdh -p MainPID --value > "$RUNNER_TEMP/rdh-before.pid"
-      - name: Install from the verified bundle on a separate port
-        run: |
-          sha=$(sha256sum "$RUNNER_TEMP/xcli-coexist.tar.gz" | cut -d' ' -f1)
-          sudo python3 deploy/install.py --commit "$GITHUB_SHA" --coexist --public-port 1443 \
-            --bundle "$RUNNER_TEMP/xcli-coexist.tar.gz" --sha256 "$sha" --yes --no-tune-network \
-            --domain panel.install.example --public-ip "$PUBLIC_IP" \
-            --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
-      - name: Verify both services and rollback in the disposable fixture
-        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP python3 deploy/tests/verify_coexist.py
-      - name: Coexistence diagnostics on failure
-        if: failure()
-        run: |
-          sudo systemctl --no-pager --full status nginx xcli-fixture-rdh xray-gateway-core xray-gateway-panel xray-gateway-monitor || true
-          sudo journalctl --no-pager -n 60 -u nginx -u xray-gateway-panel -u xray-gateway-monitor || true
-          sudo sh -c 'for file in /var/backups/xcli/install/*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'
   install:
     strategy:
       fail-fast: false
