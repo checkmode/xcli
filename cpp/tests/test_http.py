@@ -240,6 +240,9 @@ def test_static_and_error_security_headers(fixture):
     assert c.call('/static/../app.py')[0] == 404
     assert c.call('/')[2] == (LEGACY.parent / 'static/index.html').read_bytes()
     assert c.call('/static/app.js')[2] == (LEGACY.parent / 'static/app.js').read_bytes()
+    status, headers, font = c.call('/static/material-symbols-outlined.woff2')
+    assert status == 200 and headers['content-type'] == 'font/woff2'
+    assert font == (LEGACY.parent / 'static/material-symbols-outlined.woff2').read_bytes()
 
 
 def test_qr_png_decodes_to_existing_links(fixture):

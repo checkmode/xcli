@@ -31,9 +31,9 @@ function renderHistory(){
 function drawHistoryCharts(){
   if(!historyData||page!=='history')return;
   const h=historyData;
-  const traffic=[['download','#169d88'],['upload','#7095be']].map(([key,color])=>({color,points:new Map(h.traffic.map(p=>[p.ts,p[key]]))}));
+  const traffic=[['download','#1a73e8'],['upload','#00897b']].map(([key,color])=>({color,points:new Map(h.traffic.map(p=>[p.ts,p[key]]))}));
   plotHistory($('#history-traffic'),traffic,bytes);
-  const latency=[['reality','https_ms','#169d88'],['websocket','https_ms','#7095be'],['reality','udp_ms','#a275bf'],['websocket','udp_ms','#d49a51'],['hysteria2','https_ms','#b55e85'],['hysteria2','udp_ms','#68823c']].map(([transport,key,color])=>({color,points:new Map(h.probes.filter(p=>p.transport===transport).map(p=>[p.ts,p[key]]))}));
+  const latency=[['reality','https_ms','#1a73e8'],['websocket','https_ms','#00897b'],['reality','udp_ms','#a275bf'],['websocket','udp_ms','#d49a51'],['hysteria2','https_ms','#b55e85'],['hysteria2','udp_ms','#68823c']].map(([transport,key,color])=>({color,points:new Map(h.probes.filter(p=>p.transport===transport).map(p=>[p.ts,p[key]]))}));
   plotHistory($('#history-latency'),latency,n=>Math.round(n)+' ms');
 }
 function plotHistory(canvas,series,format){

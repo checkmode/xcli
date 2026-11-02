@@ -5,3 +5,44 @@
 .explanation{border-top:1px solid #dfe7e9;padding:20px 0;color:#697c85;font-size:12px;line-height:1.9}.explanation summary{cursor:pointer;color:#3e5f65;font-size:13px}.explanation p{margin-bottom:0}footer{font-size:11px;color:#829299;line-height:1.9;padding-top:6px}
 @media(max-width:420px){.setup-shell{padding:30px 19px 25px}.brand{margin-bottom:33px}h1{font-size:30px}.step{padding:21px 17px;gap:12px}.primary{width:100%}.step p{font-size:12px}.step h2{font-size:17px}}
 @media(prefers-reduced-motion:no-preference){.primary,.text-button{transition:background-color .15s}}
+
+/* Match the management console while keeping the mobile setup flow readable. */
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#17243a;background:#f3f5f8}
+.setup-shell{max-width:610px;padding-top:36px}
+.brand{font-size:16px;font-weight:700;letter-spacing:-.02em;margin-bottom:38px}
+.brand-mark{width:30px;height:30px;border-radius:5px;background:#142137;color:#f0f5ff;font-size:19px}
+.eyebrow{color:#526984;letter-spacing:.08em;margin-bottom:12px}
+h1{font-size:29px;line-height:1.3;letter-spacing:-.035em}
+.intro{color:#64748b}
+.status{border-color:#d5e1f2;border-left:3px solid #5f88c8;border-radius:4px;background:#f0f5fc;color:#435b7a}
+.status[data-state="ready"]{border-color:#cfe7d7;border-left-color:#359361;background:#edf8f1;color:#17633b}
+.status[data-state="error"]{border-color:#efd6d6;border-left-color:#b43f42;background:#fdf2f1;color:#993739}
+.step{padding:20px;border-color:#dfe5ed;border-radius:5px}
+.step-number{border-color:#cbd8ea;border-radius:4px;color:#2859a6}
+.step h2{font-size:16px}
+.step p{color:#64748b}
+.primary,.secondary{border-radius:4px;background:#2859a6;color:#fff;font-weight:600}
+.primary:hover{background:#1d4789}
+.secondary{border-color:#cbd5e1;background:#fff;color:#263951}
+.text-button,.action-status{color:#2859a6}
+.copy-fallback{border-color:#dfe5ed;border-radius:4px}
+.copy-fallback textarea{border-color:#cbd5e1;border-radius:4px;color:#263951}
+.explanation{border-color:#dfe5ed;color:#64748b}
+.explanation summary{color:#32445c;font-weight:600}
+footer{color:#64748b}
+a:focus-visible,button:focus-visible,summary:focus-visible,textarea:focus-visible{outline:2px solid #3469be;outline-offset:3px}
+@media(max-width:420px){.setup-shell{padding:27px 18px 25px}.brand{margin-bottom:32px}h1{font-size:26px}.step{padding:18px 15px}}
+
+/* Keep the connection guide aligned with the light management console. */
+:root { color: #202124; background: #f8f9fa; }
+.brand-mark { background: #e8f0fe; color: #185abc; }
+.eyebrow, .intro, .step p, .explanation, footer { color: #5f6368; }
+.status { border-color: #d2e3fc; border-left-color: #1a73e8; background: #f2f7fe; color: #3c5b82; }
+.status[data-state="ready"] { border-color: #ceead6; border-left-color: #1e8e3e; background: #e6f4ea; color: #137333; }
+.step { border-color: #dadce0; border-radius: 8px; }
+.step-number { border-color: #d2e3fc; color: #1967d2; }
+.primary { background: #1a73e8; }
+.primary:hover { background: #155bb5; }
+.secondary { color: #3c4043; }
+.text-button, .action-status { color: #1967d2; }
+.explanation summary { color: #3c4043; }
