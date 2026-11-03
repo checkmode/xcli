@@ -15,6 +15,15 @@ DEPLOY = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux controlling-terminal semantics')
 class InteractiveTerminalTests(unittest.TestCase):
     def run_in_terminal(self, code, answers, *, piped_stdin):
+        # These are simulated installations; a host's real certificate and
+        # renewal hook must not influence the subprocess's preflight.
+        code = '''from pathlib import Path
+_exists, _is_symlink = Path.exists, Path.is_symlink
+def _certificate_path(path):
+    return str(path).startswith("/etc/letsencrypt/")
+Path.exists = lambda path: False if _certificate_path(path) else _exists(path)
+Path.is_symlink = lambda path: False if _certificate_path(path) else _is_symlink(path)
+''' + code
         sys.stdout.flush()
         sys.stderr.flush()
         pid, master = pty.fork()

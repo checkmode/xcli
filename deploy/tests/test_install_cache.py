@@ -79,6 +79,8 @@ class InstallCacheTests(unittest.TestCase):
                                    '--reality-sni', 'www.example.net'])
         with patch.object(install, 'resolve_domain'), \
              patch.object(install.Path, 'read_text', return_value='nameserver 1.1.1.1\n'), \
+             patch.object(install.Path, 'exists', return_value=False), \
+             patch.object(install.Path, 'is_symlink', return_value=False), \
              patch.object(install, 'ask', return_value='panel.example.com'):
             install.prepare_input(check)
         install.save_checked_answers(check, 'panel')
