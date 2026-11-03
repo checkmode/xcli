@@ -23,6 +23,29 @@ def group_names(config):
     return {item['name'] for item in config['proxy-groups']}
 
 
+def test_google_group_respects_published_custom_rules(fixture):
+    c = fixture['client']; c.login()
+    path = '/s/' + fixture['token']
+    original = clash(c, path)
+    assert '独立 · Google' not in group_names(original)
+    template = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    template['rules'] = ('DOMAIN,office.google.com,DIRECT\n'
+                         'DOMAIN-SUFFIX,gemini.google.com,独立 · AI\n'
+                         'DOMAIN,custom.example,独立 · Google\n')
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'google override', 'spec': template})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    config = clash(c, path)
+    assert '独立 · Google' in group_names(config)
+    rules = config['rules']
+    default = rules.index('RULE-SET,category-Google,独立 · Google')
+    assert rules.index('DOMAIN,office.google.com,DIRECT') < default
+    assert rules.index('DOMAIN-SUFFIX,gemini.google.com,独立 · AI') < default
+    assert rules.index('DOMAIN,custom.example,独立 · Google') < default
+    assert config['dns']['nameserver-policy']['office.google.com'][0].endswith('#DIRECT')
+    assert config['dns']['nameserver-policy']['+.gemini.google.com'][0].endswith('#独立 · AI')
+
+
 def test_oracle_cloud_system_group_precedes_template_and_uses_direct_dns(fixture):
     c = fixture['client']; c.login()
     path = '/s/' + fixture['token']

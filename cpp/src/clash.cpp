@@ -201,6 +201,7 @@ Json Backend::clash_configuration_for(const User& user,const Json& policy) const
   }
   apply_client_policy(result,routing_settings,user,outbound_names);
   if(policy.value("managed",false))apply_template_rules(result,policy,baseline_dns);
+  if(client_policy_enabled(routing_settings,user.id))apply_google_policy(result);
   apply_oracle_cloud_policy(result);
   return result;
 }

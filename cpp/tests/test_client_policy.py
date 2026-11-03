@@ -91,6 +91,31 @@ def validate_graph(groups, nodes):
         visit(name, [])
 
 
+@pytest.mark.parametrize('fixture', [POLICY], indirect=True)
+def test_google_group_preserves_ai_youtube_and_residential_choices(fixture):
+    clash, shadow, _ = exports(fixture)
+    groups = {g['name']: g for g in clash['proxy-groups']}
+    google = groups['独立 · Google']['proxies']
+    assert google[:2] == ['故障转移', '自动选择']
+    assert '住宅分组 · 新加坡' in google
+    assert all(node in google for node in ('REALITY', 'HTTPS', 'Hysteria 2'))
+    payload = clash['rule-providers']['category-Google']['payload']
+    assert 'DOMAIN-SUFFIX,google.com' in payload
+    assert 'DOMAIN-SUFFIX,googleapis.com' in payload
+    assert 'DOMAIN-SUFFIX,google.com.sg' in payload
+    rules = clash['rules']
+    google_rule = rules.index('RULE-SET,category-Google,独立 · Google')
+    assert rules.index('RULE-SET,category-AI,独立 · AI') < google_rule
+    assert rules.index('RULE-SET,category-YouTube,独立 · YouTube') < google_rule
+    assert rules[google_rule + 1] == 'RULE-SET,category-Google,REJECT'
+    dns = clash['dns']['nameserver-policy']
+    assert dns['+.google.com'][0].endswith('#独立 · Google')
+    assert dns['+.gemini.google.com'][0].endswith('#独立 · AI')
+    assert 'XCLI-独立 · Google = select,' in shadow
+    assert 'DOMAIN-SUFFIX,google.com,XCLI-独立 · Google' in shadow
+    assert shadow.index('DOMAIN-SUFFIX,gemini.google.com,XCLI-独立 · AI') < shadow.index('DOMAIN-SUFFIX,google.com,XCLI-独立 · Google')
+
+
 @pytest.mark.parametrize("fixture", [POLICY], indirect=True)
 def test_both_formats_share_ai_categories_nodes_and_priority(fixture):
     clash, shadow, links = exports(fixture)

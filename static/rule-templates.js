@@ -92,7 +92,7 @@ function parsedRuleLines(){
 }
 function ruleTargets(base){
   return ['DIRECT','REJECT','PROXY',...(base==='standard'?['STUN']:
-    ['EaseLian','独立 · AI','独立 · Telegram','独立 · YouTube','独立 · Netflix','独立 · 国外媒体','独立 · STUN','其他流量'])];
+    ['EaseLian','独立 · AI','独立 · Google','独立 · Telegram','独立 · YouTube','独立 · Netflix','独立 · 国外媒体','独立 · STUN','其他流量'])];
 }
 function updateRuleTargets(preferred){
   const select=$('#rule-entry-target'),targets=ruleTargets($('#rule-template-form').elements.base.value),old=preferred||select.value;

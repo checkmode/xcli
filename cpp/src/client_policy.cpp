@@ -130,6 +130,10 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
       if(std::find(choices.begin(),choices.end(),node)==choices.end())choices.push_back(node);
     select(independent(category.name),choices);
   }
+  Json google_choices=Json::array({"故障转移","自动选择"});
+  for(const auto& country:countries)google_choices.push_back(country);
+  for(const auto& node:servers)google_choices.push_back(node);
+  select(independent("Google"),google_choices);
   select("其他流量",Json::array({"PROXY","DIRECT"}));
   for(const auto& group:groups)if(group.at("name")!="PROXY")top.push_back(group);
   std::set<std::string> names;
@@ -174,6 +178,35 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   old_rules.back()="MATCH,其他流量";
 }
 
+void apply_google_policy(Json& config) {
+  const std::string group="独立 · Google",provider="category-Google";
+  auto& providers=config["rule-providers"];
+  if(providers.contains(provider))throw HttpError(503,"Google policy provider conflict");
+  const auto domains=Json::array({"google.com","google.cn","google.com.hk","google.com.sg","google.com.tw",
+    "google.com.au","google.co.jp","google.co.uk","google.co.in","google.com.br","google.de","google.fr",
+    "g.co","android.com","googleapis.com","gstatic.com","googleusercontent.com","googleplay.com","ggpht.com",
+    "gvt1.com","gvt2.com","google-analytics.com","googletagmanager.com","googleadservices.com",
+    "googlesyndication.com"});
+  Json payload=Json::array();
+  for(const auto& domain:domains)payload.push_back("DOMAIN-SUFFIX,"+domain.get<std::string>());
+  providers[provider]={{"type","inline"},{"behavior","classical"},{"payload",payload}};
+  auto& rules=config["rules"];
+  auto position=std::find(rules.begin(),rules.end(),Json("GEOSITE,private,DIRECT"));
+  position=rules.insert(position,"RULE-SET,"+provider+","+group);
+  rules.insert(++position,"RULE-SET,"+provider+",REJECT");
+  auto& dns=config["dns"]["nameserver-policy"];
+  Json ordered=Json::object();
+  for(auto it=dns.begin();it!=dns.end();++it)
+    if(!it.key().starts_with("geosite:"))ordered[it.key()]=it.value();
+  for(const auto& domain:domains) {
+    const auto key="+."+domain.get<std::string>();
+    if(!ordered.contains(key))ordered[key]=Json::array({"https://1.1.1.1/dns-query#"+group,"https://1.0.0.1/dns-query#"+group});
+  }
+  for(auto it=dns.begin();it!=dns.end();++it)
+    if(it.key().starts_with("geosite:"))ordered[it.key()]=it.value();
+  dns=std::move(ordered);
+}
+
 namespace {
 struct EditableRule {std::string type, value, target;bool no_resolve=false,explicit_resolution=false;};
 
@@ -197,7 +230,7 @@ bool valid_network(const std::string& value,bool v6) {
 std::vector<EditableRule> parse_editable_rules(const std::string& text,const std::string& base) {
   if(text.size()>14000)throw HttpError(422,"规则内容过长，最多 14000 字节");
   const std::set<std::string> common={"DIRECT","REJECT","PROXY"};
-  const std::set<std::string> independent_targets={"EaseLian","独立 · AI","独立 · Telegram",
+  const std::set<std::string> independent_targets={"EaseLian","独立 · AI","独立 · Google","独立 · Telegram",
     "独立 · YouTube","独立 · Netflix","独立 · 国外媒体","独立 · STUN","其他流量"};
   std::vector<EditableRule> result;std::istringstream input(text);std::string line;std::size_t line_number=0;
   const std::regex domain(R"([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)");
