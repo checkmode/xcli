@@ -1,5 +1,8 @@
 name: Independent node installation
 on:
+  push:
+    branches: [main]
+    paths: ['install.sh', 'deploy/**', 'scripts/node_*.py', 'tests/node/**', 'cpp/**', 'static/**', '.github/workflows/independent-node.yml']
   pull_request:
     paths: ['install.sh', 'deploy/**', 'scripts/node_*.py', 'tests/node/**', 'cpp/**', 'static/**', '.github/workflows/independent-node.yml']
   workflow_dispatch:
