@@ -17,7 +17,7 @@ def port():
         return sock.getsockname()[1]
 
 
-def verify(binary, candidate, user_id, origin):
+def verify(binary, candidate, user_id, origin, all_users=False):
     server_port = port()
     identities = {
         'target': user_id + '.12345678@hysteria2',
@@ -65,7 +65,7 @@ def verify(binary, candidate, user_id, origin):
                     raise RuntimeError('An isolated listener did not become ready')
             cases = [
                 ('target-https', 'target', origin + '/', True),
-                ('other-account-denied', 'other', origin + '/', False),
+                ('other-account-allowed' if all_users else 'other-account-denied', 'other', origin + '/', all_users),
                 ('malformed-email-denied', 'invalid-suffix', origin + '/', False),
                 ('target-http-denied', 'target', origin.replace('https://', 'http://') + '/', False),
                 ('target-private-denied', 'target', 'http://127.0.0.1:8080/healthz', False),
@@ -101,5 +101,6 @@ if __name__ == '__main__':
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--user-id', required=True)
     parser.add_argument('--origin', required=True)
+    parser.add_argument('--all-users', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(verify(args.binary, json.loads(args.candidate.read_text()), args.user_id, args.origin), indent=2))
+    print(json.dumps(verify(args.binary, json.loads(args.candidate.read_text()), args.user_id, args.origin, args.all_users), indent=2))

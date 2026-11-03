@@ -9,6 +9,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from subscription_https import all_users_rule_for
 
 XRAY_VERSION = '26.10.21'
 XRAY_ASSETS = {
@@ -76,7 +77,7 @@ def core_config(settings):
              'streamSettings': {'network': 'ws', 'wsSettings': {'path': s['ws_path']}}}],
         'outbounds': [{'tag': 'direct', 'protocol': 'freedom', 'streamSettings': {'sockopt': {'domainStrategy': 'UseIPv4'}}},
                       {'tag': 'blocked', 'protocol': 'blackhole'}],
-        'routing': {'domainStrategy': 'IPOnDemand', 'rules': [{'type': 'field', 'outboundTag': 'blocked',
+        'routing': {'domainStrategy': 'IPOnDemand', 'rules': [all_users_rule_for(s['public_ip'], s.get('public_port', 443)), {'type': 'field', 'outboundTag': 'blocked',
             'ip': BLOCKED_V4 + [s['public_ip'] + '/32', '::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8']}]}}
     if s.get('hysteria2_port', 0):
         result['inbounds'].append(hysteria_inbound(s['hysteria2_port']))
@@ -152,6 +153,7 @@ start)
     iptables -w -F XG_OUT
 @@DNS@@
     iptables -w -A XG_OUT -d 127.0.0.1/32 -p tcp -m multiport --dports 8080,10085,10080,10443 -j RETURN
+    iptables -w -A XG_OUT -d @@PUBLIC_ADDRESS@@/32 -p tcp --dport @@PUBLIC_PORT@@ -j RETURN
     iptables -w -A XG_OUT -m addrtype --dst-type LOCAL -j REJECT
     for net in @@NETWORKS@@; do iptables -w -A XG_OUT -d "$net" -j REJECT; done
     iptables -w -C OUTPUT -m owner --uid-owner xgateway -m conntrack --ctstate NEW -j XG_OUT 2>/dev/null || iptables -w -I OUTPUT 1 -m owner --uid-owner xgateway -m conntrack --ctstate NEW -j XG_OUT
@@ -168,7 +170,7 @@ stop)
     ;;
 *) exit 2 ;;
 esac
-'''.replace('@@DNS@@', exceptions).replace('@@NETWORKS@@', networks).replace('@@PUBLIC_PORT@@', str(public_port))
+'''.replace('@@DNS@@', exceptions).replace('@@NETWORKS@@', networks).replace('@@PUBLIC_PORT@@', str(public_port)).replace('@@PUBLIC_ADDRESS@@', address)
 
 
 def private_file(path, data, mode=0o600):

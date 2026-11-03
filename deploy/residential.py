@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from subscription_https import is_bootstrap_rule
 
 NGINX_CONFIG = Path('/etc/nginx/xcli.conf') if Path('/etc/nginx/xcli.conf').is_file() else Path('/etc/nginx/nginx.conf')
 FILES = {
@@ -98,7 +99,8 @@ def configure(settings, core, monitor, nginx, pool):
     proxy_buffering off;
 }}''')
     rules = core['routing']['rules']
-    if any(rule.get('outboundTag') != 'blocked' or not rule.get('ip') for rule in rules):
+    if any((rule.get('outboundTag') != 'blocked' or not rule.get('ip')) and
+           not is_bootstrap_rule(rule, settings, core) for rule in rules):
         raise ValueError('Unexpected pre-existing routing rules; review before adding exits')
     rules.append({'type': 'field', 'inboundTag': sorted(tags), 'network': 'udp', 'outboundTag': 'blocked'})
     rules.extend({'type': 'field', 'inboundTag': [entry['tag']], 'network': 'tcp', 'outboundTag': entry['tag'] + '-exit'} for entry in exits)

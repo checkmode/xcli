@@ -18,6 +18,7 @@ import sys
 import time
 
 from residential import private_write, replace, run
+from subscription_https import is_bootstrap_rule
 
 REGISTRY = [
     ('US', '美国', '北美', 'residential-11', 10110, 10120),
@@ -74,7 +75,7 @@ def configure(settings, core, nginx, firewall, expand=False):
     rules = core['routing']['rules']
     # Existing generic routing must not consume the new entrances before their own rules.
     for rule in rules:
-        if not rule.get('inboundTag') and not (rule.get('ip') and rule.get('outboundTag') == 'blocked'):
+        if not rule.get('inboundTag') and not (rule.get('ip') and rule.get('outboundTag') == 'blocked') and not is_bootstrap_rule(rule, settings, core):
             raise ValueError('Custom catch-all routing requires review before installation')
     locations, added = [], []
     for country, label, group, tag, port, upstream in REGISTRY:

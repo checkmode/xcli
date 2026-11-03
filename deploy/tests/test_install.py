@@ -59,6 +59,8 @@ class ConfigurationTests(unittest.TestCase):
         nginx = provision.render_nginx(SOURCE, settings, '/test/fullchain.pem', '/test/privkey.pem')
         self.assertIn('listen 1443; ssl_preread', nginx)
         firewall = provision.render_firewall('8.8.4.4', ['127.0.0.53'], 1443)
+        self.assertEqual(provision.core_config(settings)['routing']['rules'][0]['port'], '1443')
+        self.assertLess(firewall.index('-d 8.8.4.4/32 -p tcp --dport 1443 -j RETURN'), firewall.index('--dst-type LOCAL'))
         self.assertIn('--dports 80,1443', firewall)
         self.assertIn('-p udp --dport 1443 -j ACCEPT', firewall)
         relayed = provision.settings_for('panel.example.com', '8.8.4.4', 'www.bing.com',
@@ -90,7 +92,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(hy2['settings']['clients'], [])
         self.assertEqual(hy2['streamSettings']['network'], 'hysteria')
         self.assertEqual(hy2['streamSettings']['finalmask']['quicParams']['congestion'], 'bbr')
-        blocked = [ipaddress.ip_network(value) for value in config['routing']['rules'][0]['ip']]
+        self.assertEqual(config['routing']['rules'][0], provision.all_users_rule_for(self.settings['public_ip']))
+        blocked = [ipaddress.ip_network(value) for value in config['routing']['rules'][1]['ip']]
         for value in ('8.8.4.4', '169.254.169.254', '10.1.2.3', '192.168.1.1', 'fd00::1', '::1'):
             self.assertTrue(any(ipaddress.ip_address(value) in net for net in blocked))
 

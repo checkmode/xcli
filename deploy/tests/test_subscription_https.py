@@ -27,6 +27,25 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual((rule['network'], rule['port']), ('tcp', '443'))
         self.assertEqual(len(rule['user']), 1)
 
+    def test_all_users_migrates_scoped_rule_without_touching_other_routes(self):
+        old = s.core_candidate(self.core, '8.8.4.4', self.user)
+        before = copy.deepcopy(old)
+        new = s.all_users_candidate(old, '8.8.4.4')
+        self.assertEqual(old, before)
+        self.assertEqual(new['routing']['rules'], [s.all_users_rule_for('8.8.4.4')] + self.core['routing']['rules'])
+        self.assertEqual(s.all_users_candidate(new, '8.8.4.4'), new)
+        for bad in ({'ip': ['0.0.0.0/0']}, {'user': ['regexp:.*']}, {'port': '1-65535'}, {'network': 'tcp,udp'}):
+            broken = copy.deepcopy(new); broken['routing']['rules'][0].update(bad)
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                s.all_users_candidate(broken, '8.8.4.4')
+        broken = copy.deepcopy(old); broken['routing']['rules'][0]['port'] = '1-65535'
+        with self.assertRaises(ValueError): s.all_users_candidate(broken, '8.8.4.4')
+        settings = {'public_ip': '8.8.4.4'}
+        self.assertTrue(s.is_bootstrap_rule(new['routing']['rules'][0], settings, new))
+        for bad in ({'ip': ['0.0.0.0/0']}, {'user': ['regexp:.*']}, {'port': '1-65535'}):
+            altered = copy.deepcopy(new['routing']['rules'][0]); altered.update(bad)
+            self.assertFalse(s.is_bootstrap_rule(altered, settings, new))
+
     def test_custom_public_port_stays_scoped_to_self_address(self):
         result = s.core_candidate(self.core, '8.8.4.4', self.user, 1443)
         self.assertEqual(result['routing']['rules'][0]['port'], '1443')
@@ -63,6 +82,21 @@ class BootstrapTests(unittest.TestCase):
                 s.firewall_candidate(bad, '8.8.4.4')
         with self.assertRaises(ValueError):
             s.firewall_candidate(source, '224.0.0.1')
+
+    def test_exception_precedes_local_address_reject(self):
+        source = ('#!/bin/sh\n'
+                  '    iptables -w -A XG_OUT -m addrtype --dst-type LOCAL -j REJECT\n'
+                  '    for net in 10.0.0.0/8 8.8.4.4/32; do iptables -w -A XG_OUT -d "$net" -j REJECT; done\n')
+        result = s.firewall_candidate(source, '8.8.4.4')
+        self.assertLess(result.index('--dport 443 -j RETURN'), result.index('--dst-type LOCAL'))
+        with self.assertRaises(ValueError):
+            s.firewall_candidate(source.replace('    for net',
+                '    iptables -w -A XG_OUT -m addrtype --dst-type LOCAL -j REJECT\n    for net'), '8.8.4.4')
+        self.assertEqual(s.all_users_firewall_candidate(result, '8.8.4.4'), result)
+        command = '    iptables -w -A XG_OUT -d 8.8.4.4/32 -p tcp --dport 443 -j RETURN\n'
+        late = source.replace('    for net', command + '    for net')
+        self.assertEqual(s.all_users_firewall_candidate(late, '8.8.4.4'), result)
+        with self.assertRaises(ValueError): s.all_users_firewall_candidate(result + command, '8.8.4.4')
 
 
 if __name__ == '__main__':

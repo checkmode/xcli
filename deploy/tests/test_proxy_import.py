@@ -78,6 +78,16 @@ class ProxyImportTests(unittest.TestCase):
             probe.assert_called_once_with(self.proxies[0],'socks')
             self.assertEqual(publish.call_args_list[-1].kwargs['status'],'ready')
 
+    def test_all_user_bootstrap_rule_is_accepted_but_cannot_be_broadened(self):
+        settings=json.loads(self.old['settings']);base=json.loads(self.old['core'])
+        self.assertEqual(base['routing']['rules'][0],subscription_https.all_users_rule_for(settings['public_ip']))
+        new,_=imp.configure(self.old,self.proxies,'socks','Fixture',self.rows)
+        self.assertEqual(json.loads(new['core'])['routing']['rules'][0],base['routing']['rules'][0])
+        for bad in ({'ip':['0.0.0.0/0']},{'user':['regexp:.*']},{'port':'1-65535'},{'network':'tcp,udp'}):
+            altered=copy.deepcopy(base);altered['routing']['rules'][0].update(bad)
+            with self.subTest(bad=bad),self.assertRaises(imp.ImportErrorSafe):
+                imp.configure({**self.old,'core':json.dumps(altered).encode()},self.proxies,'socks','Fixture',self.rows)
+
     def test_subscription_https_rule_cannot_hide_broader_routes(self):
         settings=json.loads(self.old['settings'])
         base=subscription_https.core_candidate(json.loads(self.old['core']),settings['public_ip'],'a'*32)
