@@ -74,7 +74,11 @@ HELP
             https://api.github.com/repos/checkmode/xcli/commits/main -o "$work/revision.json"
         sha=$(python3 -c 'import json,re,sys; s=json.load(open(sys.argv[1]))["sha"]; assert re.fullmatch("[0-9a-f]{40}",s); print(s)' "$work/revision.json")
     fi
-    printf '正在下载固定源码 %s，构建完整版本后安装到 /opt/xcli/releases/\n' "${sha:0:12}"
+    if ((check_only)); then
+        printf '正在下载固定源码 %s，随后进行只读预检查（不会安装软件或修改系统配置）\n' "${sha:0:12}"
+    else
+        printf '正在下载固定源码 %s，构建完整版本后安装到 /opt/xcli/releases/\n' "${sha:0:12}"
+    fi
     curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --connect-timeout 10 --max-time 180 \
         "https://codeload.github.com/checkmode/xcli/tar.gz/$sha" -o "$work/source.tar.gz"
     python3 - "$work" "$sha" <<'PY'
