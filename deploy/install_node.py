@@ -41,7 +41,8 @@ def node_preflight(args):
 
 
 def node_input(args):
-    args.panel = panel_origin(args.panel or (install.ask('已有面板 HTTPS 地址（例如 https://panel.example.com）', check_only=args.check) if not args.yes else ''))
+    defaults = getattr(args, 'input_defaults', {})
+    args.panel = panel_origin(args.panel or (install.ask('已有面板 HTTPS 地址（例如 https://panel.example.com）', defaults.get('panel'), check_only=args.check) if not args.yes else ''))
     # The generic installer asks about network tuning; node mode does not change host sysctls.
     args.tune_network = False
     return install.prepare_input(args, role='node')
@@ -199,13 +200,19 @@ echo '节点服务已停止；身份、配置、证书、账本及系统软件�
 def main(argv=None):
     args = install.arguments(argv)
     args.source = args.source.resolve()
+    install.use_cached_answers(args, 'node')
     arch = node_preflight(args)
-    resolvers = node_input(args)
+    try:
+        resolvers = node_input(args)
+    except (OSError, ValueError, RuntimeError):
+        install.save_partial_answers_on_failure(args, 'node')
+        raise
     print(f'检查通过：Ubuntu {platform.freedesktop_os_release()["VERSION_ID"]} / {arch}\n'
           f'节点域名：{args.domain}；公网 IPv4：{args.public_ip}；面板：{args.panel}\n'
           f'将安装 Xray、节点代理、Nginx、证书和专属防火墙规则。请开放 TCP 80/{args.public_port} 和 UDP {args.public_port}。', flush=True)
     if args.check:
-        print('仅检查模式结束，没有安装或修改系统配置。')
+        install.save_checked_answers(args, 'node')
+        print('仅检查模式结束，没有安装或修改服务配置。')
         return 0
     if not args.yes and install.ask('确认开始安装？输入 yes') != 'yes':
         raise ValueError('安装已取消')

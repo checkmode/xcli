@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import zipfile
 
 from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
@@ -24,6 +25,7 @@ from provision import (XRAY_ASSETS, XRAY_VERSION, core_config, domain_name,
                        render_firewall, render_nginx, settings_for, write_json)
 from certificate import install_tls
 from build_environment import BUILD_USER, ensure_build_user
+import install_cache
 import release
 
 Path = pathlib.Path
@@ -62,7 +64,8 @@ def arguments(argv=None):
     parser.add_argument('--agree-tos', action='store_true')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--check', action='store_true')
-    parser.add_argument('--coexist', action='store_true', help='使用独立端口和 Nginx 配置，保留现有服务')
+    parser.add_argument('--coexist', action=argparse.BooleanOptionalAction, default=False, help='使用独立端口和 Nginx 配置，保留现有服务')
+    parser.add_argument('--no-cache', action='store_true', help='忽略安装输入缓存；检查时也不写入')
     parser.add_argument('--public-port', type=int, default=443)
     parser.add_argument('--bundle', type=Path, help='已构建并通过校验的完整发布包')
     parser.add_argument('--sha256', help='发布包的独立 SHA-256 摘要')
@@ -70,7 +73,89 @@ def arguments(argv=None):
     parser.add_argument('--private-key', type=Path)
     parser.add_argument('--tune-network', action=argparse.BooleanOptionalAction, default=None,
                         help='可选 BBR / fq 和至少 16 MiB UDP 缓冲上限；保存原值以便回退')
-    return parser.parse_args(argv)
+    supplied = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(supplied)
+    args.provided_options = {item.split('=', 1)[0] for item in supplied if item.startswith('--')}
+    args.input_defaults = {}
+    args.cached_certificate = False
+    return args
+
+
+def use_cached_answers(args, role):
+    """Cached values are interactive defaults; --yes never consumes them."""
+    if args.no_cache or args.yes:
+        return
+    try:
+        saved = install_cache.load().get(role, {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        print('安装输入缓存不可读取，已忽略；可使用 --no-cache 跳过缓存。', file=sys.stderr)
+        return
+    args.input_defaults = saved
+    provided = args.provided_options
+    for name, flags in (('reality_sni', {'--reality-sni'}), ('public_port', {'--public-port'}),
+                        ('dns_relay_ip', {'--dns-relay-ip'}), ('coexist', {'--coexist', '--no-coexist'}),
+                        ('tune_network', {'--tune-network', '--no-tune-network'})):
+        if not provided.intersection(flags) and name in saved:
+            setattr(args, name, saved[name])
+    for names, flags in ((('certificate', 'private_key'), {'--certificate', '--private-key'}),
+                         (('bundle', 'sha256'), {'--bundle', '--sha256'})):
+        if not provided.intersection(flags) and all(name in saved for name in names):
+            for name in names:
+                setattr(args, name, Path(saved[name]) if name in ('certificate', 'private_key', 'bundle') else saved[name])
+            if names[0] == 'certificate':
+                args.cached_certificate = True
+
+
+def save_checked_answers(args, role, *, partial=False):
+    if args.no_cache:
+        return
+    if partial:
+        # Keep usable answers after a failed DNS or certificate check, but do
+        # not cache malformed input or an origin containing credentials.
+        try:
+            domain_name(args.domain or '')
+            public_ipv4(args.public_ip or '')
+            domain_name(args.reality_sni)
+            if role == 'node':
+                parsed = urllib.parse.urlsplit(args.panel or '')
+                if (parsed.scheme != 'https' or not parsed.hostname or parsed.username is not None or parsed.password is not None
+                        or parsed.path not in ('', '/') or parsed.query or parsed.fragment or (parsed.port is not None and not 1 <= parsed.port <= 65535)):
+                    return
+        except (ValueError, TypeError):
+            return
+    names = ('domain', 'public_ip', 'reality_sni', 'dns_relay_ip', 'public_port', 'coexist',
+             'tune_network', 'certificate', 'private_key', 'bundle', 'sha256')
+    if role == 'node':
+        names += ('panel',)
+    profile = {}
+    for name in names:
+        value = getattr(args, name, None)
+        if value is not None and value != '':
+            profile[name] = str(value) if isinstance(value, Path) else value
+    if args.email and re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) and not args.email.startswith('-'):
+        profile['email'] = args.email
+    elif args.no_email:
+        profile['no_email'] = True
+    elif not args.provided_options.intersection({'--email', '--no-email'}):
+        # --check does not ask for an email. Preserve an earlier choice only
+        # when this is still the same domain.
+        previous = install_cache.load().get(role, {})
+        if previous.get('domain') == profile.get('domain'):
+            if previous.get('email'):
+                profile['email'] = previous['email']
+            elif previous.get('no_email') is True:
+                profile['no_email'] = True
+    install_cache.save(role, profile)
+    print(f'安装输入已保存到 {install_cache.CACHE_PATH}（仅 root 可读）。', flush=True)
+
+
+def save_partial_answers_on_failure(args, role):
+    if not args.check:
+        return
+    try:
+        save_checked_answers(args, role, partial=True)
+    except (OSError, ValueError):
+        print('无法保存安装输入缓存；原有缓存保持不变。', file=sys.stderr, flush=True)
 
 
 def ask(label, default=None, *, check_only=False):
@@ -207,16 +292,23 @@ def preflight(args):
 
 
 def prepare_input(args, role='panel'):
-    args.domain = domain_name(args.domain or (ask('节点域名' if role == 'node' else '面板域名', check_only=args.check) if not args.yes else ''))
+    defaults = getattr(args, 'input_defaults', {})
+    args.domain = domain_name(args.domain or (ask('节点域名' if role == 'node' else '面板域名', defaults.get('domain'), check_only=args.check) if not args.yes else ''))
+    if getattr(args, 'cached_certificate', False) and defaults.get('domain') != args.domain:
+        # A new hostname must not silently inherit the old hostname's TLS files.
+        args.certificate = None
+        args.private_key = None
     args.reality_sni = domain_name(args.reality_sni)
     if args.reality_sni == args.domain:
         raise ValueError('REALITY 目标域名不能与面板域名相同')
     if not args.public_ip:
-        try:
-            detected = subprocess.check_output(['curl', '-q', '-4', '-fsS', '--noproxy', '*',
-                '--connect-timeout', '5', '--max-time', '10', 'https://api.ipify.org'], timeout=12, stderr=subprocess.DEVNULL).decode().strip()
-        except (OSError, subprocess.SubprocessError):
-            detected = None
+        detected = defaults.get('public_ip')
+        if not detected:
+            try:
+                detected = subprocess.check_output(['curl', '-q', '-4', '-fsS', '--noproxy', '*',
+                    '--connect-timeout', '5', '--max-time', '10', 'https://api.ipify.org'], timeout=12, stderr=subprocess.DEVNULL).decode().strip()
+            except (OSError, subprocess.SubprocessError):
+                detected = None
         args.public_ip = detected if args.yes else ask('本机公网 IPv4', detected, check_only=args.check)
     args.public_ip = public_ipv4(args.public_ip or '')
     if args.dns_relay_ip:
@@ -233,11 +325,16 @@ def prepare_input(args, role='panel'):
                      Path('/etc/letsencrypt/renewal-hooks/deploy/xcli-nginx')):
             if path.exists() or path.is_symlink():
                 raise ValueError('已有证书配置，拒绝覆盖：' + str(path))
+        if args.no_email and args.email:
+            raise ValueError('--email 和 --no-email 不能同时使用')
+        if args.email and (not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-')):
+            raise ValueError('请提供有效的证书账户邮箱')
         if not args.check:
-            if args.no_email and args.email:
-                raise ValueError('--email 和 --no-email 不能同时使用')
             if not args.no_email:
-                args.email = args.email or (ask("Let's Encrypt 账户邮箱（留空则不发送到期通知）") if not args.yes else '')
+                email_default = defaults.get('email') or ('-' if defaults.get('no_email') else None)
+                args.email = args.email or (ask("Let's Encrypt 账户邮箱（输入 - 表示不发送到期通知）", email_default) if not args.yes else '')
+                if args.email == '-':
+                    args.email = ''
                 if not args.email and not args.yes:
                     args.no_email = True
                 elif not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
@@ -552,8 +649,13 @@ def main(argv=None):
     if args.panel:
         raise ValueError('--panel 仅用于节点安装模式')
     args.source = args.source.resolve()
+    use_cached_answers(args, 'panel')
     arch = preflight(args)
-    resolvers = prepare_input(args)
+    try:
+        resolvers = prepare_input(args)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        save_partial_answers_on_failure(args, 'panel')
+        raise
     print(f'检查通过：Ubuntu {platform.freedesktop_os_release()["VERSION_ID"]} / {arch}\n'
           f'面板：https://{args.domain}{":" + str(args.public_port) if args.public_port != 443 else ""}  公网 IPv4：{args.public_ip}\n'
           + (f'DNS 转发主机 IPv4：{args.dns_relay_ip}\n' if args.dns_relay_ip else '') +
@@ -562,7 +664,8 @@ def main(argv=None):
           '将安装依赖、Xray、C++ 面板、Nginx、专用账号、探测服务及专属防火墙规则。\n'
           f'请确保云安全组和上游网络允许 TCP 80 / {args.public_port} 及 UDP {args.public_port} 入站。', flush=True)
     if args.check:
-        print('只检查模式结束；未安装软件或修改系统配置。')
+        save_checked_answers(args, 'panel')
+        print('只检查模式结束；未安装软件或修改服务配置。')
         return 0
     if not args.yes and ask('确认在这台全新服务器安装？输入 yes') != 'yes':
         raise ValueError('已取消安装')

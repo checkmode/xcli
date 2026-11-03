@@ -242,13 +242,15 @@ class PreflightTests(unittest.TestCase):
             install.prepare_input(args)
         resolve.assert_called_once_with('panel.example.com', '1.1.1.1')
 
-    def test_readonly_check_does_not_construct_installer(self):
+    def test_check_saves_answers_without_constructing_installer(self):
         with patch.object(install, 'preflight', return_value='x86_64'), \
              patch.object(install, 'prepare_input', return_value=['127.0.0.53']), \
+             patch.object(install, 'save_checked_answers') as save, \
              patch.object(install.platform, 'freedesktop_os_release', return_value={'VERSION_ID': '24.04'}, create=True), \
              patch.object(install, 'Installer') as installer:
             self.assertEqual(install.main(['--check', '--yes', '--domain', 'panel.example.com', '--public-ip', '8.8.4.4']), 0)
             installer.assert_not_called()
+            self.assertEqual(save.call_args.args[1], 'panel')
 
     def test_help_available_without_root(self):
         result = subprocess.run(['bash', str(SOURCE / 'install.sh'), '--help'], capture_output=True, check=True)

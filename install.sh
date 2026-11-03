@@ -3,8 +3,33 @@
 # Keep execution inside main so a truncated download cannot start installation.
 set -euo pipefail
 
+cache_field() {
+    command -v python3 >/dev/null || return 0
+    python3 - "$1" "${2:-}" 2>/dev/null <<'PY' || true
+import json, os, stat, sys
+path='/root/.cache/xcli-install/answers.json'
+try:
+    directory=os.lstat(os.path.dirname(path))
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid!=os.geteuid() or directory.st_mode & 0o077:
+        raise ValueError
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        info=os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077 or info.st_size>16384:
+            raise ValueError
+        data=json.load(stream)
+    if data.get('version')!=1: raise ValueError
+    if sys.argv[1]=='role' and data.get('last_role') in ('panel','node'):
+        print(data['last_role'])
+    elif sys.argv[1]=='coexist' and sys.argv[2] in ('panel','node'):
+        print('true' if data.get(sys.argv[2],{}).get('coexist') is True else 'false')
+except (OSError, ValueError, TypeError, AttributeError):
+    pass
+PY
+}
+
 main() {
-    local ref='' role='' noninteractive=0 check_only=0 coexist=0 work sha repo_root
+    local ref='' role='' noninteractive=0 check_only=0 coexist=0 coexist_explicit=0 no_cache=0 work sha repo_root default_role
     local script_origin="${BASH_SOURCE[0]:-}"
     local -a args=()
     while (($#)); do
@@ -32,10 +57,12 @@ xcli 一键安装（无需 git clone）
   --tune-network        可选 BBR / fq 与 UDP 缓冲调优，保存原值以便回退
   --no-tune-network     保留现有网络参数（无人值守时默认）
   --coexist             在已有服务的主机使用独立 Nginx 配置
+  --no-coexist          不使用缓存中的共存设置
+  --no-cache            忽略输入缓存，检查时也不写入
   --public-port PORT    独立的 TCP / UDP 入口端口（默认 443）
   --bundle FILE         使用匹配系统及提交的预构建版本包
   --sha256 SHA256       预构建版本包的 SHA-256
-  --check               只检查环境、端口和 DNS，不安装软件或改配置
+  --check               检查环境、端口和 DNS，并缓存安装输入，不安装软件或改服务配置
   --ref COMMIT          安装指定的 40 位 Git 提交；克隆仓库默认当前提交，否则使用 main
   --help                显示帮助
 
@@ -48,14 +75,19 @@ HELP
             --source|--commit) echo '该选项仅供仓库内安装器使用' >&2; return 1 ;;
             --yes) noninteractive=1; args+=("$1"); shift ;;
             --check) check_only=1; args+=("$1"); shift ;;
-            --coexist) coexist=1; args+=("$1"); shift ;;
+            --coexist) coexist=1; coexist_explicit=1; args+=("$1"); shift ;;
+            --no-coexist) coexist=0; coexist_explicit=1; args+=("$1"); shift ;;
+            --no-cache) no_cache=1; args+=("$1"); shift ;;
             *) args+=("$1"); shift ;;
         esac
     done
     if [[ -z "$role" && $noninteractive == 0 ]]; then
+        default_role=1
+        if ((no_cache == 0)) && [[ $(cache_field role) == node ]]; then default_role=2; fi
         if [[ -r /dev/tty && -w /dev/tty ]] && { exec 3<>/dev/tty; } 2>/dev/null; then
-            printf '安装模式：\n  1) 面板及本机节点\n  2) 独立服务器节点\n请选择 [1]: ' >&3
+            printf '安装模式：\n  1) 面板及本机节点\n  2) 独立服务器节点\n请选择 [%s]: ' "$default_role" >&3
             IFS= read -r role <&3 || { echo '输入已结束，安装取消' >&2; return 1; }
+            role=${role:-$default_role}
             exec 3>&-
         else
             echo '无法访问交互终端；请指定 --role panel 或 --role node 及必需参数。' >&2
@@ -63,6 +95,9 @@ HELP
         fi
     fi
     case "$role" in ''|1|panel) role=panel ;; 2|node) role=node ;; *) echo '安装模式必须为 panel 或 node。' >&2; return 1 ;; esac
+    if ((noninteractive == 0 && no_cache == 0 && coexist_explicit == 0)) && [[ $(cache_field coexist "$role") == true ]]; then
+        coexist=1
+    fi
     [[ $EUID == 0 ]] || { echo '请使用 root 或通过 sudo bash 运行安装器。' >&2; return 1; }
     [[ $(uname -s) == Linux && -f /etc/os-release && -d /run/systemd/system ]] || { echo '需要使用 systemd 的 Ubuntu 服务器。' >&2; return 1; }
     # shellcheck disable=SC1091
@@ -99,7 +134,11 @@ HELP
         sha=$(python3 -c 'import json,re,sys; s=json.load(open(sys.argv[1]))["sha"]; assert re.fullmatch("[0-9a-f]{40}",s); print(s)' "$work/revision.json")
     fi
     if ((check_only)); then
-        printf '正在下载固定源码 %s，随后进行只读预检查（不会安装软件或修改系统配置）\n' "${sha:0:12}"
+        if ((no_cache)); then
+            printf '正在下载固定源码 %s，随后检查环境（不会缓存输入或修改服务配置）\n' "${sha:0:12}"
+        else
+            printf '正在下载固定源码 %s，随后检查环境并缓存安装输入（不会安装软件或修改服务配置）\n' "${sha:0:12}"
+        fi
     elif [[ $role == node ]]; then
         printf '正在下载固定源码 %s，随后安装独立服务器节点\n' "${sha:0:12}"
     else

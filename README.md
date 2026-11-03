@@ -30,7 +30,7 @@ sudo bash ./install.sh
 
 该命令自动选择当前检出的 Git 提交，并从 GitHub 下载对应源码；该提交必须已存在于 GitHub，本地未提交的修改不会包含在安装包中。通过 `curl | bash` 运行时，默认使用 GitHub `main` 的最新提交；也可用 `--ref` 指定完整提交编号。
 
-交互模式可以将证书邮箱留空：此时仍启用证书自动续期，但没有到期邮件通知。通过 SSH 运行时需要分配交互终端；若没有终端，请使用下面的无人值守参数。
+交互模式可以将证书邮箱留空：此时仍启用证书自动续期，但没有到期邮件通知。若已有缓存邮箱，输入 `-` 可改为不提供邮箱。通过 SSH 运行时需要分配交互终端；若没有终端，请使用下面的无人值守参数。
 
 安装完成后访问输出的 HTTPS 地址。管理员用户名为 `admin`；随机初始密码仅保存在服务器的 root 私有文件中，使用下面的命令查看：
 
@@ -70,12 +70,16 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
   --agree-tos --yes
 ```
 
-`203.0.113.10` 仅用于文档示例，安装器会拒绝示例地址和内网地址。可先只检查环境、端口和 DNS；此模式不安装软件、不修改系统配置：
+`203.0.113.10` 仅用于文档示例，安装器会拒绝示例地址和内网地址。可先检查环境、端口和 DNS；此模式不安装软件或修改服务配置，会在本机保存安装输入：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- \
   --domain panel.example.com --public-ip 203.0.113.10 --check --yes
 ```
+
+检查后可直接运行 `sudo bash ./install.sh`：安装器会分别记住面板和独立节点的输入，并在交互提示中显示域名、公网 IP、节点连接的面板地址等默认值；按回车沿用，也可以输入新值。通过参数提供的邮箱、端口、REALITY 目标及其他安装选项也会记住。检查未通过时，已通过格式校验的域名和 IP 仍会保存，便于修正 DNS 后重试。安装时仍需明确同意证书服务条款并确认开始安装。
+
+缓存位于 `/root/.cache/xcli-install/answers.json`，仅 root 可读；证书和私钥只保存文件路径，不保存文件内容或节点密钥。命令行明确提供的选项优先于缓存，`--yes` 无人值守安装不会自动使用缓存。加上 `--no-cache` 可忽略缓存，检查时也不会写入；需要删除缓存时运行 `sudo rm /root/.cache/xcli-install/answers.json`。
 
 `--reality-sni` 可指定 REALITY 目标域名，默认 `www.bing.com`，不能与面板域名相同。需要使用已有证书时，传入 `--certificate /path/to/fullchain.pem --private-key /path/to/privkey.pem`，此时无需邮箱和服务条款参数。已有证书必须与域名匹配、私钥未加密且证书链受系统信任；安装器会复制到 `/etc/xray-gateway/tls/`，**不会自动续期这类证书**。更新该目录内的证书后，执行以下命令同步 Hysteria 2 证书并重载 Nginx：
 
