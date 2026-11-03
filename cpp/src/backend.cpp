@@ -328,7 +328,7 @@ Json Backend::shadowrocket_links_for(const User& user) const {
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
   auto database=db();const auto policy=effective_rule_policy(database,user.id);
   const bool categorized=policy.at("base")=="independent"||
-    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+    (policy.value("managed",false)&&(!policy.at("rules").get<std::string>().empty()||!policy.value("groups",Json::array()).empty()));
   if(std::find(users.begin(),users.end(),Json(user.id))!=users.end()||categorized)
     entry="shadowrocket://config/add/"+origin+"/s/"+user.token+"/shadowrocket.conf";
   return {{"shadowrocket",entry},

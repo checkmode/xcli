@@ -176,6 +176,12 @@
       <p class="small muted">表头全选仅选择当前筛选结果；切换搜索条件会保留之前的选择。批量操作作用于所有已选规则，搜索时排序仍按完整列表调整。规则从上到下匹配；服务器地址、私网、ToDesk 和已有 STUN 保护规则优先。</p>
     </section>
     <div class="rule-editor-pane">
+      <section class="rule-builder" aria-labelledby="rule-groups-title">
+        <div class="rule-builder-heading"><div><h3 id="rule-groups-title">自定义策略组</h3><p class="small muted">添加后可作为规则目标；客户端可选择节点、住宅出口或直连。独立 · Google 等内置分组可直接在目标策略中选择。</p></div></div>
+        <div id="rule-groups-list"></div>
+        <div class="rule-entry-grid"><label>分组名称<input id="rule-group-name" maxlength="40" autocomplete="off" placeholder="例如 独立 · 工作"></label><label>默认出口<select id="rule-group-default"></select></label></div>
+        <div class="form-actions"><button id="rule-group-add" type="button" class="secondary">添加分组</button><button id="rule-group-cancel" type="button" class="secondary" hidden>取消修改</button></div><p id="rule-group-error" class="error" role="alert"></p>
+      </section>
       <div id="rule-batch-editor" class="rule-batch-editor" hidden><strong>批量修改所选规则</strong><div class="rule-batch-fields">
         <label>规则类型<select id="rule-batch-type"><option value="">保持不变</option><option value="DOMAIN-SUFFIX">域名及子域名</option><option value="DOMAIN">完整域名</option><option value="DOMAIN-KEYWORD">域名关键词</option><option value="IP-CIDR">IPv4 网段</option><option value="IP-CIDR6">IPv6 网段</option><option value="GEOIP">IP 所在国家或地区</option><option value="DST-PORT">目标端口</option></select></label>
         <label>目标策略<select id="rule-batch-target"></select></label><label>IP 匹配时<select id="rule-batch-resolution"><option value="">保持不变</option><option value="no-resolve">只匹配已有 IP</option><option value="resolve">允许解析域名</option></select></label>

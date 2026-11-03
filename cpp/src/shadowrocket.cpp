@@ -234,7 +234,7 @@ Json Backend::shadowrocket_setup(const std::string& token) {
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
   const auto policy=effective_rule_policy(database,user.id);
   const bool categorized=policy.at("base")=="independent"||
-    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+    (policy.value("managed",false)&&(!policy.at("rules").get<std::string>().empty()||!policy.value("groups",Json::array()).empty()));
   const bool enabled=std::find(users.begin(),users.end(),Json(user.id))!=users.end()||categorized;
   Json result={{"service_routing",enabled},{"resource",enabled?"/s/"+token+"/shadowrocket.conf":"/shadowrocket-dns.sgmodule"}};
   if(categorized)result["dns_routing"]="integrated";
@@ -278,7 +278,7 @@ std::string Backend::shadowrocket_profile(const std::string& token) {
   const auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");
   const auto policy=effective_rule_policy(database,user.id);
   const bool categorized=policy.at("base")=="independent"||
-    (policy.value("managed",false)&&!policy.at("rules").get<std::string>().empty());
+    (policy.value("managed",false)&&(!policy.at("rules").get<std::string>().empty()||!policy.value("groups",Json::array()).empty()));
   if(categorized)return categorized_shadowrocket_profile(user,policy);
   const auto users=settings_.value("shadowrocket_service_users",Json::array());
   if(std::find(users.begin(),users.end(),Json(user.id))==users.end())throw HttpError(404,"Not Found");

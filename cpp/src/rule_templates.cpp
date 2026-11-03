@@ -94,7 +94,7 @@ void validate_for_user(const Backend& backend,const User& user,const Json& spec)
   if(spec.at("base")=="independent"&&spec.at("ai_outbound")!="proxy")
     for(const auto& group:config.at("proxy-groups"))if(group.at("name")=="独立 · AI"&&group.at("proxies").at(0)=="REJECT")
       throw HttpError(422,"AI 默认出口当前不可用");
-  if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty())
+  if(spec.at("base")=="independent"||!spec.at("rules").get<std::string>().empty()||!spec.value("groups",Json::array()).empty())
     (void)backend.categorized_shadowrocket_profile(user,spec);
 }
 

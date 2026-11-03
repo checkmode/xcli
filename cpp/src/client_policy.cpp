@@ -227,7 +227,8 @@ bool valid_network(const std::string& value,bool v6) {
   return ::inet_pton(v6?AF_INET6:AF_INET,value.substr(0,slash).c_str(),bytes)==1;
 }
 
-std::vector<EditableRule> parse_editable_rules(const std::string& text,const std::string& base) {
+std::vector<EditableRule> parse_editable_rules(const std::string& text,const std::string& base,
+                                               const std::set<std::string>& custom_groups={}) {
   if(text.size()>14000)throw HttpError(422,"规则内容过长，最多 14000 字节");
   const std::set<std::string> common={"DIRECT","REJECT","PROXY"};
   const std::set<std::string> independent_targets={"EaseLian","独立 · AI","独立 · Google","独立 · Telegram",
@@ -267,7 +268,7 @@ std::vector<EditableRule> parse_editable_rules(const std::string& text,const std
       rule.no_resolve=option=="no-resolve";rule.explicit_resolution=true;
     }
     if(!common.contains(rule.target)&&!(base=="standard"&&rule.target=="STUN")&&
-       !(base=="independent"&&independent_targets.contains(rule.target)))
+       !(base=="independent"&&independent_targets.contains(rule.target))&&!custom_groups.contains(rule.target))
       fail("规则目标不属于所选模板");
     result.push_back(std::move(rule));
   }
@@ -287,22 +288,62 @@ std::string independent_template_rules() {
 }
 
 Json validate_rule_template(const Json& input) {
-  if(!input.is_object()||input.size()!=3||!input.contains("base")||!input.contains("ai_outbound")||!input.contains("rules")||
+  if(!input.is_object()||(input.size()!=3&&input.size()!=4)||!input.contains("base")||!input.contains("ai_outbound")||!input.contains("rules")||
      !input["base"].is_string()||!input["ai_outbound"].is_string()||!input["rules"].is_string())
     throw HttpError(422,"模板格式不正确");
+  if(input.size()==4&&!input.contains("groups"))throw HttpError(422,"模板格式不正确");
   const auto base=input.at("base").get<std::string>(),ai=input.at("ai_outbound").get<std::string>();
   if(base!="standard"&&base!="independent")throw HttpError(422,"模板类型不正确");
   if(!(ai=="proxy"||ai=="reality"||ai=="websocket"||ai=="vmess"||ai=="hysteria2"||
        std::regex_match(ai,std::regex("residential-[0-9]{2}"))))throw HttpError(422,"AI 默认出口不正确");
   const auto rules=input.at("rules").get<std::string>();
-  (void)parse_editable_rules(rules,base);
-  return {{"base",base},{"ai_outbound",ai},{"rules",rules}};
+  std::set<std::string> names;
+  Json groups=Json::array();
+  if(input.contains("groups")) {
+    if(!input.at("groups").is_array()||input.at("groups").size()>16)throw HttpError(422,"自定义策略组最多 16 个");
+    const std::set<std::string> reserved={"DIRECT","REJECT","PROXY","STUN","直连","故障转移","自动选择","住宅节点",
+      "EaseLian","独立 · AI","独立 · Google","独立 · Telegram","独立 · YouTube","独立 · Netflix",
+      "独立 · 国外媒体","独立 · STUN","其他流量","oracle-cloud"};
+    for(const auto& group:input.at("groups")) {
+      if(!group.is_object()||group.size()!=2||!group.contains("name")||!group.contains("default")||
+         !group.at("name").is_string()||!group.at("default").is_string())throw HttpError(422,"策略组格式不正确");
+      const auto name=group.at("name").get<std::string>(),choice=group.at("default").get<std::string>();
+      if(name.empty()||name.size()>64||trim_rule(name)!=name||name.find_first_of(",=\r\n\t#")!=std::string::npos||
+         std::any_of(name.begin(),name.end(),[](unsigned char c){return c<32||c==127;})||
+         reserved.contains(name)||!names.insert(name).second)throw HttpError(422,"策略组名称无效、重复或与内置名称冲突");
+      if(choice!="PROXY"&&choice!="DIRECT"&&!(base=="independent"&&(choice=="故障转移"||choice=="自动选择")))
+        throw HttpError(422,"策略组默认出口不属于当前基础模板");
+      groups.push_back({{"name",name},{"default",choice}});
+    }
+  }
+  (void)parse_editable_rules(rules,base,names);
+  Json output={{"base",base},{"ai_outbound",ai},{"rules",rules}};
+  if(!groups.empty())output["groups"]=groups;
+  return output;
 }
 
 void apply_template_rules(Json& config,const Json& spec,const Json& baseline_dns) {
   const auto base=spec.at("base").get<std::string>(),text=spec.at("rules").get<std::string>();
+  std::set<std::string> custom_groups,available_names={"DIRECT","REJECT"};
+  for(const auto& proxy:config.at("proxies"))available_names.insert(proxy.at("name").get<std::string>());
+  for(const auto& group:config.at("proxy-groups"))available_names.insert(group.at("name").get<std::string>());
+  const auto groups=spec.value("groups",Json::array());
+  const auto& existing=config.at("proxy-groups");
+  auto proxy=std::find_if(existing.begin(),existing.end(),[](const Json& group){return group.at("name")=="PROXY";});
+  if(proxy==existing.end())throw HttpError(503,"缺少 PROXY 策略组");
+  const Json candidates=proxy->at("proxies");
+  for(const auto& group:groups) {
+    const auto name=group.at("name").get<std::string>(),choice=group.at("default").get<std::string>();
+    if(!available_names.insert(name).second)throw HttpError(422,"策略组与现有节点或策略组重名："+name);
+    if(!available_names.contains(choice))throw HttpError(422,"策略组默认出口不可用："+choice);
+    Json members=Json::array({choice});
+    for(const auto& item:Json::array({"PROXY","DIRECT"}))if(std::find(members.begin(),members.end(),item)==members.end())members.push_back(item);
+    for(const auto& item:candidates)if(std::find(members.begin(),members.end(),item)==members.end())members.push_back(item);
+    config["proxy-groups"].push_back({{"name",name},{"type","select"},{"proxies",members}});
+    custom_groups.insert(name);
+  }
   if(base=="independent"&&text==independent_template_rules())return;
-  const auto parsed=parse_editable_rules(text,base);
+  const auto parsed=parse_editable_rules(text,base,custom_groups);
   auto& rules=config["rules"];auto& dns=config["dns"]["nameserver-policy"];
   if(base=="independent") {
     Json remaining=Json::array();

@@ -23,7 +23,7 @@ function templateUseCount(id){return ruleTemplateState?.users.filter(u=>u.templa
 
 const ruleTemplateFileFormat='xdistribute-rule-template';
 function ruleTemplateFileContents(name,spec){
-  return {format:ruleTemplateFileFormat,version:1,template:{name,spec:{base:spec.base,ai_outbound:spec.ai_outbound,rules:spec.rules}}};
+  return {format:ruleTemplateFileFormat,version:1,template:{name,spec:{base:spec.base,ai_outbound:spec.ai_outbound,rules:spec.rules,...(spec.groups?.length?{groups:spec.groups}:{})}}};
 }
 function downloadRuleTemplate(name,spec){
   const contents=JSON.stringify(ruleTemplateFileContents(name,spec),null,2)+'\n';
@@ -45,10 +45,10 @@ function parseRuleTemplateFile(text){
     throw new Error('文件格式或版本不受支持，请选择 Xdistribute 导出的规则模板。');
   const item=data.template;
   if(!object(item)||Object.keys(item).sort().join(',')!=='name,spec'||typeof item.name!=='string'||
-     !object(item.spec)||Object.keys(item.spec).sort().join(',')!=='ai_outbound,base,rules'||
+     !object(item.spec)||!['ai_outbound,base,rules','ai_outbound,base,groups,rules'].includes(Object.keys(item.spec).sort().join(','))||
      !['base','ai_outbound','rules'].every(key=>typeof item.spec[key]==='string'))
     throw new Error('模板内容不完整或包含不支持的字段。');
-  return {name:item.name,spec:{base:item.spec.base,ai_outbound:item.spec.ai_outbound,rules:item.spec.rules}};
+  return {name:item.name,spec:{base:item.spec.base,ai_outbound:item.spec.ai_outbound,rules:item.spec.rules,...(item.spec.groups!==undefined?{groups:item.spec.groups}:{})}};
 }
 async function readRuleTemplateFile(file){
   if(file.size>65536)throw new Error('模板文件不能超过 64 KB。');
@@ -77,11 +77,12 @@ const ruleKinds={
   'DST-PORT':{label:'目标端口',hint:'输入 1–65535 的单个目标端口；该规则会匹配所有使用此端口的连接。'}
 };
 let ruleEditing=null,ruleUndo=[],ruleSelection=new Set(),ruleLastText='',ruleSavedSnapshot='',ruleTransferLoading=false;
+let customRuleGroups=[],ruleGroupEditing=null;
 const ruleText=()=>$('#rule-template-form').elements.rules;
 const ruleLines=()=>ruleText().value.replace(/\r\n/g,'\n').split('\n');
-function ruleSnapshot(){const f=$('#rule-template-form');return JSON.stringify([f.elements.name.value,f.elements.base.value,f.elements.ai_outbound.value,f.elements.rules.value])}
+function ruleSnapshot(){const f=$('#rule-template-form');return JSON.stringify([f.elements.name.value,f.elements.base.value,f.elements.ai_outbound.value,f.elements.rules.value,customRuleGroups])}
 function pendingBatchEdit(){return !$('#rule-batch-editor').hidden&&Boolean($('#rule-batch-type').value||$('#rule-batch-target').value||$('#rule-batch-resolution').value)}
-function ruleEditorDirty(){return ruleSnapshot()!==ruleSavedSnapshot||ruleEditing!==null||Boolean($('#rule-entry-value').value.trim())||pendingBatchEdit()}
+function ruleEditorDirty(){return ruleSnapshot()!==ruleSavedSnapshot||ruleEditing!==null||Boolean($('#rule-entry-value').value.trim())||ruleGroupEditing!==null||Boolean($('#rule-group-name').value.trim())||pendingBatchEdit()}
 function mayCloseRuleEditor(){return !ruleEditorDirty()||confirm('模板有尚未保存的修改，关闭后这些修改会丢失。确定关闭吗？')}
 function parsedRuleLines(){
   return ruleLines().map((line,index)=>{
@@ -92,8 +93,38 @@ function parsedRuleLines(){
 }
 function ruleTargets(base){
   return ['DIRECT','REJECT','PROXY',...(base==='standard'?['STUN']:
-    ['EaseLian','独立 · AI','独立 · Google','独立 · Telegram','独立 · YouTube','独立 · Netflix','独立 · 国外媒体','独立 · STUN','其他流量'])];
+    ['EaseLian','独立 · AI','独立 · Google','独立 · Telegram','独立 · YouTube','独立 · Netflix','独立 · 国外媒体','独立 · STUN','其他流量']),...customRuleGroups.map(g=>g.name)];
 }
+function currentRuleSpec(){const f=$('#rule-template-form');return {base:f.elements.base.value,ai_outbound:f.elements.ai_outbound.value,rules:f.elements.rules.value,...(customRuleGroups.length?{groups:customRuleGroups.map(g=>({...g}))}:{})}}
+function resetGroupEntry(){$('#rule-group-name').value='';$('#rule-group-error').textContent='';ruleGroupEditing=null;$('#rule-group-add').textContent='添加分组';$('#rule-group-cancel').hidden=true}
+function renderRuleGroups(){
+  const base=$('#rule-template-form').elements.base.value,select=$('#rule-group-default'),old=select.value;
+  const defaults=base==='independent'?['故障转移','自动选择','PROXY','DIRECT']:['PROXY','DIRECT'];
+  select.innerHTML=defaults.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');select.value=defaults.includes(old)?old:defaults[0];
+  $('#rule-groups-list').innerHTML=customRuleGroups.length?'<ul class="rule-group-list">'+customRuleGroups.map((g,i)=>'<li><span>'+esc(g.name)+' <small class="muted">默认：'+esc(g.default)+'</small></span><span><button type="button" data-group-edit="'+i+'">编辑</button> <button type="button" data-group-delete="'+i+'">删除</button></span></li>').join('')+'</ul>':'<p class="small muted">尚未添加自定义分组。</p>';
+}
+$('#rule-group-cancel').onclick=resetGroupEntry;
+$('#rule-group-add').onclick=()=>{
+  const name=$('#rule-group-name').value.trim(),choice=$('#rule-group-default').value,error=$('#rule-group-error');error.textContent='';
+  const reserved=['DIRECT','REJECT','PROXY','STUN','直连','故障转移','自动选择','住宅节点','EaseLian','独立 · AI','独立 · Google','独立 · Telegram','独立 · YouTube','独立 · Netflix','独立 · 国外媒体','独立 · STUN','其他流量','oracle-cloud'];
+  if(!name||new TextEncoder().encode(name).length>64||/[\x00-\x1f\x7f,=#]/.test(name)||reserved.includes(name)||customRuleGroups.some((g,i)=>g.name===name&&i!==ruleGroupEditing)){error.textContent='名称为空、过长、重复或与内置名称冲突。';return}
+  if(ruleEditing!==null||pendingBatchEdit()){error.textContent='请先完成正在编辑的规则或批量修改。';return}
+  if(ruleGroupEditing===null&&customRuleGroups.length>=16){error.textContent='最多添加 16 个分组。';return}
+  if(ruleGroupEditing!==null){
+    const old=customRuleGroups[ruleGroupEditing].name;
+    if(old!==name){
+      const lines=ruleLines().map(line=>{if(line.trim().startsWith('#'))return line;const f=line.split(',');if(f.length>=3&&f[2].trim()===old)f[2]=name;return f.join(',')});
+      ruleText().value=lines.join('\n');ruleLastText=ruleText().value;ruleUndo=[];
+    }
+    customRuleGroups[ruleGroupEditing]={name,default:choice};
+  }else customRuleGroups.push({name,default:choice});
+  resetGroupEntry();renderRuleGroups();updateRuleTargets(name);renderRuleRows();
+};
+$('#rule-groups-list').onclick=e=>{
+  const edit=e.target.dataset.groupEdit,del=e.target.dataset.groupDelete;
+  if(edit!==undefined){const i=Number(edit),g=customRuleGroups[i];ruleGroupEditing=i;$('#rule-group-name').value=g.name;$('#rule-group-default').value=g.default;$('#rule-group-add').textContent='保存分组修改';$('#rule-group-cancel').hidden=false;return}
+  if(del!==undefined){const i=Number(del),g=customRuleGroups[i];if(parsedRuleLines().some(r=>r.fields[2]===g.name)){$('#rule-group-error').textContent='请先修改或删除引用此分组的规则。';return}customRuleGroups.splice(i,1);resetGroupEntry();renderRuleGroups();updateRuleTargets();renderRuleRows()}
+};
 function updateRuleTargets(preferred){
   const select=$('#rule-entry-target'),targets=ruleTargets($('#rule-template-form').elements.base.value),old=preferred||select.value;
   select.innerHTML=targets.map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join('');
@@ -174,7 +205,7 @@ function validateRuleEntry(type,value){
   return '';
 }
 $('#rule-entry-type').onchange=()=>updateRuleHint(true);
-$('#rule-template-form').elements.base.onchange=()=>{updateRuleTargets();renderRuleRows()};
+$('#rule-template-form').elements.base.onchange=()=>{renderRuleGroups();updateRuleTargets();renderRuleRows()};
 $('#rule-list-search').oninput=()=>renderRuleRows();
 $('#rule-entry-cancel').onclick=()=>resetRuleEntry();
 $('#rule-list').addEventListener('change',e=>{
@@ -305,7 +336,7 @@ function showRuleEditor(item,copy){
   if(![...form.elements.ai_outbound.options].some(o=>o.value===spec.ai_outbound)){
     const option=document.createElement('option');option.value=spec.ai_outbound;option.textContent=transportLabel(spec.ai_outbound);form.elements.ai_outbound.append(option);
   }
-  form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;
+  form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;customRuleGroups=(spec.groups||[]).map(g=>({...g}));resetGroupEntry();renderRuleGroups();
   ruleUndo=[];ruleSelection=new Set();ruleLastText=spec.rules;$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent='';resetRuleEntry();updateRuleTargets('PROXY');updateRuleHint(true);renderRuleRows();ruleSavedSnapshot=ruleSnapshot();
   $('#rule-template-title').textContent=form.elements.id.value?(item?.builtin?'编辑内置规则模板':'编辑规则模板'):'新建规则模板';
   $('#rule-template-reset').hidden=!(item?.builtin&&!copy);
@@ -356,6 +387,7 @@ $('#rule-template-file').onchange=async e=>{
 };
 $('#rule-template-editor-import').onclick=()=>{
   const error=$('#rule-template-transfer-error');error.textContent='';
+  if(ruleGroupEditing!==null||$('#rule-group-name').value.trim()){error.textContent='请先添加、保存或取消正在编辑的分组，再导入。';return}
   if(ruleEditing!==null||$('#rule-entry-value').value.trim()){error.textContent='请先添加、应用或取消正在编辑的规则，再导入。';return}
   if(pendingBatchEdit()){error.textContent='请先应用或取消批量修改，再导入。';return}
   $('#rule-template-editor-file').click();
@@ -374,7 +406,7 @@ $('#rule-template-editor-file').onchange=async e=>{
     if(![...form.elements.ai_outbound.options].some(o=>o.value===spec.ai_outbound)){
       const option=document.createElement('option');option.value=spec.ai_outbound;option.textContent=transportLabel(spec.ai_outbound);form.elements.ai_outbound.append(option);
     }
-    form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;
+    form.elements.ai_outbound.value=spec.ai_outbound;form.elements.rules.value=spec.rules;customRuleGroups=(spec.groups||[]).map(g=>({...g}));resetGroupEntry();renderRuleGroups();
     ruleUndo=[];ruleSelection=new Set();ruleLastText=spec.rules;$('#rule-batch-editor').hidden=true;$('#rule-batch-error').textContent='';
     resetRuleEntry();updateRuleTargets('PROXY');updateRuleHint(true);renderRuleRows();
     const id=form.elements.id.value,users=id?'当前有 '+templateUseCount(id)+' 位用户使用；发布后下次更新订阅生效。':'保存后将创建新模板。';
@@ -396,7 +428,8 @@ $('#rule-template-export').onclick=async()=>{
   const form=$('#rule-template-form'),error=$('#rule-template-transfer-error'),button=$('#rule-template-export');error.textContent='';
   if(ruleEditing!==null||$('#rule-entry-value').value.trim()){error.textContent='请先添加、应用或取消正在编辑的规则，再导出。';return}
   if(pendingBatchEdit()){error.textContent='请先应用或取消批量修改，再导出。';return}
-  const name=form.elements.name.value,spec={base:form.elements.base.value,ai_outbound:form.elements.ai_outbound.value,rules:form.elements.rules.value};
+  if(ruleGroupEditing!==null||$('#rule-group-name').value.trim()){error.textContent='请先添加或保存正在编辑的分组，再导出。';return}
+  const name=form.elements.name.value,spec=currentRuleSpec();
   button.disabled=true;
   try{const item=await validateTransferTemplate(name,spec);downloadRuleTemplate(item.name,item.spec);toast('已导出当前编辑内容')}
   catch(err){error.textContent=err.message}finally{button.disabled=false}
@@ -414,11 +447,12 @@ $('#rule-template-form').onsubmit=async e=>{
   e.preventDefault();const form=e.currentTarget,action=e.submitter?.value||'save';
   $('#rule-template-error').textContent='';
   if(ruleEditing!==null||$('#rule-entry-value').value.trim()){$('#rule-template-error').textContent='请先添加或应用正在编辑的规则，或清空输入。';return}
+  if(ruleGroupEditing!==null||$('#rule-group-name').value.trim()){$('#rule-template-error').textContent='请先添加或保存正在编辑的分组，或清空输入。';return}
   if(pendingBatchEdit()){$('#rule-template-error').textContent='请先应用或取消批量修改。';return}
   if(parsedRuleLines().length>500||new TextEncoder().encode(ruleText().value).length>14000){$('#rule-template-error').textContent='规则最多 500 条，总内容最多 14000 字节。';return}
   const buttons=[...form.querySelectorAll('button')],disabled=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);
   try{
-    const name=form.elements.name.value,spec={base:form.elements.base.value,ai_outbound:form.elements.ai_outbound.value,rules:form.elements.rules.value};
+    const name=form.elements.name.value,spec=currentRuleSpec();
     let id=form.elements.id.value,revision=Number(form.elements.revision.value);
     const payload=id?{name,spec,expected_revision:revision}:{name,spec};
     if(new TextEncoder().encode(JSON.stringify(payload)).length>16384)throw new Error('规则文本转成请求后超过入口大小限制，请减少注释或规则内容。');

@@ -23,6 +23,49 @@ def group_names(config):
     return {item['name'] for item in config['proxy-groups']}
 
 
+def test_custom_groups_are_published_with_rules_and_preserve_old_templates(fixture):
+    c = fixture['client']; c.login(); path = '/s/' + fixture['token']
+    initial = clash(c, path)
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    spec['groups'] = [{'name': '工作服务', 'default': '故障转移'}]
+    spec['rules'] = 'DOMAIN-SUFFIX,work.example,工作服务\n' + spec['rules']
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'with groups', 'spec': spec})['id']
+    assert clash(c, path) == initial
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    config = clash(c, path)
+    group = next(g for g in config['proxy-groups'] if g['name'] == '工作服务')
+    assert group['type'] == 'select' and group['proxies'][0] == '故障转移'
+    assert 'PROXY' in group['proxies'] and 'DIRECT' in group['proxies']
+    assert 'DOMAIN-SUFFIX,work.example,工作服务' in config['rules']
+    assert 'DOMAIN-SUFFIX,work.example,REJECT' in config['rules']
+    assert config['dns']['nameserver-policy']['+.work.example'][0].endswith('#工作服务')
+    shadow = c.call(path + '/shadowrocket.conf')[2].decode()
+    assert 'XCLI-工作服务 = select,' in shadow
+    assert 'DOMAIN-SUFFIX,work.example,XCLI-工作服务' in shadow
+    saved = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == tid)
+    assert saved['groups'] == spec['groups']
+    for invalid in ([{'name': 'PROXY', 'default': 'DIRECT'}],
+                    [{'name': 'Bad,Name', 'default': 'DIRECT'}],
+                    [{'name': 'Same', 'default': 'PROXY'}, {'name': 'Same', 'default': 'DIRECT'}]):
+        c.json('/api/rule-templates/validate', 'POST', {'name': 'bad', 'spec': {**spec, 'groups': invalid}}, expected=422)
+    c.json('/api/rule-templates/validate', 'POST', {'name': 'bad', 'spec': {**spec, 'groups': []}}, expected=422)
+
+
+def test_standard_template_group_without_rules_is_exported_for_shadowrocket(fixture):
+    c = fixture['client']; c.login(); path = '/s/' + fixture['token']
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'standard')
+    spec['groups'] = [{'name': 'Office', 'default': 'DIRECT'}]
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'standard group', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    group = next(g for g in clash(c, path)['proxy-groups'] if g['name'] == 'Office')
+    assert group['proxies'][0] == 'DIRECT' and 'PROXY' in group['proxies']
+    assert 'XCLI-Office = select,DIRECT,' in c.call(path + '/shadowrocket.conf')[2].decode()
+    bad = {**spec, 'groups': [{'name': 'Office', 'default': '故障转移'}]}
+    c.json('/api/rule-templates/validate', 'POST', {'name': 'bad default', 'spec': bad}, expected=422)
+
+
 def test_google_group_respects_published_custom_rules(fixture):
     c = fixture['client']; c.login()
     path = '/s/' + fixture['token']
