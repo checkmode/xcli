@@ -89,6 +89,20 @@ def test_google_group_respects_published_custom_rules(fixture):
     assert config['dns']['nameserver-policy']['+.gemini.google.com'][0].endswith('#独立 · AI')
 
 
+@pytest.mark.parametrize('fixture', [{**POLICY, 'shadowrocket_base_profiles': {'__USER_ID__': BASE.replace(
+    'FINAL,PROXY', 'DOMAIN-KEYWORD,google,PROXY\nFINAL,PROXY')}}], indirect=True)
+def test_legacy_google_keyword_keeps_explicit_template_override(fixture):
+    c = fixture['client']; c.login(); path = '/s/' + fixture['token']
+    spec = next(t['spec'] for t in c.json('/api/rule-templates')['templates'] if t['id'] == 'independent')
+    spec['rules'] = 'DOMAIN-KEYWORD,google,PROXY\n'
+    tid = c.json('/api/rule-templates', 'POST', {'name': 'explicit google', 'spec': spec})['id']
+    c.json('/api/rule-templates/' + tid + '/publish', 'POST', {'expected_revision': 1})
+    c.json('/api/users/' + fixture['uid'] + '/rule-template', 'POST', {'template_id': tid})
+    mobile = c.call(path + '/shadowrocket.conf')[2].decode()
+    assert 'DOMAIN-KEYWORD,google,XCLI-PROXY' in mobile
+    assert 'DOMAIN-KEYWORD,google,XCLI-独立 · Google' not in mobile
+
+
 def test_oracle_cloud_system_group_precedes_template_and_uses_direct_dns(fixture):
     c = fixture['client']; c.login()
     path = '/s/' + fixture['token']

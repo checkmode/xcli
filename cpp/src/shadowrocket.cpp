@@ -73,7 +73,7 @@ std::string integrated_dns(const std::string& profile,const std::string& domain,
 std::string extend_base(const std::string& base,const std::string& groups,
                         const std::string& rules,const std::string& update_url,bool categorized=false,
                         const std::map<std::string,std::string>& managed_targets={},bool has_other=true,
-                        const std::set<std::string>& removed_targets={}) {
+                        const std::set<std::string>& removed_targets={},bool legacy_google_group=false) {
   if(base.empty()||base.size()>512*1024||base.find('\0')!=std::string::npos)
     throw HttpError(503,"Invalid Shadowrocket base profile");
   const std::string eol=base.find("\r\n")!=std::string::npos?"\r\n":"\n";
@@ -137,6 +137,14 @@ std::string extend_base(const std::string& base,const std::string& groups,
         offset=end==base.size()?end:end+1;
         continue;
       }
+      // Older bases commonly sent this broad Google keyword to PROXY. Give it
+      // the independent selector only when no explicit template rule owns it.
+      if(legacy_google_group&&std::regex_match(original,existing,generic)&&
+         trimmed(existing[1])=="DOMAIN-KEYWORD,google"&&existing[2]=="PROXY") {
+        auto rewritten=original;
+        rewritten.replace(static_cast<std::size_t>(existing.position(2)),existing.length(2),"XCLI-独立 · Google");
+        result+=rewritten;offset=end==base.size()?end:end+1;continue;
+      }
       const std::regex policy(R"(,PROXY([ \t]*(?:,no-resolve)?[ \t]*(?:#.*)?\r?\n?$))");
       result+=std::regex_replace(original,policy,
         (line.starts_with("FINAL,")&&has_other?",XCLI-其他流量":",XCLI-PROXY")+std::string("$1"));
@@ -159,9 +167,10 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
   };
   std::string groups,rules;
   std::map<std::string,std::string> managed_targets;
-  bool has_other=false;
+  bool has_other=false,has_google=false;
   for(const auto& group:config.at("proxy-groups")) {
     if(group.at("name")=="其他流量")has_other=true;
+    if(group.at("name")=="独立 · Google")has_google=true;
     const auto type=group.at("type").get<std::string>();
     groups+=safe(policy(group.at("name").get<std::string>()))+" = "+type;
     for(const auto& member:group.at("proxies"))groups+=","+safe(policy(member.get<std::string>()));
@@ -223,7 +232,8 @@ std::string categorized_profile(const Json& config,const std::map<std::string,st
       if(!managed_targets.contains(match))removed_targets.insert(match);
     }
   }
-  return extend_base(base,groups,rules,update_url,true,managed_targets,has_other,removed_targets);
+  return extend_base(base,groups,rules,update_url,true,managed_targets,has_other,removed_targets,
+                     has_google&&!managed_targets.contains("DOMAIN-KEYWORD,google"));
 }
 }
 

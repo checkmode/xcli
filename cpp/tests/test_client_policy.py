@@ -19,6 +19,26 @@ POLICY = {
 }
 
 
+@pytest.mark.parametrize('fixture', [{**POLICY, 'shadowrocket_base_profiles': {'__USER_ID__': BASE.replace(
+    'FINAL,PROXY', 'DOMAIN-KEYWORD,google,PROXY\nDOMAIN-KEYWORD,unrelated,PROXY\nFINAL,PROXY')}}], indirect=True)
+def test_legacy_google_keyword_uses_independent_group(fixture):
+    _, shadow, _ = exports(fixture)
+    assert 'DOMAIN-KEYWORD,google,XCLI-独立 · Google' in shadow
+    assert 'DOMAIN-KEYWORD,google,XCLI-PROXY' not in shadow
+    assert 'DOMAIN-KEYWORD,unrelated,XCLI-PROXY' in shadow
+    assert shadow.index('DOMAIN-SUFFIX,gemini.google.com,XCLI-独立 · AI') < shadow.index('DOMAIN-KEYWORD,google,XCLI-独立 · Google')
+    assert shadow.index('DOMAIN-SUFFIX,youtube.com,XCLI-独立 · YouTube') < shadow.index('DOMAIN-KEYWORD,google,XCLI-独立 · Google')
+
+
+@pytest.mark.parametrize('fixture', [{**POLICY, 'shadowrocket_base_profiles': {'__USER_ID__': BASE.replace(
+    'FINAL,PROXY', 'DOMAIN-KEYWORD,google,DIRECT\nDOMAIN-KEYWORD,google,REJECT\nFINAL,PROXY')}}], indirect=True)
+def test_legacy_google_direct_and_reject_are_preserved(fixture):
+    _, shadow, _ = exports(fixture)
+    assert 'DOMAIN-KEYWORD,google,DIRECT' in shadow
+    assert 'DOMAIN-KEYWORD,google,REJECT' in shadow
+    assert 'DOMAIN-KEYWORD,google,XCLI-独立 · Google' not in shadow
+
+
 DNS_BASE = BASE.replace('dns-server = system', '''dns-server = system
 dns-server = 8.8.8.8
 fallback-dns-server = system
