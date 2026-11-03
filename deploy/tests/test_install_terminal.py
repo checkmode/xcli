@@ -14,6 +14,8 @@ DEPLOY = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux controlling-terminal semantics')
 class InteractiveTerminalTests(unittest.TestCase):
     def run_in_terminal(self, code, answers, *, piped_stdin):
+        sys.stdout.flush()
+        sys.stderr.flush()
         pid, master = pty.fork()
         if pid == 0:
             try:
@@ -28,7 +30,7 @@ class InteractiveTerminalTests(unittest.TestCase):
         output = bytearray()
         pending = list(answers)
         end = time.monotonic() + 15
-        status = None
+        finished = False
         try:
             while time.monotonic() < end:
                 readable, _, _ = select.select([master], [], [], .2)
@@ -37,26 +39,21 @@ class InteractiveTerminalTests(unittest.TestCase):
                         chunk = os.read(master, 65536)
                     except OSError as error:
                         if error.errno == errno.EIO:
+                            finished = True
                             break
                         raise
                     if not chunk:
+                        finished = True
                         break
                     output.extend(chunk)
                     if pending and pending[0][0].encode() in output:
                         _, answer = pending.pop(0)
                         os.write(master, answer.encode() + b'\n')
-                finished, value = os.waitpid(pid, os.WNOHANG)
-                if finished:
-                    status = value
-                    break
-            if status is None:
-                finished, value = os.waitpid(pid, os.WNOHANG)
-                if finished:
-                    status = value
-                else:
-                    os.kill(pid, 9)
-                    os.waitpid(pid, 0)
-                    self.fail('interactive installer timed out: ' + output.decode(errors='replace'))
+            if not finished:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                self.fail('interactive installer timed out: ' + output.decode(errors='replace'))
+            _, status = os.waitpid(pid, 0)
         finally:
             os.close(master)
         self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode(errors='replace'))
