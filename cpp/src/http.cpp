@@ -55,7 +55,8 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.set_pre_routing_handler([this](const Request& request,Response& response) {
     security_headers(response);
     if(request.body.size()>16384) {json(response,{{"detail","请求过大"}},413);return httplib::Server::HandlerResponse::Handled;}
-    if(request.method!="GET"&&request.method!="HEAD"&&request.method!="OPTIONS"&&request.get_header_value("Origin")!=backend_.settings().at("origin").get<std::string>()) {
+    const bool node_sync=request.method=="POST"&&request.path=="/api/nodes/sync";
+    if(!node_sync&&request.method!="GET"&&request.method!="HEAD"&&request.method!="OPTIONS"&&request.get_header_value("Origin")!=backend_.settings().at("origin").get<std::string>()) {
       json(response,{{"detail","来源校验失败"}},403);return httplib::Server::HandlerResponse::Handled;
     }
     return httplib::Server::HandlerResponse::Unhandled;
@@ -69,7 +70,7 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.Get("/",wrap([this](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/"index.html"),"text/html; charset=utf-8");}));
   server_.Get("/client/shadowrocket",wrap([this](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/"shadowrocket.html"),"text/html; charset=utf-8");}));
   server_.Get("/shadowrocket-dns.sgmodule",wrap([this](const Request&,Response& response){response.set_content(backend_.shadowrocket_dns(),"text/plain; charset=utf-8");}));
-  for(const auto& [name,type]:std::vector<std::pair<std::string,std::string>>{{"index.html","text/html; charset=utf-8"},{"app.js","text/javascript; charset=utf-8"},{"rule-templates.js","text/javascript; charset=utf-8"},{"operations.js","text/javascript; charset=utf-8"},{"webshare.js","text/javascript; charset=utf-8"},{"proxy-import.js","text/javascript; charset=utf-8"},{"runtime.js","text/javascript; charset=utf-8"},{"style.css","text/css; charset=utf-8"},{"material-symbols-outlined.woff2","font/woff2"},{"shadowrocket.js","text/javascript; charset=utf-8"},{"shadowrocket.css","text/css; charset=utf-8"}})
+  for(const auto& [name,type]:std::vector<std::pair<std::string,std::string>>{{"index.html","text/html; charset=utf-8"},{"app.js","text/javascript; charset=utf-8"},{"rule-templates.js","text/javascript; charset=utf-8"},{"operations.js","text/javascript; charset=utf-8"},{"webshare.js","text/javascript; charset=utf-8"},{"proxy-import.js","text/javascript; charset=utf-8"},{"remote-nodes.js","text/javascript; charset=utf-8"},{"runtime.js","text/javascript; charset=utf-8"},{"style.css","text/css; charset=utf-8"},{"material-symbols-outlined.woff2","font/woff2"},{"shadowrocket.js","text/javascript; charset=utf-8"},{"shadowrocket.css","text/css; charset=utf-8"}})
     server_.Get("/static/"+name,wrap([this,name,type](const Request&,Response& response){response.set_content(read_file(backend_.options().static_dir/name),type);}));
   server_.Post("/api/login",wrap([this](const Request& request,Response& response) {
     std::string token;auto result=backend_.login(body(request),client_ip(request),token);
@@ -81,6 +82,10 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
     response.set_header("Set-Cookie","xg_session=; HttpOnly; Max-Age=0; Path=/; SameSite=Strict; Secure");json(response,{{"ok",true}});
   }));
   server_.Get("/api/overview",wrap([this](const Request& request,Response& response){json(response,backend_.overview(cookie(request)));}));
+  server_.Get("/api/remote-nodes",wrap([this](const Request& r,Response& s){json(s,backend_.remote_nodes(cookie(r)));}));
+  server_.Post("/api/remote-nodes",wrap([this](const Request& r,Response& s){json(s,backend_.add_remote_node(cookie(r),r.get_header_value("X-CSRF-Token"),body(r)),201);}));
+  server_.Put(R"(/api/remote-nodes/([^/]+))",wrap([this](const Request& r,Response& s){json(s,backend_.update_remote_node(cookie(r),r.get_header_value("X-CSRF-Token"),r.matches[1].str(),body(r)));}));
+  server_.Post("/api/nodes/sync",wrap([this](const Request& r,Response& s){json(s,backend_.sync_remote_node(r.get_header_value("Authorization"),body(r)));}));
   server_.Get("/api/runtime",wrap([this](const Request& r,Response& s){json(s,backend_.runtime(cookie(r)));}));
   server_.Get("/api/proxy-import",wrap([this](const Request& r,Response& s){json(s,backend_.proxy_import_status(cookie(r)));}));
   server_.Post("/api/proxy-import",wrap([this](const Request& r,Response& s){json(s,backend_.request_proxy_import(cookie(r),r.get_header_value("X-CSRF-Token"),body(r)),202);}));

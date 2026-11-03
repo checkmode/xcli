@@ -1,0 +1,32 @@
+[Unit]
+Description=Xcli remote node agent and Xray core
+After=network-online.target xcli-node-firewall.service
+Wants=network-online.target
+Requires=xcli-node-firewall.service
+StartLimitIntervalSec=0
+[Service]
+User=xgateway
+Group=xgateway
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/lib/xcli-node/node_agent.py --config /etc/xcli-node/node.json --state /var/lib/xcli-node --core-config /etc/xcli-node/core.json --xray /usr/local/lib/xcli-node/xray
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xcli-node
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+UMask=0077
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target

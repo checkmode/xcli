@@ -53,6 +53,7 @@ def arguments(argv=None):
     parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--commit', default='local')
     parser.add_argument('--domain')
+    parser.add_argument('--panel', help='节点模式使用的现有面板 HTTPS 地址')
     parser.add_argument('--email')
     parser.add_argument('--no-email', action='store_true', help='不提供证书到期通知邮箱')
     parser.add_argument('--public-ip')
@@ -205,8 +206,8 @@ def preflight(args):
     return arch
 
 
-def prepare_input(args):
-    args.domain = domain_name(args.domain or (ask('面板域名', check_only=args.check) if not args.yes else ''))
+def prepare_input(args, role='panel'):
+    args.domain = domain_name(args.domain or (ask('节点域名' if role == 'node' else '面板域名', check_only=args.check) if not args.yes else ''))
     args.reality_sni = domain_name(args.reality_sni)
     if args.reality_sni == args.domain:
         raise ValueError('REALITY 目标域名不能与面板域名相同')
@@ -548,6 +549,8 @@ fi''' if self.args.coexist else ''
 
 def main(argv=None):
     args = arguments(argv)
+    if args.panel:
+        raise ValueError('--panel 仅用于节点安装模式')
     args.source = args.source.resolve()
     arch = preflight(args)
     resolvers = prepare_input(args)

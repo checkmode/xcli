@@ -70,6 +70,24 @@ Json Backend::clash_configuration_for(const User& user,const Json& policy) const
     add({{"name","VMess TLS"},{"type","vmess"},{"server",address},{"port",public_port},{"uuid",user.uuid},{"alterId",0},{"cipher","auto"},
       {"udp",true},{"tls",true},{"skip-cert-verify",false},{"servername",domain},{"network","ws"},
       {"ws-opts",{{"path",settings_["vmess_ws_path"]},{"headers",{{"Host",domain}}}}}});
+  for(const auto& node:remote_nodes_for(user)) {
+    const auto& ep=node.at("endpoint");const auto host=ep.at("public_ip").get<std::string>();
+    const auto domain_name=ep.at("domain").get<std::string>();const auto port=ep.at("public_port").get<Int>();
+    const auto id=node.at("id").get<std::string>();
+    const auto label="节点 "+id.substr(0,8)+" · "+node.at("name").get<std::string>();
+    outbound_names["remote-"+id+"-reality"]=label+" · REALITY";
+    outbound_names["remote-"+id+"-websocket"]=label+" · HTTPS";
+    outbound_names["remote-"+id+"-hysteria2"]=label+" · Hysteria 2";
+    add({{"name",label+" · REALITY"},{"type","vless"},{"server",host},{"port",port},{"uuid",user.uuid},
+      {"udp",true},{"tls",true},{"network","tcp"},{"flow","xtls-rprx-vision"},{"packet-encoding","xudp"},
+      {"servername",ep.at("reality_sni")},{"client-fingerprint","chrome"},
+      {"reality-opts",{{"public-key",ep.at("reality_public")},{"short-id",ep.at("short_id")},{"support-x25519mlkem768",true}}}});
+    add({{"name",label+" · HTTPS"},{"type","vless"},{"server",host},{"port",port},{"uuid",user.uuid},
+      {"udp",true},{"tls",true},{"skip-cert-verify",false},{"servername",domain_name},{"client-fingerprint","chrome"},
+      {"network","ws"},{"ws-opts",{{"path",ep.at("ws_path")},{"headers",{{"Host",domain_name}}}}}});
+    add({{"name",label+" · Hysteria 2"},{"type","hysteria2"},{"server",host},{"port",ep.at("hysteria2_port")},
+      {"password",user.uuid},{"sni",domain_name},{"skip-cert-verify",false}});
+  }
   const bool dynamic_enabled=dynamic_residential_enabled();
   std::map<std::string,Json> country_nodes;
   Json protocol_groups=Json::array();

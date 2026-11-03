@@ -1,0 +1,11 @@
+[Unit]
+Description=Xcli remote node owned firewall rules
+Before=xcli-node.service
+After=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/xcli-node/firewall.sh start
+ExecStop=/usr/local/lib/xcli-node/firewall.sh stop
+[Install]
+WantedBy=multi-user.target

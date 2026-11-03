@@ -186,6 +186,11 @@ class Backend {
   std::pair<std::string, std::string> clash_subscription(const std::string& token);
   Json links_for(const User& user) const;
   Json shadowrocket_links_for(const User& user) const;
+  Json remote_nodes(const std::string& token);
+  Json add_remote_node(const std::string& token, const std::string& csrf, const Json& input);
+  Json update_remote_node(const std::string& token, const std::string& csrf, const std::string& id, const Json& input);
+  Json sync_remote_node(const std::string& authorization, const Json& input);
+  Json remote_nodes_for(const User& user) const;
   std::pair<Int,Int> apply_stats(Database& db, const std::string& generation, const std::vector<Counter>& counters);
   Json security_status(const std::string& token);
   Json setup_totp(const std::string& token, const std::string& csrf, const Json& input);
@@ -239,6 +244,7 @@ class Backend {
   Database db() const { return Database(options_.state / "gateway.sqlite"); }
   Json effective_rule_policy(Database& database, const std::string& user_id) const;
   User get_user(Database& db, const std::string& id);
+  bool remote_has_history(Database& db, const std::string& id) const;
   void audit(Database& db, const std::string& action, const std::string& detail = "");
   static Json validated_user(const Json& input);
   bool check_second_factor(Database& database, std::string_view code, bool allow_recovery = true);

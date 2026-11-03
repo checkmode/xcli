@@ -314,3 +314,7 @@ dialog::backdrop { background: #101c2da8; backdrop-filter: none; }
 @media (max-width: 600px) {
   .primary, .secondary { min-height: 40px; }
 }
+.remote-node-users { margin: 20px 0 0; border: 1px solid var(--line); border-radius: 5px; padding: 10px 14px; }
+.remote-node-users legend { font-size: 12px; font-weight: 600; }
+#remote-node-users { max-height: 200px; overflow: auto; }
+#remote-node-users label { margin: 8px 0; }

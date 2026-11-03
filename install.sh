@@ -4,7 +4,8 @@
 set -euo pipefail
 
 main() {
-    local ref='' check_only=0 coexist=0 work sha
+    local ref='' role='' noninteractive=0 check_only=0 coexist=0 work sha repo_root
+    local script_origin="${BASH_SOURCE[0]:-}"
     local -a args=()
     while (($#)); do
         case "$1" in
@@ -13,10 +14,12 @@ main() {
 xcli 一键安装（无需 git clone）
 
 支持 Ubuntu 24.04 / 26.04，AMD64 / ARM64，使用 systemd 的全新服务器。
-直接运行后按提示填写域名、证书邮箱和公网 IPv4。
+直接运行后选择面板或独立节点，并按提示填写域名、证书邮箱和公网 IPv4。
 
 选项：
-  --domain DOMAIN       面板域名，A 记录应只指向本机公网 IPv4
+  --role panel|node     安装面板（同时提供节点）或独立节点
+  --panel HTTPS_URL     独立节点连接的已有面板 HTTPS 地址
+  --domain DOMAIN       面板或节点域名，A 记录应只指向本机公网 IPv4
   --email EMAIL         Let's Encrypt 账户邮箱
   --no-email            不提供证书到期通知邮箱（仍启用自动续期）
   --public-ip IPV4      公网 IPv4；省略时自动检测并供确认
@@ -33,28 +36,42 @@ xcli 一键安装（无需 git clone）
   --bundle FILE         使用匹配系统及提交的预构建版本包
   --sha256 SHA256       预构建版本包的 SHA-256
   --check               只检查环境、端口和 DNS，不安装软件或改配置
-  --ref COMMIT          安装指定的 40 位 Git 提交，默认解析 main
+  --ref COMMIT          安装指定的 40 位 Git 提交；克隆仓库默认当前提交，否则使用 main
   --help                显示帮助
 
 安装器遇到已有 xcli 配置会退出；共存模式保留已有 Nginx 配置。
 HELP
                 return 0 ;;
             --ref) [[ $# -ge 2 ]] || { echo '--ref 缺少提交编号' >&2; return 1; }; ref=$2; shift 2 ;;
+            --role) [[ $# -ge 2 ]] || { echo '--role 缺少值' >&2; return 1; }; role=$2; shift 2 ;;
+            --role=*) role=${1#--role=}; shift ;;
             --source|--commit) echo '该选项仅供仓库内安装器使用' >&2; return 1 ;;
+            --yes) noninteractive=1; args+=("$1"); shift ;;
             --check) check_only=1; args+=("$1"); shift ;;
             --coexist) coexist=1; args+=("$1"); shift ;;
             *) args+=("$1"); shift ;;
         esac
     done
+    if [[ -z "$role" && $noninteractive == 0 ]]; then
+        if [[ -r /dev/tty && -w /dev/tty ]] && { exec 3<>/dev/tty; } 2>/dev/null; then
+            printf '安装模式：\n  1) 面板及本机节点\n  2) 独立服务器节点\n请选择 [1]: ' >&3
+            IFS= read -r role <&3 || { echo '输入已结束，安装取消' >&2; return 1; }
+            exec 3>&-
+        else
+            echo '无法访问交互终端；请指定 --role panel 或 --role node 及必需参数。' >&2
+            return 1
+        fi
+    fi
+    case "$role" in ''|1|panel) role=panel ;; 2|node) role=node ;; *) echo '安装模式必须为 panel 或 node。' >&2; return 1 ;; esac
     [[ $EUID == 0 ]] || { echo '请使用 root 或通过 sudo bash 运行安装器。' >&2; return 1; }
     [[ $(uname -s) == Linux && -f /etc/os-release && -d /run/systemd/system ]] || { echo '需要使用 systemd 的 Ubuntu 服务器。' >&2; return 1; }
     # shellcheck disable=SC1091
     . /etc/os-release
     [[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo '当前支持 Ubuntu 24.04 / 26.04。' >&2; return 1; }
     case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) echo '当前支持 AMD64 / ARM64。' >&2; return 1 ;; esac
-    for work in /etc/xray-gateway /var/lib/xray-gateway /usr/local/lib/xray-gateway /opt/xray-gateway /opt/xcli /usr/local/lib/xcli /var/lib/xcli /var/backups/xcli /var/cache/xcli /etc/nginx/nginx.conf; do
+    for work in /etc/xray-gateway /var/lib/xray-gateway /usr/local/lib/xray-gateway /opt/xray-gateway /opt/xcli /usr/local/lib/xcli /var/lib/xcli /var/backups/xcli /var/cache/xcli /etc/xcli-node /var/lib/xcli-node /usr/local/lib/xcli-node /etc/nginx/nginx.conf; do
         [[ $coexist == 0 || "$work" != /etc/nginx/nginx.conf ]] || continue
-        [[ ! -e "$work" && ! -L "$work" ]] || { echo "检测到已有配置：$work；安装已停止，请使用 README 中的升级流程。" >&2; return 1; }
+        [[ ! -e "$work" && ! -L "$work" ]] || { echo "检测到已有配置：$work；安装已停止，请查阅 README 中的维护说明。" >&2; return 1; }
     done
     if ! command -v python3 >/dev/null; then
         [[ $check_only == 0 ]] || { echo '只检查模式需要系统已安装 python3。' >&2; return 1; }
@@ -69,6 +86,13 @@ HELP
     chmod 755 "$work"
     if [[ -n "$ref" ]]; then
         sha=$ref
+    elif [[ -n "$script_origin" && -f "$script_origin" && -e "$(dirname -- "$script_origin")/.git" ]]; then
+        command -v git >/dev/null || { echo '检测到 Git 检出，但无法运行 git 读取当前提交。' >&2; return 1; }
+        repo_root=$(git -C "$(dirname -- "$script_origin")" rev-parse --show-toplevel 2>/dev/null) ||
+            { echo '无法读取当前仓库，请检查 Git 仓库所有权和 safe.directory。' >&2; return 1; }
+        sha=$(git -C "$repo_root" rev-parse HEAD)
+        [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo '无法确定当前仓库提交。' >&2; return 1; }
+        printf '使用当前检出提交 %s；本地未提交内容不会包含在安装包中。\n' "${sha:0:12}"
     else
         curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
             https://api.github.com/repos/checkmode/xcli/commits/main -o "$work/revision.json"
@@ -76,6 +100,8 @@ HELP
     fi
     if ((check_only)); then
         printf '正在下载固定源码 %s，随后进行只读预检查（不会安装软件或修改系统配置）\n' "${sha:0:12}"
+    elif [[ $role == node ]]; then
+        printf '正在下载固定源码 %s，随后安装独立服务器节点\n' "${sha:0:12}"
     else
         printf '正在下载固定源码 %s，构建完整版本后安装到 /opt/xcli/releases/\n' "${sha:0:12}"
     fi
@@ -97,7 +123,11 @@ with tarfile.open(work/'source.tar.gz','r:gz') as archive:
 if not (work/'source/deploy/build-source-release.sh').is_file():
     raise SystemExit('该提交不支持统一版本发布；请选用包含 release.py 的新版本')
 PY
-    python3 "$work/source/deploy/install.py" --source "$work/source" --commit "$sha" "${args[@]}"
+    if [[ $role == node ]]; then
+        python3 "$work/source/deploy/install_node.py" --source "$work/source" --commit "$sha" "${args[@]}"
+    else
+        python3 "$work/source/deploy/install.py" --source "$work/source" --commit "$sha" "${args[@]}"
+    fi
     rm -rf -- "$work"
     trap - EXIT
 }

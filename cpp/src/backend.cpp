@@ -275,6 +275,7 @@ void Backend::reset_traffic(const std::string& token,const std::string& csrf,con
   std::lock_guard guard(mutation_mutex_);session(token,csrf,true);
   if(!core_)throw HttpError(503,"Xray 管理接口不可用");
   auto database=db();auto user=get_user(database,id);
+  if(remote_has_history(database,id))throw HttpError(409,"该用户曾被授权使用独立节点，无法安全清零：离线节点可能仍有未上报流量");
   auto gen=core_->generation();auto counters=core_->counters();
   if(core_->generation()!=gen)throw HttpError(503,"核心正在重启，请稍后重试");
   Transaction transaction(database);apply_stats(database,gen,counters);
@@ -304,6 +305,16 @@ Json Backend::links_for(const User& user) const {
       result[tag+"-hy2"]="hysteria2://"+url_quote(user.uuid+"."+tag+"-hy2")+"@"+node_host+":"+std::to_string(settings_.at("hysteria2_port").get<int>())+"/?sni="+url_quote(s("domain"))+"#"+url_quote(name,false,true);
     }
     result[tag]="vless://"+user.uuid+"@"+node_host+":"+public_port+"?encryption=none&security=tls&sni="+url_quote(s("domain"),true)+"&type=ws&host="+url_quote(s("domain"),true)+"&path="+url_quote(exit.at("ws_path").get<std::string>(),true)+"#"+url_quote(name+(exit.value("hysteria2",false)?" · HTTPS":""),false,true);
+  }
+  for(const auto& node:remote_nodes_for(user)) {
+    const auto id=node.at("id").get<std::string>();const auto& ep=node.at("endpoint");
+    const auto host=ep.at("public_ip").get<std::string>(),domain=ep.at("domain").get<std::string>();
+    const auto port=std::to_string(ep.at("public_port").get<Int>());
+    const auto label="节点 " + id.substr(0,8) + " · " + node.at("name").get<std::string>();
+    const auto name=user.name+" · "+label;
+    result["remote-"+id+"-reality"]="vless://"+user.uuid+"@"+host+":"+port+"?encryption=none&fp=chrome&sni="+url_quote(ep.at("reality_sni").get<std::string>(),true)+"&pbk="+url_quote(ep.at("reality_public").get<std::string>(),true)+"&sid="+url_quote(ep.at("short_id").get<std::string>(),true)+"&type=tcp&security=reality&flow=xtls-rprx-vision#"+url_quote(name+" · REALITY",false,true);
+    result["remote-"+id+"-websocket"]="vless://"+user.uuid+"@"+host+":"+port+"?encryption=none&security=tls&sni="+url_quote(domain,true)+"&type=ws&host="+url_quote(domain,true)+"&path="+url_quote(ep.at("ws_path").get<std::string>(),true)+"#"+url_quote(name+" · HTTPS",false,true);
+    result["remote-"+id+"-hysteria2"]="hysteria2://"+url_quote(user.uuid)+"@"+host+":"+std::to_string(ep.at("hysteria2_port").get<Int>())+"/?sni="+url_quote(domain)+"#"+url_quote(name+" · Hysteria 2",false,true);
   }
   return result;
 }
@@ -364,6 +375,7 @@ std::pair<std::string,std::string> Backend::subscription(const std::string& toke
   auto database=db();auto row=database.one("SELECT * FROM users WHERE token=? AND deleted=0",{token});if(!row)throw HttpError(404,"Not Found");
   auto user=User::from(*row);if(!user.active())throw HttpError(403,"Subscription inactive");auto node=links_for(user);
   std::string body;for(const auto& kind:inbound_tags())if(node.contains(kind))body+=node.at(kind).get<std::string>()+"\n";
+  for(auto it=node.begin();it!=node.end();++it)if(it.key().starts_with("remote-"))body+=it.value().get<std::string>()+"\n";
   return {base64(body),
     "upload="+std::to_string(user.upload)+"; download="+std::to_string(user.download)+"; total="+std::to_string(user.quota)+"; expire="+std::to_string(user.expires)};
 }

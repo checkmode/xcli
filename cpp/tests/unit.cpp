@@ -260,6 +260,62 @@ int main() {
       panel.update_user(session,csrf,uid,{{"name","disabled"},{"enabled",false}});status(403,[&]{panel.clash_subscription(u.token);});
       panel.rotate_user(session,csrf,uid);status(404,[&]{panel.clash_subscription(u.token);});
     }
+    {
+      Temp remote;Options config;config.state=remote.path/"state";config.settings=remote.path/"settings.json";config.offline=true;
+      Json base={{"origin","https://testserver"},{"domain","testserver"},{"public_ip","203.0.113.2"},
+        {"reality_sni","example.com"},{"reality_public",std::string(43,'p')},{"short_id","aabbccdd"},{"ws_path","/connect/test"}};
+      std::ofstream(config.settings)<<base.dump();auto fake=std::make_unique<FakeCore>();auto local=fake.get();Backend panel(config,std::move(fake));
+      {Database db(config.state/"gateway.sqlite");db.run("INSERT INTO admin VALUES(1,?)",{password_hash("correct-password-for-tests")});}
+      std::string session;auto auth=panel.login({{"username","admin"},{"password","correct-password-for-tests"}},"127.0.0.1",session);
+      auto csrf=auth.at("csrf").get<std::string>();
+      auto uid=panel.create_user(session,csrf,{{"name","selected"},{"quota",1000}}).at("id").get<std::string>();
+      auto other=panel.create_user(session,csrf,{{"name","not selected"}}).at("id").get<std::string>();
+      User u;{Database db(config.state/"gateway.sqlite");u=User::from(*db.one("SELECT * FROM users WHERE id=?",{uid}));}
+      const std::string node_id(32,'a'),node_key(43,'Z');
+      Json registration={{"version",1},{"id",node_id},{"key",node_key},{"public_ip","8.8.8.8"},{"domain","node.example.com"},
+        {"public_port",443},{"reality_sni","www.example.com"},{"reality_public",std::string(43,'P')},{"short_id","0011223344556677"},
+        {"ws_path","/connect/0123456789abcdef01234567"},{"hysteria2_port",443}};
+      auto added=panel.add_remote_node(session,csrf,{{"name","Test node"},{"registration",registration},{"users",Json::array({uid})}});
+      check(added.dump().find(node_key)==std::string::npos,"Node credential leaked in response");
+      check(panel.remote_nodes(session).dump().find(node_key)==std::string::npos,"Node credential leaked in list");
+      const auto header="Xcli-Node "+node_id+"."+node_key;
+      status(401,[&]{panel.sync_remote_node("Xcli-Node "+node_id+"."+std::string(43,'X'),{{"revision",""},{"counters",Json::array()}});});
+      auto first=panel.sync_remote_node(header,{{"revision",""},{"counters",Json::array()}});
+      check(first.at("users").size()==1&&first.at("users")[0].at("id")==uid,"Node received unselected users");
+      check(panel.remote_nodes_for(u).empty(),"Node was published before it applied users");
+      const auto rev=first.at("revision");
+      auto ready=panel.sync_remote_node(header,{{"revision",rev},{"counters",Json::array()}});
+      check(panel.remote_nodes_for(u).size()==1,"Applied node missing from user");
+      check(panel.clash_configuration(u).at("proxies").size()==5,"Remote node protocols missing from Clash");
+      check(unbase64(panel.subscription(u.token).first).find("node.example.com")!=std::string::npos,"Remote node missing from subscription");
+      Json counts=Json::array({{{"id",uid},{"upload",100},{"download",200}}});
+      panel.sync_remote_node(header,{{"revision",ready.at("revision")},{"counters",counts}});
+      panel.sync_remote_node(header,{{"revision",ready.at("revision")},{"counters",counts}});
+      {Database db(config.state/"gateway.sqlite");auto row=db.one("SELECT upload,download FROM users WHERE id=?",{uid});
+        check(row->at("upload")==100&&row->at("download")==200,"Retried node report counted twice");}
+      status(422,[&]{panel.sync_remote_node(header,{{"revision",ready.at("revision")},{"counters",Json::array({{{"id",other},{"upload",1},{"download",0}}})}});});
+      status(409,[&]{panel.sync_remote_node(header,{{"revision",ready.at("revision")},{"counters",Json::array({{{"id",uid},{"upload",99},{"download",200}}})}});});
+      status(409,[&]{panel.reset_traffic(session,csrf,uid);});
+      const std::string node2(32,'e'),key2(43,'Y');registration["id"]=node2;registration["key"]=key2;
+      // The packed representation is used by the browser so 500 IDs fit the request limit.
+      std::string raw;for(std::size_t i=0;i<uid.size();i+=2)raw.push_back(static_cast<char>(std::stoi(uid.substr(i,2),nullptr,16)));
+      panel.add_remote_node(session,csrf,{{"name","Second node"},{"registration",registration},{"users",base64(raw)}});
+      auto header2="Xcli-Node "+node2+"."+key2;
+      auto second=panel.sync_remote_node(header2,{{"revision",""},{"counters",Json::array({{{"id",uid},{"upload",50},{"download",25}}})}});
+      panel.update_remote_node(session,csrf,node2,{{"name","Second node"},{"users",Json::array({uid,other})},{"enabled",true}});
+      {Database db(config.state/"gateway.sqlite");db.run("DELETE FROM users WHERE id=?",{other});}
+      // A restore can remove a later-created user while its last node report is in flight.
+      Json late=Json::array({{{"id",other},{"upload",3},{"download",4}}});
+      check(panel.sync_remote_node(header2,{{"revision",second.at("revision")},{"counters",late}}).at("ack")==late,
+            "Removed user's late report blocked the rest of the node");
+      local->values={{"user>>>"+u.email("reality")+">>>traffic>>>uplink",25}};panel.poll_once();
+      {Database db(config.state/"gateway.sqlite");auto row=db.one("SELECT upload,download FROM users WHERE id=?",{uid});
+        check(row->at("upload")==175&&row->at("download")==225,"Panel and independent node usage were not aggregated");}
+      counts[0]["download"]=900;auto limited=panel.sync_remote_node(header,{{"revision",ready.at("revision")},{"counters",counts}});
+      check(limited.at("users").empty(),"Combined quota did not revoke remote access");
+      check(panel.sync_remote_node(header2,{{"revision",second.at("revision")},{"counters",Json::array()}}).at("users").empty(),"Shared quota did not revoke the second node");
+      status(403,[&]{panel.subscription(u.token);});
+    }
     std::cout<<"PASS: backend, authentication, subscriptions, accounting, backups, Webshare encryption and redaction, Clash export, dynamic entries and revocation\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}

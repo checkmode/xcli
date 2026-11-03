@@ -1,0 +1,60 @@
+name: Independent node installation
+on:
+  pull_request:
+    paths: ['install.sh', 'deploy/**', 'scripts/node_*.py', 'tests/node/**', 'cpp/**', 'static/**', '.github/workflows/independent-node.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  node:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Node unit checks
+        run: |
+          bash -n install.sh
+          python3 -m unittest discover -s tests/node -v
+      - name: Prepare disposable machine and trusted test certificate
+        run: bash deploy/tests/prepare-machine.sh
+      - name: Install an empty node and verify configuration
+        run: |
+          sudo python3 deploy/install_node.py --check --yes --domain panel.install.example --public-ip "$PUBLIC_IP" --panel https://panel.example.invalid
+          test ! -e /etc/xcli-node
+          sudo python3 deploy/install_node.py --commit "$GITHUB_SHA" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
+            --panel https://panel.example.invalid --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key"
+          sudo systemctl is-active --quiet xcli-node
+          sudo python3 - <<'PY'
+          import json, os, pathlib, stat
+          config = pathlib.Path('/etc/xcli-node')
+          registration = json.loads((config/'registration.json').read_text())
+          identity = json.loads((config/'node.json').read_text())
+          core = json.loads((config/'core.json').read_text())
+          assert stat.S_IMODE((config/'registration.json').stat().st_mode) == 0o600
+          assert registration['id'] == identity['node_id'] and registration['key'] == identity['token']
+          assert core['api']['listen'] == '127.0.0.1:10085'
+          assert {inbound['tag'] for inbound in core['inbounds']} == {'reality', 'websocket', 'hysteria2'}
+          assert all(not inbound['settings']['clients'] for inbound in core['inbounds'])
+          PY
+          for tag in reality websocket hysteria2; do
+            sudo -u xgateway /usr/local/lib/xcli-node/xray api inboundusercount --server=127.0.0.1:10085 -tag="$tag" --timeout=2
+          done
+      - name: Real isolated three-protocol traffic and accounting
+        run: |
+          sudo env XCLI_TEST_XRAY=/usr/local/lib/xcli-node/xray python3 -m unittest discover -s tests/node -p test_node_xray_integration.py -v
+          sudo env XCLI_TEST_XRAY=/usr/local/lib/xcli-node/xray XCLI_TEST_NGINX=/usr/sbin/nginx XCLI_LOCAL_FIXTURE=1 XCLI_TEST_REALITY_TARGET=public \
+            python3 -m unittest discover -s tests/node -p test_node_xray_integration.py -v
+      - name: Verify service shutdown tears down Xray
+        run: |
+          sudo systemctl stop xcli-node
+          ! sudo -u xgateway /usr/local/lib/xcli-node/xray api inboundusercount --server=127.0.0.1:10085 -tag=reality --timeout=1
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo systemctl --no-pager --full status xcli-node nginx xcli-node-firewall || true
+          sudo journalctl --no-pager -n 60 -u xcli-node || true
+          sudo sh -c 'for file in /var/backups/xcli/install/*/install.log; do test ! -f "$file" || tail -n 100 "$file"; done'

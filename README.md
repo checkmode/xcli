@@ -18,13 +18,17 @@
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash
 ```
 
-按提示填写面板域名、证书邮箱、公网 IPv4 并确认安装。**无需手动下载或克隆代码仓库**：脚本自动解析固定提交、下载源码包、安装依赖并编译 C++ 面板，生成完整版本包并安装到 `/opt/xcli/releases/`，再配置经过 SHA-256 校验的官方 Xray、Nginx、HTTPS 证书和探测服务。安装和后续更新使用同一套版本管理机制。首次构建需要数分钟，耗时取决于服务器和网络。
+安装器会询问安装模式：选择“面板及本机节点”可运行管理面板并提供本机 VPN 入口；选择“独立服务器节点”可接入已有面板。先安装面板，再按下文添加其他节点。面板安装需要填写域名、证书邮箱和公网 IPv4。
 
-如果已经克隆仓库，也可以在仓库目录运行下面的命令，交互安装当前检出的提交。该提交必须已存在于 GitHub；安装器从 GitHub 下载该提交的源码，不包含本地未提交的修改。
+无需手动克隆仓库：脚本解析 GitHub `main` 的当前提交并下载源码，安装依赖、编译 C++ 面板并生成完整版本包，再配置经过 SHA-256 校验的 Xray、Nginx、HTTPS 证书和探测服务。首次构建需要数分钟。
+
+如果已经克隆仓库，在仓库目录运行以下命令并选择模式：
 
 ```sh
-sudo bash ./install.sh --ref "$(git rev-parse HEAD)"
+sudo bash ./install.sh
 ```
+
+该命令自动选择当前检出的 Git 提交，并从 GitHub 下载对应源码；该提交必须已存在于 GitHub，本地未提交的修改不会包含在安装包中。通过 `curl | bash` 运行时，默认使用 GitHub `main` 的最新提交；也可用 `--ref` 指定完整提交编号。
 
 交互模式可以将证书邮箱留空：此时仍启用证书自动续期，但没有到期邮件通知。通过 SSH 运行时需要分配交互终端；若没有终端，请使用下面的无人值守参数。
 
@@ -37,6 +41,24 @@ sudo cat /etc/xray-gateway/initial-admin.txt
 登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx，同时更新 Hysteria 2 专用证书副本；Xray 在证书重载周期内（最长约 1 小时）读取新文件。
 
 安装完成后会显示本次部署的配置位置。用户、规则和节点优先通过面板管理，数据位于 `/var/lib/xray-gateway/gateway.sqlite`；面板运行配置位于 `/etc/xray-gateway/settings.json`，由面板维护的 Xray 配置位于 `/etc/xray-gateway/core.json`。普通安装的 Nginx 配置为 `/etc/nginx/nginx.conf`，共存安装则为 `/etc/nginx/xcli.conf`。更换域名还涉及 DNS、证书与多个服务配置，不应只修改其中一个文件。
+
+### 添加独立服务器节点
+
+先准备已运行的面板，并为新服务器配置独立域名。新服务器仍需满足上面的系统、DNS 和端口条件；安装器要求该域名的 A 记录仅指向节点自身公网 IPv4，且没有 AAAA 记录。节点服务器还必须能访问面板的 HTTPS 地址，并保持系统时钟同步。当前独立节点安装不支持与现有服务共存。
+
+1. 在新服务器克隆仓库后运行 `sudo bash ./install.sh`，选择“独立服务器节点”。按提示填写节点域名、公网 IPv4、证书选项，以及已有面板的 HTTPS 地址，例如 `https://panel.example.com`。也可以运行 `sudo bash ./install.sh --role node` 直接选择节点模式。
+2. 安装结束后运行 `sudo cat /etc/xcli-node/registration.json`。在面板的“接入节点 → 添加服务器”中粘贴完整 JSON，填写节点名称并选择允许使用的用户。注册信息含节点密钥，应通过可信渠道传递。保存后面板不回显密钥；需要重新查看时在节点服务器执行该命令。
+3. 等节点状态显示“已连接”，让所选用户更新订阅。每个独立节点提供 REALITY、WebSocket / TLS 和 Hysteria 2 三种连接方式。修改授权、停用用户或停用节点后，节点会同步撤销权限，已有连接可能短暂中断。
+
+节点通过验证服务器证书的 HTTPS 主动连接面板。Xray 管理接口只监听节点的本机回环地址；节点失去面板连接后，现有授权在租约到期时失效。面板的“已连接”状态表示近期收到节点同步，不代表从用户所在网络到节点的连接已经验证。
+
+面板将各节点上报的用户流量累加到同一配额。节点先在本地保存累计值，网络恢复后补报；重复上报不会重复计数。用量按周期同步，多个节点并发使用或通信中断期间，已用量和配额停用会有延迟，不能作为严格的逐字节上限。节点进程或系统异常退出可能丢失最后一个采样周期内的流量。目前为避免离线节点的旧用量在清零后补报，曾被授权使用独立节点的用户暂不支持流量清零。
+
+节点配置位于 `/etc/xcli-node/node.json` 和 `/etc/xcli-node/core.json`，用量账本位于 `/var/lib/xcli-node/traffic.sqlite`。排查时可运行 `systemctl status xcli-node` 和 `journalctl -u xcli-node`；安装日志及仅停用本次服务的回退脚本位于安装器输出的 `/var/backups/xcli/install/` 子目录。自备证书不会自动续期：更新源证书后运行 `sudo python3 /usr/local/lib/xcli-node/node_certificate.py --certificate 证书路径 --private-key 私钥路径`，再执行 `sudo nginx -t && sudo systemctl reload nginx`。
+
+现有 `update.sh` 用于面板，独立节点暂未提供原地升级命令。节点的身份、注册信息与用量账本需要保留，不能通过重新安装来覆盖。
+
+节点无人值守安装可指定 `--role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --no-email --agree-tos --yes`；将参数替换为实际值。只检查时使用 `--role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --check --yes`，不会安装服务。
 
 ### 无人值守与预检查
 
@@ -390,7 +412,7 @@ sudo unshare --net python3 deploy/tests/verify_doh.py /usr/sbin/dnscrypt-proxy
 
 - 当前管理员密码、二次验证设置和恢复码使用状态。
 - 每个恢复用户当前累计流量与备份累计流量中的较大值。
-- 当前服务器配置、计数采样基线和管理操作记录。
+- 当前服务器配置、计数采样基线、独立节点注册和管理操作记录。
 
 恢复后所有管理会话失效；备份之后新增的用户会被移除，变更过的节点凭据按备份恢复。权限变更可能使节点短暂重连。系统不会因一次自检失败而自动恢复数据库。
 

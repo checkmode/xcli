@@ -81,6 +81,8 @@ void apply_client_policy(Json& config,const Json& settings,const User& user,
   Json servers=Json::array(),countries=Json::array();
   for(const auto* tag:{"reality","websocket","vmess","hysteria2"})
     if(outbound_names.contains(tag))servers.push_back(outbound_names.at(tag));
+  for(const auto& [tag,name]:outbound_names)
+    if(tag.starts_with("remote-"))servers.push_back(name);
   for(auto& group:groups) {
     const auto name=group.at("name").get<std::string>();
     if(name.starts_with("住宅分组 · "))countries.push_back(name);

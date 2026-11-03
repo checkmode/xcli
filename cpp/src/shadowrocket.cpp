@@ -258,6 +258,12 @@ std::string Backend::categorized_shadowrocket_profile(const User& user,const Jso
         nodes[label+" · HTTPS"]=node+" · HTTPS";
       } else nodes[label]=node;
     }
+    for(const auto& remote:remote_nodes_for(user)) {
+      const auto label="节点 "+remote.at("id").get<std::string>().substr(0,8)+" · "+remote.at("name").get<std::string>();
+      for(const auto& transport:{"REALITY","HTTPS","Hysteria 2"}) {
+        const auto name=label+" · "+transport;nodes[name]=user.name+" · "+name;
+      }
+    }
     const std::string fallback="[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n";
     const auto base=bases.contains(user.id)?bases.at(user.id).get<std::string>():fallback;
     const bool replace_categories=policy.value("managed",false)&&policy.at("base")=="independent"&&
