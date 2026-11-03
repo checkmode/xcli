@@ -72,17 +72,27 @@ def arguments(argv=None):
     return parser.parse_args(argv)
 
 
-def ask(label, default=None):
+def ask(label, default=None, *, check_only=False):
+    prompt = label + (f' [{default}]' if default else '') + ': '
     try:
-        with open('/dev/tty', 'r+') as tty:
-            tty.write(label + (f' [{default}]' if default else '') + ': ')
-            tty.flush()
-            answer = tty.readline()
-            if not answer:
-                raise ValueError('输入已结束，安装取消')
-            return answer.strip() or default or ''
+        # A terminal is not seekable: Python's buffered r+ mode fails on Linux.
+        # Separate handles also work when the installer itself is piped into bash.
+        with open('/dev/tty', 'r', encoding='utf-8') as tty_in, open('/dev/tty', 'w', encoding='utf-8') as tty_out:
+            tty_out.write(prompt)
+            tty_out.flush()
+            answer = tty_in.readline()
     except OSError as error:
-        raise ValueError('无交互终端；请使用 --yes 并提供 --domain、--email、--agree-tos 等参数') from error
+        if not sys.stdin.isatty():
+            options = '--yes --domain 域名 --public-ip 公网IPv4'
+            if not check_only:
+                options += ' 以及 --email 邮箱或 --no-email、--agree-tos'
+            raise ValueError('无法访问交互终端；请分配终端，或使用 ' + options) from error
+        sys.stderr.write(prompt)
+        sys.stderr.flush()
+        answer = sys.stdin.readline()
+    if not answer:
+        raise ValueError('输入已结束，安装取消')
+    return answer.strip() or default or ''
 
 
 def resolve_domain(domain, address):
@@ -196,7 +206,7 @@ def preflight(args):
 
 
 def prepare_input(args):
-    args.domain = domain_name(args.domain or (ask('面板域名') if not args.yes else ''))
+    args.domain = domain_name(args.domain or (ask('面板域名', check_only=args.check) if not args.yes else ''))
     args.reality_sni = domain_name(args.reality_sni)
     if args.reality_sni == args.domain:
         raise ValueError('REALITY 目标域名不能与面板域名相同')
@@ -206,7 +216,7 @@ def prepare_input(args):
                 '--connect-timeout', '5', '--max-time', '10', 'https://api.ipify.org'], timeout=12, stderr=subprocess.DEVNULL).decode().strip()
         except (OSError, subprocess.SubprocessError):
             detected = None
-        args.public_ip = detected if args.yes else ask('本机公网 IPv4', detected)
+        args.public_ip = detected if args.yes else ask('本机公网 IPv4', detected, check_only=args.check)
     args.public_ip = public_ipv4(args.public_ip or '')
     if args.dns_relay_ip:
         args.dns_relay_ip = public_ipv4(args.dns_relay_ip)
@@ -226,8 +236,10 @@ def prepare_input(args):
             if args.no_email and args.email:
                 raise ValueError('--email 和 --no-email 不能同时使用')
             if not args.no_email:
-                args.email = args.email or (ask("Let's Encrypt 账户邮箱") if not args.yes else '')
-                if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
+                args.email = args.email or (ask("Let's Encrypt 账户邮箱（留空则不发送到期通知）") if not args.yes else '')
+                if not args.email and not args.yes:
+                    args.no_email = True
+                elif not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', args.email) or args.email.startswith('-'):
                     raise ValueError('请提供有效的证书账户邮箱')
             if not args.agree_tos:
                 if args.yes or ask('同意 https://letsencrypt.org/repository/ 中的服务条款？输入 yes') != 'yes':
@@ -522,6 +534,13 @@ fi''' if self.args.coexist else ''
         print(f'\n安装完成： {self.settings["origin"]}/\n'
               '管理员用户名：admin\n初始密码文件：/etc/xray-gateway/initial-admin.txt（仅 root 可读）\n'
               '查看凭据：sudo cat /etc/xray-gateway/initial-admin.txt\n'
+              '\n配置与数据位置：\n'
+              '  用户和规则：登录面板管理；数据保存在 /var/lib/xray-gateway/gateway.sqlite\n'
+              '  面板运行配置：/etc/xray-gateway/settings.json\n'
+              '  Xray 配置：/etc/xray-gateway/core.json（由面板维护）\n'
+              f'  Nginx 配置：{self.nginx_target}\n'
+              f'  当前程序：{release.APP}/current\n'
+              '  修改域名涉及 DNS、证书及多个配置，不要只修改单个文件。\n'
               f'日志与停用脚本：{self.backup}\n'
               + ('已有证书不会自动续期，请按原有方式更新安装目录内的证书并重载 Nginx。\n' if self.args.certificate else ''), flush=True)
         return 0 if healthy else 2

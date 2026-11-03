@@ -20,6 +20,14 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 
 按提示填写面板域名、证书邮箱、公网 IPv4 并确认安装。**无需手动下载或克隆代码仓库**：脚本自动解析固定提交、下载源码包、安装依赖并编译 C++ 面板，生成完整版本包并安装到 `/opt/xcli/releases/`，再配置经过 SHA-256 校验的官方 Xray、Nginx、HTTPS 证书和探测服务。安装和后续更新使用同一套版本管理机制。首次构建需要数分钟，耗时取决于服务器和网络。
 
+如果已经克隆仓库，也可以在仓库目录运行下面的命令，交互安装当前检出的提交。该提交必须已存在于 GitHub；安装器从 GitHub 下载该提交的源码，不包含本地未提交的修改。
+
+```sh
+sudo bash ./install.sh --ref "$(git rev-parse HEAD)"
+```
+
+交互模式可以将证书邮箱留空：此时仍启用证书自动续期，但没有到期邮件通知。通过 SSH 运行时需要分配交互终端；若没有终端，请使用下面的无人值守参数。
+
 安装完成后访问输出的 HTTPS 地址。管理员用户名为 `admin`；随机初始密码仅保存在服务器的 root 私有文件中，使用下面的命令查看：
 
 ```sh
@@ -27,6 +35,8 @@ sudo cat /etc/xray-gateway/initial-admin.txt
 ```
 
 登录后创建用户即可获取订阅与二维码。二次验证和故障通知默认关闭，按需要在面板中配置。Let's Encrypt 证书由 `certbot.timer` 续期，续期成功后自动检查并重载 Nginx，同时更新 Hysteria 2 专用证书副本；Xray 在证书重载周期内（最长约 1 小时）读取新文件。
+
+安装完成后会显示本次部署的配置位置。用户、规则和节点优先通过面板管理，数据位于 `/var/lib/xray-gateway/gateway.sqlite`；面板运行配置位于 `/etc/xray-gateway/settings.json`，由面板维护的 Xray 配置位于 `/etc/xray-gateway/core.json`。普通安装的 Nginx 配置为 `/etc/nginx/nginx.conf`，共存安装则为 `/etc/nginx/xcli.conf`。更换域名还涉及 DNS、证书与多个服务配置，不应只修改其中一个文件。
 
 ### 无人值守与预检查
 

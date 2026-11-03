@@ -1,6 +1,7 @@
 """Installer safeguards and generated configuration; no host changes."""
 import contextlib
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -199,6 +200,38 @@ class PreflightTests(unittest.TestCase):
         with patch.object(install, 'resolve_domain'), patch.object(pathlib.Path, 'exists', return_value=False), \
              patch.object(pathlib.Path, 'is_symlink', return_value=False), self.assertRaises(ValueError):
             install.prepare_input(args)
+
+    def test_interactive_email_can_be_left_empty(self):
+        args = install.arguments(['--domain', 'panel.example.com', '--public-ip', '8.8.4.4', '--no-tune-network'])
+        with patch.object(install, 'resolve_domain'), patch.object(pathlib.Path, 'exists', return_value=False), \
+             patch.object(pathlib.Path, 'is_symlink', return_value=False), \
+             patch.object(pathlib.Path, 'read_text', return_value='nameserver 1.1.1.1\n'), \
+             patch.object(install, 'ask', side_effect=['', 'yes']):
+            install.prepare_input(args)
+        self.assertTrue(args.no_email)
+
+    def test_missing_terminal_gives_check_specific_parameters(self):
+        with patch('builtins.open', side_effect=OSError('no controlling tty')), \
+             patch.object(sys.stdin, 'isatty', return_value=False):
+            with self.assertRaisesRegex(ValueError, '--domain.*--public-ip') as error:
+                install.ask('面板域名', check_only=True)
+            self.assertNotIn('--email', str(error.exception))
+            with self.assertRaisesRegex(ValueError, '--email.*--no-email.*--agree-tos'):
+                install.ask('面板域名')
+
+    def test_success_reports_actual_configuration_locations(self):
+        instance = object.__new__(install.Installer)
+        instance.settings = {'origin': 'https://panel.example.com'}
+        instance.nginx_target = pathlib.Path('/etc/nginx/xcli.conf')
+        instance.backup = pathlib.Path('/var/backups/xcli/install/example')
+        instance.args = install.arguments(['--coexist'])
+        with patch.object(instance, 'packages_and_build'), patch.object(instance, 'install_files'), \
+             patch.object(instance, 'certificate'), patch.object(instance, 'start_and_verify', return_value=True), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(instance.execute(), 0)
+        for path in ('/etc/nginx/xcli.conf', '/etc/xray-gateway/settings.json',
+                     '/etc/xray-gateway/core.json', '/var/lib/xray-gateway/gateway.sqlite'):
+            self.assertIn(path, out.getvalue())
 
     def test_dns_relay_requires_the_explicit_relay_address(self):
         args = install.arguments(['--yes', '--domain', 'panel.example.com', '--public-ip', '8.8.4.4',
