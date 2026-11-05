@@ -82,7 +82,11 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
     <p class="footnote">范围 1–1000 Mbps。保存时会短暂重启核心，现有连接可能中断；完成后请更新客户端订阅。</p>
     <p class="footnote">新订阅提供“Hysteria 2 Brutal”；旧名称“Hysteria 2 Brutal 40 Mbps”保留供现有选择使用，两者指向同一入口。</p>
     <p v-if="!enabled" class="footnote">当前服务未启用配置变更。</p>
-    <p v-if="message" class="message" aria-live="polite">{{ message }}</p>
+    <p v-if="message" class="success" aria-live="polite">{{ message }}</p>
     <p v-if="failure" class="message" role="alert">{{ failure }}</p>
   </section>
 </template>
+
+<style scoped>
+.success { color: #176638; margin-top: 14px; }
+</style>
