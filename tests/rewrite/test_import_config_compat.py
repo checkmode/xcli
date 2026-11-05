@@ -166,6 +166,9 @@ class ImportConfigCompatibility(unittest.TestCase):
             compare(extended,[first])
             subsequent={key:built[key] for key in ('settings','core','monitor','pool','nginx','locations')}
             compare(subsequent,[second]);compare(subsequent,[first])
+            duplicate_include=copy.deepcopy(subsequent)
+            duplicate_include['nginx']+='\ninclude /etc/nginx/xcli-import-locations.conf;'
+            self.assertFalse(compare(duplicate_include,[second])['ok'])
             older=copy.deepcopy(subsequent);older['pool']['proxies'][0].pop('entry')
             older['pool']['proxies'][0].pop('enabled');older['pool']['proxies'][0].pop('deleted_at')
             compare(older,[second])

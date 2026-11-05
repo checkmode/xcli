@@ -460,11 +460,11 @@ fn add_prepared(
     let include = "include /etc/nginx/xcli-import-locations.conf;";
     let marker = format!("location = {path} {{");
     if files.had_locations {
-        if !files.nginx.contains(include) {
+        if files.nginx.matches(include).count() != 1 {
             return Err(ImportError("既有导入入口与 Nginx 配置不一致"));
         }
     } else {
-        if files.nginx.contains(include) || !files.nginx.contains(&marker) {
+        if files.nginx.contains(include) || files.nginx.matches(&marker).count() != 1 {
             return Err(ImportError("无法定位 Nginx 入口"));
         }
         *files.nginx = files
@@ -619,7 +619,7 @@ pub fn enable_vmess(mut files: Files) -> Result<(Files, Vec<Value>), ImportError
         .to_owned();
     let vmess_path = format!("{path}/vmess");
     let marker = format!("location = {path} {{");
-    if !files.nginx.contains(&marker)
+    if files.nginx.matches(&marker).count() != 1
         || files.nginx.contains(&format!("location = {vmess_path} {{"))
     {
         return Err(ImportError("无法确定 VMess 的 Nginx 入口"));
