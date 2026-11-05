@@ -26,6 +26,17 @@ sudo bash ./install.sh
 
 可先运行 `sudo bash ./install.sh --check` 检查并缓存输入；正式安装时交互提示可使用这些默认值。无人值守时可使用 `--role panel|node`、`--domain`、`--public-ip`、`--no-email`、`--agree-tos` 和 `--yes`；节点还需 `--panel https://面板域名`。安装使用当前 Git 提交，不包含未提交的修改。新安装器不支持直接升级现有部署、共存安装或旧版发布包；Rust 测试版暂未提供原地更新命令，下文的 `update.sh` 仅适用于旧版。
 
+## 将旧版面板升级到 Rust 测试版
+
+在现有面板的源码目录运行：
+
+```sh
+git pull --ff-only
+sudo bash ./upgrade.sh
+```
+
+脚本保留现有用户数据库、域名、订阅地址、Xray 和 Nginx 配置，并在切换前备份配置和数据库。可先运行 `sudo bash ./upgrade.sh --check` 检查环境。当前升级入口面向旧版单机面板；正在运行动态住宅服务的部署，以及 Rust 版本之间的更新，尚不支持此入口。
+
 ## 旧版一键安装
 
 准备一台**全新的 Ubuntu 24.04 或 26.04 服务器**，支持 AMD64 / ARM64。需要 root 或 sudo 权限、systemd、公网 IPv4，以及能访问 Ubuntu 软件源、GitHub 和 Let's Encrypt 的网络。建议至少 2 GB 内存并预留 4 GB 磁盘空间用于编译。
