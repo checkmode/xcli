@@ -1,0 +1,48 @@
+export type RuleLine = { index: number; text: string; fields: string[] | null };
+export type RuleFilters = { query: string; target: string; kind: string; resolution: string; selectedOnly: boolean };
+
+export const ruleKinds = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'DST-PORT'];
+export const resolutionKinds = ['IP-CIDR', 'IP-CIDR6', 'GEOIP'];
+
+export function parseRuleLines(text: string): RuleLine[] {
+  return text.split('\n').map((line, index) => {
+    const trimmed = line.trim();
+    const fields = trimmed.split(',').map(value => value.trim());
+    return { index, text: line, fields: !trimmed || trimmed.startsWith('#') || fields.length < 3 || fields.length > 4 ? null : fields };
+  }).filter(line => line.text.trim() !== '');
+}
+
+export function filterRuleLines(lines: RuleLine[], filters: RuleFilters, selected: ReadonlySet<number>): RuleLine[] {
+  const query = filters.query.trim().toLowerCase();
+  return lines.filter(line => {
+    if (query && !line.text.toLowerCase().includes(query)) return false;
+    if (filters.selectedOnly && (!line.fields || !selected.has(line.index))) return false;
+    if (filters.target && (!line.fields || line.fields[2] !== filters.target)) return false;
+    if (filters.kind && (!line.fields || line.fields[0] !== filters.kind)) return false;
+    if (filters.resolution && (!line.fields || !resolutionKinds.includes(line.fields[0] ?? '') ||
+        (line.fields[3] || 'default') !== filters.resolution)) return false;
+    return true;
+  });
+}
+
+export function selectVisibleRules(selected: number[], visible: RuleLine[], checked: boolean): number[] {
+  const result = new Set(selected);
+  for (const line of visible) {
+    if (!line.fields) continue;
+    if (checked) result.add(line.index); else result.delete(line.index);
+  }
+  return [...result].sort((a, b) => a - b);
+}
+
+export function changeSelectedRules(text: string, selected: ReadonlySet<number>, action: { type: 'delete' } | { type: 'target'; target: string }): string {
+  const valid = new Set(parseRuleLines(text).filter(line => line.fields).map(line => line.index));
+  return text.split('\n').flatMap((line, index) => {
+    if (!selected.has(index) || !valid.has(index)) return [line];
+    if (action.type === 'delete') return [];
+    const parts = line.split(',');
+    const previous = parts[2] ?? '';
+    const whitespace = /^(\s*)(.*?)(\s*)$/.exec(previous);
+    parts[2] = `${whitespace?.[1] ?? ''}${action.target}${whitespace?.[3] ?? ''}`;
+    return [parts.join(',')];
+  }).join('\n');
+}

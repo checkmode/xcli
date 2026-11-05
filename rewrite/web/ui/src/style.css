@@ -160,6 +160,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .rules-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); align-items: start; gap: 22px; margin-top: 20px; }
 .template-list { display: grid; gap: 4px; padding: 5px; border: 1px solid #ebeff5; border-radius: 10px; background: #f7f9fc; }
 .template-list button { width: 100%; display: grid; justify-content: start; gap: 4px; padding: 10px; border-color: transparent; background: transparent; text-align: left; white-space: normal; }
+.template-list button strong { min-width: 0; overflow-wrap: anywhere; }
 .template-list button.active { border-color: #dce8f8; background: #fff; box-shadow: 0 2px 8px rgba(38, 74, 122, .06); }
 .template-list button span { color: #637084; font-size: 11px; font-weight: 400; }
 .template-editor { min-width: 0; }
@@ -168,21 +169,44 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .subheading { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
 .subheading h4 { margin: 0; font-size: 12px; }
 .subheading span { color: #61718a; font-size: 11px; }
-.group-line { display: grid; grid-template-columns: 1fr 1fr auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--soft-line); font-size: 12px; }
-.group-editor { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 8px; }
-.rule-builder { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(130px, 2fr) minmax(120px, 1fr) auto; gap: 6px; }
-.rule-builder input, .rule-builder select, .group-editor input, .group-editor select, .bulk-actions select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
-.bulk-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 11px; }
-.bulk-actions select { width: 145px; margin-left: auto; }
+.group-management { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--soft-line); border-radius: 9px; background: #f8fafc; }
+.group-management summary { cursor: pointer; color: #344256; font-size: 12px; }
+.group-management summary span { float: right; color: var(--muted); }
+.group-management > p { margin-top: 9px; color: var(--muted); font-size: 11px; }
+.group-management > p.message { color: #b43a40; }
+.group-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--soft-line); font-size: 12px; }
+.group-line > span { min-width: 0; overflow-wrap: anywhere; }
+.group-line > div { display: flex; gap: 5px; }
+.group-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.group-editor input, .group-editor select { flex: 1 1 120px; width: auto; }
+.group-editor input, .group-editor select, .bulk-actions select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
+.rule-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(205px, 235px); align-items: start; gap: 16px; margin-top: 20px; }
+.rule-list-pane { min-width: 0; }
+.rule-list-heading { margin: 0 0 10px; }
+.rule-list-heading h4, .rule-editor-pane h4 { margin: 0; font-size: 13px; }
+.rule-list-heading p, .rule-editor-pane > div:first-child p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.rule-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.rule-filters label, .rule-editor-pane label { gap: 5px; font-size: 11px; }
+.rule-filters input, .rule-filters select, .rule-editor-pane input, .rule-editor-pane select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
+.rule-filter-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.rule-filter-footer .checkbox { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.bulk-actions select { flex: 1 1 120px; max-width: 190px; }
 .rules-table { max-height: 360px; overflow: auto; margin-top: 8px; border: 1px solid #e9eef5; border-radius: 9px; }
 .rules-table table { font-size: 12px; }
 .rules-table th { position: sticky; top: 0; z-index: 1; background: #f7f9fc; }
 .rules-table td, .rules-table th { padding: 5px 8px; }
 .rules-table td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; }
+.mobile-rule-details { display: none; }
+.rules-table tr.editing-rule { background: #f0f6ff; }
+.rules-table .rule-empty { padding: 16px; color: var(--muted); text-align: center; white-space: normal; }
 .rule-comment { color: var(--muted); }
 .raw-rules { margin-top: 12px; font-size: 12px; }
 .raw-rules summary { cursor: pointer; }
 .raw-rules textarea { margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+.rule-editor-pane { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid #e4ebf4; border-radius: 10px; background: #f8fafc; }
+.rule-editor-pane .message { margin: 0; }
+.rule-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .template-users { margin-top: 26px; }
 .template-users select { max-width: 300px; min-height: 34px; font-size: 12px; }
 .webshare-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 17px; color: var(--muted); font-size: 12px; }
@@ -240,21 +264,17 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
   .login-card { width: 100%; max-width: 480px; }
   form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (min-width: 801px) and (max-width: 1000px) {
+@media (max-width: 1250px) {
   .rules-layout { grid-template-columns: 1fr; }
   .template-list { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-  .rule-builder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bulk-actions { flex-wrap: wrap; }
-  .bulk-actions select { margin-left: 0; }
+}
+@media (max-width: 1023px) {
+  .rule-workspace { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .rules-layout { grid-template-columns: 1fr; }
-  .template-list { display: flex; overflow-x: auto; }
-  .template-list button { min-width: 160px; }
+  .template-list { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
   .template-meta { grid-template-columns: 1fr; }
-  .rule-builder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bulk-actions { flex-wrap: wrap; }
-  .bulk-actions select { margin-left: 0; }
   .webshare-config { grid-template-columns: 1fr; }
   .host-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -272,6 +292,15 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
   .login-card { padding: 23px; }
   .health, .account-state { align-items: flex-start; flex-direction: column; }
   form, .editor-grid, .backup-restore { grid-template-columns: 1fr; }
+  .rules-table table, .rules-table tbody { display: block; }
+  .rules-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .rules-table tbody tr { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 6px 8px; border-bottom: 1px solid var(--soft-line); }
+  .rules-table td, .rules-table td:first-child, .rules-table td:last-child { display: block; min-width: 0; padding: 0; border: 0; white-space: normal; }
+  .rules-table td.rule-type, .rules-table td.rule-target, .rules-table td.rule-resolution { display: none; }
+  .rules-table td.rule-content { overflow-wrap: anywhere; }
+  .rules-table td.rule-comment { grid-column: 2 / -1; }
+  .rules-table td.rule-empty { grid-column: 1 / -1; padding: 10px; }
+  .mobile-rule-details { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.4; }
   .user-list { overflow: visible; }
   .user-list table, .user-list tbody { display: block; }
   .user-list thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
@@ -289,8 +318,6 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
   .login-heading h1 { font-size: 34px; }
   .login-features { gap: 7px; }
   .login-features span { padding: 7px 8px; font-size: 11px; }
-  .group-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .group-editor button { grid-column: 1 / -1; }
   .users-heading { align-items: flex-start; }
   .users-heading p { font-size: 12px; }
   .users-heading > .heading-actions { justify-content: flex-end; }
