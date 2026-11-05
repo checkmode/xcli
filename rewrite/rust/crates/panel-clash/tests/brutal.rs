@@ -36,7 +36,10 @@ fn optional_brutal_node_does_not_change_existing_node_or_default() {
     let mut adjusted = enabled.clone();
     adjusted["hysteria2_brutal_mbps"] = json!(60);
     let adjusted = build(&adjusted, &user, &[], false, &json!({})).unwrap();
-    assert_eq!(find(&adjusted, "Hysteria 2 Brutal 40 Mbps")["down"], "60 Mbps");
+    assert_eq!(
+        find(&adjusted, "Hysteria 2 Brutal 40 Mbps")["down"],
+        "60 Mbps"
+    );
     assert_eq!(find(&adjusted, "Hysteria 2 Brutal")["down"], "60 Mbps");
     assert_eq!(find(&adjusted, "Hysteria 2"), find(&original, "Hysteria 2"));
     assert_eq!(
@@ -72,10 +75,14 @@ fn optional_brutal_node_does_not_change_existing_node_or_default() {
         .iter()
         .any(|name| name == "Hysteria 2 Brutal 40 Mbps"));
     for group in ["PROXY", "独立 · AI", "独立 · YouTube", "独立 · Google"] {
-        assert!(members(group).iter().any(|name| name == "Hysteria 2 Brutal"));
+        assert!(members(group)
+            .iter()
+            .any(|name| name == "Hysteria 2 Brutal"));
     }
     for group in ["故障转移", "自动选择"] {
-        assert!(!members(group).iter().any(|name| name == "Hysteria 2 Brutal"));
+        assert!(!members(group)
+            .iter()
+            .any(|name| name == "Hysteria 2 Brutal"));
     }
     enabled["hysteria2_brutal_port"] = json!(443);
     assert!(build(&enabled, &user, &[], false, &json!({})).is_err());

@@ -219,7 +219,10 @@ pub fn prepare(
             result.value_mut()["preview_id"] = json!(identifier(&input["preview_id"])?);
         }
         "brutal_rate" if exact(input, &["action", "mbps"]) => {
-            let rate = input["mbps"].as_u64().filter(|v| (1..=1000).contains(v)).ok_or_else(invalid)?;
+            let rate = input["mbps"]
+                .as_u64()
+                .filter(|v| (1..=1000).contains(v))
+                .ok_or_else(invalid)?;
             result.value_mut()["mbps"] = json!(rate);
         }
         _ => return Err(invalid()),
@@ -305,6 +308,12 @@ mod tests {
         for rate in [json!(0), json!(1001), json!(1.5), json!("40")] {
             assert!(prepare(&json!({"action":"brutal_rate","mbps":rate}), 100, &key, 0).is_err());
         }
-        assert!(prepare(&json!({"action":"brutal_rate","mbps":40,"extra":true}), 100, &key, 0).is_err());
+        assert!(prepare(
+            &json!({"action":"brutal_rate","mbps":40,"extra":true}),
+            100,
+            &key,
+            0
+        )
+        .is_err());
     }
 }

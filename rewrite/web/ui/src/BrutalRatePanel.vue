@@ -13,7 +13,7 @@ const message = ref('');
 const failure = ref('');
 let timer: ReturnType<typeof setInterval> | undefined;
 let refreshing = false;
-const blocked = computed(() => busy.value || !!pendingId.value || ['verifying', 'applying'].includes(status.value));
+const blocked = computed(() => busy.value || !!pendingId.value || !['idle','ready','complete','failed','expired'].includes(status.value));
 
 async function refresh() {
   if (refreshing) return;

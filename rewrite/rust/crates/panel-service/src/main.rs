@@ -387,7 +387,8 @@ async fn request_import_preview(
         let stamp = now().map_err(ImportRequestError::Auth)?;
         auth.session(&token, Some(&csrf), stamp)
             .map_err(ImportRequestError::Auth)?;
-        if (input.0["action"] == "apply" || input.0["action"] == "brutal_rate") && !app.import_apply {
+        if (input.0["action"] == "apply" || input.0["action"] == "brutal_rate") && !app.import_apply
+        {
             return Err(ImportRequestError::Disabled);
         }
         if input.0["action"] == "brutal_rate" && app.brutal_rate.is_none() {
@@ -3492,8 +3493,15 @@ async fn run() -> Result<(), &'static str> {
         import_preview,
         import_apply: args.import_apply,
         brutal_rate: settings.as_ref().and_then(|s| {
-            (s.get("hysteria2_brutal_port").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0)
-                .then(|| s.get("hysteria2_brutal_mbps").and_then(serde_json::Value::as_u64).unwrap_or(40))
+            (s.get("hysteria2_brutal_port")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                > 0)
+            .then(|| {
+                s.get("hysteria2_brutal_mbps")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(40)
+            })
         }),
         history,
         notifications,

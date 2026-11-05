@@ -99,9 +99,12 @@ fn audit(value: &Value) -> Result<AuditRecord> {
         Some("preview") => "请求检测固定代理".to_owned(),
         Some("apply") => "确认应用代理变更".to_owned(),
         Some("brutal_rate") => {
-            let rate = value["mbps"].as_u64().filter(|v| (1..=1000).contains(v)).ok_or(PublishError::Invalid)?;
+            let rate = value["mbps"]
+                .as_u64()
+                .filter(|v| (1..=1000).contains(v))
+                .ok_or(PublishError::Invalid)?;
             format!("请求调整 Brutal 速率至 {rate} Mbps")
-        },
+        }
         Some("manage") => {
             let action = value["operation"]
                 .as_str()
@@ -172,7 +175,11 @@ impl Publisher {
         );
         let request =
             decoded(&desired, self.key.as_ref()).map_err(|_| PublishError::Unavailable)?;
-        if preview_only && ["apply", "brutal_rate"].iter().any(|v| request.as_value()["action"] == *v) {
+        if preview_only
+            && ["apply", "brutal_rate"]
+                .iter()
+                .any(|v| request.as_value()["action"] == *v)
+        {
             return Err(PublishError::Unavailable);
         }
         let event = audit(request.as_value()).map_err(|_| PublishError::Unavailable)?;
@@ -251,7 +258,11 @@ impl Publisher {
         }
         let _guard = self.lock()?;
         let value = decoded(prepared.encrypted(), self.key.as_ref())?;
-        if preview_only && ["apply", "brutal_rate"].iter().any(|v| value.as_value()["action"] == *v) {
+        if preview_only
+            && ["apply", "brutal_rate"]
+                .iter()
+                .any(|v| value.as_value()["action"] == *v)
+        {
             return Err(PublishError::Invalid);
         }
         self.recover_locked(now, auditor, preview_only)?;
@@ -381,6 +392,13 @@ mod tests {
         let mut audit = Audit::default();
         assert_eq!(
             publisher.submit_preview_only(&apply, &ready, 1000, &mut audit),
+            Err(PublishError::Invalid)
+        );
+        let rate =
+            crate::request::prepare(&json!({"action":"brutal_rate","mbps":60}), 1000, &key, 0)
+                .unwrap();
+        assert_eq!(
+            publisher.submit_preview_only(&rate, &ready, 1000, &mut audit),
             Err(PublishError::Invalid)
         );
         assert!(!inbox.join("request.xgb").exists());

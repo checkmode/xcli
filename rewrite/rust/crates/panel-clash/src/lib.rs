@@ -300,7 +300,10 @@ pub fn build(
             "hysteria2-brutal".into(),
             "Hysteria 2 Brutal 40 Mbps".into(),
         );
-        outbound.insert("hysteria2-brutal-current".into(), "Hysteria 2 Brutal".into());
+        outbound.insert(
+            "hysteria2-brutal-current".into(),
+            "Hysteria 2 Brutal".into(),
+        );
     }
     if settings.get("vmess_ws_path").is_some() {
         outbound.insert("vmess".into(), "VMess TLS".into());

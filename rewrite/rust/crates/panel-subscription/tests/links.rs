@@ -81,10 +81,13 @@ fn optional_brutal_link_preserves_the_existing_hysteria_link() {
     let after = build(&enabled, &user, &[], false).unwrap();
     assert_eq!(before.get("hysteria2"), after.get("hysteria2"));
     let fast = after.get("hysteria2-brutal").unwrap();
+    let neutral = after.get("hysteria2-brutal-current").unwrap();
     assert!(fast.contains("@8.8.8.8:8443/?sni=panel.example.com"));
+    assert!(neutral.contains("@8.8.8.8:8443/?sni=panel.example.com"));
     let (subscription, _) = after.generic_subscription(&user, 100).unwrap();
     let decoded = String::from_utf8(STANDARD.decode(subscription).unwrap()).unwrap();
     assert!(decoded.lines().any(|line| line == fast));
+    assert!(decoded.lines().any(|line| line == neutral));
     enabled["hysteria2_brutal_port"] = json!(443);
     assert!(matches!(
         build(&enabled, &user, &[], false),

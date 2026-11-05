@@ -105,9 +105,12 @@ class BrutalRateHttp(unittest.TestCase):
                 wait_ready(panel,port)
                 self.assertEqual(json.loads(request(port,'/api/proxy-import',cookie=cookie)[2])['brutal_rate_mbps'],60)
                 status,_,body=request(port,'/s/'+'X'*43+'/clash.yaml'); self.assertEqual(status,200)
-                self.assertIn(b'"name": "Hysteria 2 Brutal"',body)
-                self.assertIn(b'"name": "Hysteria 2 Brutal 40 Mbps"',body)
-                self.assertIn(b'"down": "60 Mbps"',body)
+                entries = [json.loads(line.strip()[2:]) for line in body.decode().splitlines()
+                           if line.strip().startswith('- {')]
+                nodes = {entry['name']:entry for entry in entries if entry.get('type') == 'hysteria2'}
+                self.assertEqual(nodes['Hysteria 2']['port'],443)
+                self.assertEqual(nodes['Hysteria 2 Brutal']['down'],'60 Mbps')
+                self.assertEqual(nodes['Hysteria 2 Brutal 40 Mbps']['down'],'60 Mbps')
             finally:
                 stop(panel); stop(worker)
 

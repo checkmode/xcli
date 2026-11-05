@@ -175,12 +175,14 @@ fn same_server_settings(current: &Value, saved: &Value) -> Result<bool> {
     let normalized = |value: &Value| -> Result<Zeroizing<Vec<u8>>> {
         let mut value = SecretBundle(value.clone());
         let object = value.0.as_object_mut().ok_or(BackupError::Invalid)?;
-        if let Some(rate) = object.remove("hysteria2_brutal_mbps") {
+        if let Some(rate) = object.shift_remove("hysteria2_brutal_mbps") {
             if !rate.as_u64().is_some_and(|v| (1..=1000).contains(&v)) {
                 return Err(BackupError::Invalid);
             }
         }
-        Ok(Zeroizing::new(serde_json::to_vec(&value.0).map_err(|_| BackupError::Invalid)?))
+        Ok(Zeroizing::new(
+            serde_json::to_vec(&value.0).map_err(|_| BackupError::Invalid)?,
+        ))
     };
     let a = Sha256::digest(normalized(current)?.as_slice());
     let b = Sha256::digest(normalized(saved)?.as_slice());
@@ -288,8 +290,10 @@ impl BackupStore {
     pub fn inspect(&self, id: &str) -> Result<Value> {
         let bundle = self.bundle(id)?;
         let mut result = summary(&bundle.0, id)?;
-        result["same_server"] = json!(same_server_settings(&self.settings,
-            bundle.0.get("settings").ok_or(BackupError::Invalid)?)?);
+        result["same_server"] = json!(same_server_settings(
+            &self.settings,
+            bundle.0.get("settings").ok_or(BackupError::Invalid)?
+        )?);
         result["preserves"] = json!([
             "当前管理员密码和二次验证",
             "当前流量累计下限",
@@ -553,7 +557,10 @@ impl BackupStore {
 
     fn restore_plan(&self, id: &str) -> Result<RestorePlan> {
         let bundle = self.bundle(id)?;
-        if !same_server_settings(&self.settings, bundle.0.get("settings").ok_or(BackupError::Invalid)?)? {
+        if !same_server_settings(
+            &self.settings,
+            bundle.0.get("settings").ok_or(BackupError::Invalid)?,
+        )? {
             return Err(BackupError::DifferentServer);
         }
         let encoded = bundle

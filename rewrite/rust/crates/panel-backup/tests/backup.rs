@@ -115,12 +115,17 @@ fn changing_brutal_rate_keeps_existing_backups_restorable_without_changing_curre
     fixture(&path);
     let settings = json!({"domain":"example.test","hysteria2_brutal_port":8443});
     let mut before = BackupStore::open(&path, settings.clone(), [7; 32], "1.3.0".into()).unwrap();
-    let id = before.create("manual", 1_700_000_000).unwrap()["id"].as_str().unwrap().to_owned();
-    let mut current = settings;
-    current["hysteria2_brutal_mbps"] = json!(60);
+    let id = before.create("manual", 1_700_000_000).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let current =
+        json!({"domain":"example.test","hysteria2_brutal_mbps":60,"hysteria2_brutal_port":8443});
     let mut after = BackupStore::open(&path, current, [7; 32], "1.3.0".into()).unwrap();
     assert_eq!(after.inspect(&id).unwrap()["same_server"], true);
-    after.restore_with_flush(&id, 1_700_000_001, || Ok(())).unwrap();
+    after
+        .restore_with_flush(&id, 1_700_000_001, || Ok(()))
+        .unwrap();
 }
 
 #[test]

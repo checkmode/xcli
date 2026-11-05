@@ -210,9 +210,14 @@ pub fn build(
         inbound_tags.push("hysteria2-brutal-current".into());
         entries.push((
             "hysteria2-brutal-current".into(),
-            format!("hysteria2://{}@{}:{}/?sni={}#{}", quote(&user.uuid, false, false),
-                node_host, hy2_brutal_port, quote(domain, false, false),
-                quote(&format!("{} · Hysteria 2 Brutal", user.name), false, true)),
+            format!(
+                "hysteria2://{}@{}:{}/?sni={}#{}",
+                quote(&user.uuid, false, false),
+                node_host,
+                hy2_brutal_port,
+                quote(domain, false, false),
+                quote(&format!("{} · Hysteria 2 Brutal", user.name), false, true)
+            ),
         ));
     }
     if settings.get("vmess_ws_path").is_some() {

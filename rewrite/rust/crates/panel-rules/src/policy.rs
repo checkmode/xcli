@@ -125,7 +125,9 @@ pub fn apply_client_policy(
     // The fixed-rate entry is explicitly selectable, but never silently added
     // to automatic or fallback groups for existing users.
     for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
-        if let Some(value) = outbound.get(tag) { main.push(json!(value)); }
+        if let Some(value) = outbound.get(tag) {
+            main.push(json!(value));
+        }
     }
     if !countries.is_empty() {
         main.push(json!("住宅节点"));
@@ -168,7 +170,9 @@ pub fn apply_client_policy(
             }
         }
         for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
-            if let Some(value) = outbound.get(tag) { choices.push(json!(value)); }
+            if let Some(value) = outbound.get(tag) {
+                choices.push(json!(value));
+            }
         }
         let label = if category.name == "EaseLian" {
             "EaseLian".to_owned()
@@ -181,7 +185,9 @@ pub fn apply_client_policy(
     google.extend(countries);
     google.extend(servers);
     for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
-        if let Some(value) = outbound.get(tag) { google.push(json!(value)); }
+        if let Some(value) = outbound.get(tag) {
+            google.push(json!(value));
+        }
     }
     top.push(group("独立 · Google", google));
     top.push(group("其他流量", vec![json!("PROXY"), json!("DIRECT")]));
