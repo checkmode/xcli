@@ -167,6 +167,9 @@ pub fn apply_client_policy(
                 choices.push(node.clone());
             }
         }
+        if let Some(value) = outbound.get("hysteria2-brutal") {
+            choices.push(json!(value));
+        }
         let label = if category.name == "EaseLian" {
             "EaseLian".to_owned()
         } else {
@@ -177,6 +180,9 @@ pub fn apply_client_policy(
     let mut google = vec![json!("故障转移"), json!("自动选择")];
     google.extend(countries);
     google.extend(servers);
+    if let Some(value) = outbound.get("hysteria2-brutal") {
+        google.push(json!(value));
+    }
     top.push(group("独立 · Google", google));
     top.push(group("其他流量", vec![json!("PROXY"), json!("DIRECT")]));
     for item in groups {

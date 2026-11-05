@@ -51,6 +51,12 @@ fn optional_brutal_node_does_not_change_existing_node_or_default() {
     assert!(members("PROXY")
         .iter()
         .any(|name| name == "Hysteria 2 Brutal 40 Mbps"));
+    for group in ["独立 · AI", "独立 · YouTube", "独立 · Google"] {
+        assert_eq!(members(group)[0], "故障转移");
+        assert!(members(group)
+            .iter()
+            .any(|name| name == "Hysteria 2 Brutal 40 Mbps"));
+    }
     assert!(!members("故障转移")
         .iter()
         .any(|name| name == "Hysteria 2 Brutal 40 Mbps"));
