@@ -256,9 +256,22 @@ impl Queue {
             .ok_or(QueueError::Invalid)?;
         let age = now
             .checked_sub(requested)
-            .filter(|age| (0..=TTL).contains(age))
+            .filter(|age| *age >= 0)
             .ok_or(QueueError::Invalid)?;
-        let _ = age;
+        if age > TTL {
+            // The inbox retains the last published file. An authenticated
+            // request already in the replay ledger is harmless after expiry;
+            // an unknown expired request must still fail closed.
+            let (replay, _) = Replay::load(&self.state, self.legacy.as_deref(), now)?;
+            if now < replay.last {
+                return Err(QueueError::ClockBackwards);
+            }
+            return if replay.entries.contains_key(&id) {
+                Ok(None)
+            } else {
+                Err(QueueError::Invalid)
+            };
+        }
         let action = match object.get("action").and_then(Value::as_str) {
             Some("preview") => Action::Preview,
             Some("manage") => Action::Manage,
@@ -366,6 +379,22 @@ mod tests {
         fixture.request(request(&"c".repeat(32), 1000));
         assert!(matches!(queue.claim(1901), Err(QueueError::Invalid)));
         assert!(matches!(queue.claim(999), Err(QueueError::Invalid)));
+    }
+    #[test]
+    fn processed_expired_request_does_not_block_a_fresh_request() {
+        let fixture = Fixture::new();
+        let mut old = request(&"a".repeat(32), 1000);
+        old["action"] = json!("brutal_rate");
+        fixture.request(old);
+        let queue = fixture.queue();
+        assert!(queue.claim(1000).unwrap().is_some());
+        assert!(queue.claim(1900).unwrap().is_none());
+        assert!(queue.claim(1901).unwrap().is_none());
+        assert!(fixture.queue().claim(1901).unwrap().is_none());
+        fixture.request(request(&"b".repeat(32), 1901));
+        assert!(queue.claim(1901).unwrap().is_some());
+        fixture.request(request(&"c".repeat(32), 1000));
+        assert!(matches!(queue.claim(1901), Err(QueueError::Invalid)));
     }
     #[test]
     fn old_replay_ids_are_imported_and_corrupt_state_fails_closed() {
