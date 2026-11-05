@@ -4,6 +4,7 @@ set -euo pipefail
 
 main() {
   local root revision installed_revision build_revision work node_arch node_hash node_version=24.22.2 release node check=0 mode=legacy
+  local hysteria_brutal_port="${XCLI_HYSTERIA_BRUTAL_PORT:-}"
   root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
   [[ $EUID == 0 ]] || { echo '请使用 sudo bash ./upgrade.sh。' >&2; return 1; }
   [[ $# -le 1 ]] || { echo '用法：sudo bash ./upgrade.sh [--check]' >&2; return 1; }
@@ -15,9 +16,20 @@ main() {
   fi
   revision="$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)"
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo '无法读取 Git 提交。' >&2; return 1; }
+  if [[ -n "$hysteria_brutal_port" ]]; then
+    [[ "$hysteria_brutal_port" =~ ^[0-9]{1,5}$ ]] && ((10#$hysteria_brutal_port >= 1024 && 10#$hysteria_brutal_port <= 65535)) || {
+      echo 'Brutal 入口端口必须为 1024..65535。' >&2; return 1;
+    }
+    [[ -z "$(git -c safe.directory="$root" -C "$root" status --porcelain --untracked-files=no)" ]] || {
+      echo '请先提交现有代码修改，再启用 Brutal 入口。' >&2; return 1;
+    }
+  fi
   if [[ -f /etc/systemd/system/xcli-panel.service || -f /etc/systemd/system/xcli-node.service ]]; then
     mode=rust
     python3 "$root/rewrite/deploy/upgrade-rust.py" --check
+    if [[ -n "$hysteria_brutal_port" ]]; then
+      python3 "$root/rewrite/deploy/enable-hysteria-brutal.py" --port "$hysteria_brutal_port" --check
+    fi
     installed_revision=''
     if [[ -f /etc/systemd/system/xcli-panel.service && -f /opt/xcli/current/COMMIT ]]; then
       installed_revision="$(cat /opt/xcli/current/COMMIT)"
@@ -30,12 +42,18 @@ main() {
         git -c safe.directory="$root" -C "$root" diff --quiet "$installed_revision" "$revision" -- rewrite/rust rewrite/web rewrite/deploy deploy
     }; then
       echo '当前业务版本已经安装。'
+      if [[ -n "$hysteria_brutal_port" ]] && ((!check)); then
+        python3 "$root/rewrite/deploy/enable-hysteria-brutal.py" --port "$hysteria_brutal_port"
+      fi
       return
     fi
     if ((check)); then
       echo '检查完成，可以更新到当前 Git 提交。'
       return
     fi
+  elif [[ -n "$hysteria_brutal_port" ]]; then
+    echo 'Brutal 可选入口需要已安装的 Rust 面板。' >&2
+    return 1
   elif ((check)); then
     python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
     return
@@ -84,5 +102,8 @@ main() {
     node="$work/node/bin/node"
   fi
   python3 "$root/rewrite/deploy/upgrade-$mode.py" --release-dir "$release" --node-bin "$node" --revision "$revision"
+  if [[ -n "$hysteria_brutal_port" ]]; then
+    python3 "$root/rewrite/deploy/enable-hysteria-brutal.py" --port "$hysteria_brutal_port"
+  fi
 }
 main "$@"

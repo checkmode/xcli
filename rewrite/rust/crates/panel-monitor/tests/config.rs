@@ -7,6 +7,26 @@ fn base() -> Value {
         "reality_public":"fixture-public-key","short_id":"0123456789abcdef",
         "uuid":"11111111-2222-3333-4444-555555555555","ws_path":"/connect/fixture","hysteria2_port":443})
 }
+
+#[test]
+fn brutal_entry_uses_its_own_port_and_existing_probe_identity() {
+    let mut value = base();
+    value["hysteria2_brutal_port"] = json!(8443);
+    let config = Config::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(config.kinds().iter().any(|kind| kind == "hysteria2-brutal"));
+    let client = config
+        .legacy_client_for_compatibility("hysteria2-brutal", 12345)
+        .unwrap();
+    let node = &client.as_value()["outbounds"][0];
+    assert_eq!(node["protocol"], "hysteria");
+    assert_eq!(node["settings"]["port"], 8443);
+    assert_eq!(
+        node["streamSettings"]["hysteriaSettings"]["auth"],
+        value["uuid"]
+    );
+    value["hysteria2_brutal_port"] = json!(443);
+    assert!(Config::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+}
 fn parse(value: &Value) -> bool {
     Config::parse(&serde_json::to_vec(value).unwrap()).is_ok()
 }

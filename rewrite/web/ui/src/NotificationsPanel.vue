@@ -38,7 +38,7 @@ async function refresh() {
   finally { loading.value=false; }
 }
 function label(value:string):string {
-  return ({reality:'REALITY',websocket:'WebSocket / TLS',hysteria2:'Hysteria 2',vmess:'VMess / TLS',probe:'探测结果采集',core:'Xray 管理接口',backup:'自动备份',test:'通知测试'} as Record<string,string>)[value] ?? value;
+  return ({reality:'REALITY',websocket:'WebSocket / TLS',hysteria2:'Hysteria 2','hysteria2-brutal':'Hysteria 2 Brutal 40 Mbps',vmess:'VMess / TLS',probe:'探测结果采集',core:'Xray 管理接口',backup:'自动备份',test:'通知测试'} as Record<string,string>)[value] ?? value;
 }
 function state(value:string):string {
   return ({pending:'待投递',delivered:'已投递',failed:'失败',superseded:'已被新状态替代',cancelled:'已取消',fault:'故障',recovery:'恢复',test:'测试'} as Record<string,string>)[value] ?? value;

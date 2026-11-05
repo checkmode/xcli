@@ -3423,6 +3423,7 @@ async fn run() -> Result<(), &'static str> {
                 "reality" => Some("REALITY 入口"),
                 "websocket" => Some("WebSocket / TLS 入口"),
                 "hysteria2" => Some("Hysteria 2 入口"),
+                "hysteria2-brutal" => Some("Hysteria 2 Brutal 40 Mbps 入口"),
                 "vmess" => Some("VMess / TLS 入口"),
                 _ => settings
                     .as_ref()

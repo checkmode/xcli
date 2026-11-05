@@ -238,7 +238,7 @@ async function showLinks(user: User) {
     add(clients, 'clash', 'Clash 配置');
     add(clients, 'shadowrocket', '小火箭配置');
     add(clients, 'dns_install', '小火箭 DNS 模块', 'dns');
-    for (const [key, label] of [['reality','REALITY'],['websocket','HTTPS'],['hysteria2','Hysteria 2'],['vmess','VMess']]) add(nodes, key!, label!);
+    for (const [key, label] of [['reality','REALITY'],['websocket','HTTPS'],['hysteria2','Hysteria 2'],['hysteria2-brutal','Hysteria 2 Brutal 40 Mbps'],['vmess','VMess']]) add(nodes, key!, label!);
     if (!result.length) throw new Error('empty links');
     links.value = result;
   } catch { if (serial === linksRequest) linksNotice.value = '无法读取客户端链接，请重试。'; }

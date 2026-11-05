@@ -25,6 +25,13 @@ pub fn expected(settings: &Value) -> Result<Vec<String>, Invalid> {
         result.push("hysteria2".into());
     }
     if settings
+        .get("hysteria2_brutal_port")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value > 0)
+    {
+        result.push("hysteria2-brutal".into());
+    }
+    if settings
         .get("vmess_ws_path")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty())
@@ -113,11 +120,11 @@ pub fn view(bytes: &[u8], expected: &[String], now: i64) -> Value {
         Some("failed") => "failed",
         _ => return unavailable(),
     };
-    let Some(rows) = raw["checks"].as_array().filter(|rows| rows.len() <= 44) else {
+    let Some(rows) = raw["checks"].as_array().filter(|rows| rows.len() <= 45) else {
         return unavailable();
     };
     let allowed: BTreeSet<_> = expected.iter().map(String::as_str).collect();
-    if allowed.is_empty() || allowed.len() != expected.len() || allowed.len() > 44 {
+    if allowed.is_empty() || allowed.len() != expected.len() || allowed.len() > 45 {
         return unavailable();
     }
     let mut seen = BTreeSet::new();

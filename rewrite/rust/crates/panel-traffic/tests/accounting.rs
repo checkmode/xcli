@@ -129,6 +129,32 @@ fn ignores_invalid_counters_and_maps_residential_activity() {
 }
 
 #[test]
+fn optional_brutal_entry_counts_toward_the_same_user_and_hysteria_activity() {
+    let mut db = db();
+    let sample = vec![
+        counter(USER, "hysteria2", "downlink", 100),
+        counter(USER, "hysteria2-brutal", "downlink", 200),
+    ];
+    assert_eq!(apply(&mut db, "core", &sample, 1000, 5).unwrap(), (0, 300));
+    assert_eq!(usage(&db), (0, 300));
+    assert_eq!(apply(&mut db, "core", &sample, 1005, 5).unwrap(), (0, 0));
+    let second = vec![
+        counter(USER, "hysteria2", "downlink", 130),
+        counter(USER, "hysteria2-brutal", "downlink", 270),
+    ];
+    assert_eq!(apply(&mut db, "core", &second, 1010, 5).unwrap(), (0, 100));
+    assert_eq!(usage(&db), (0, 400));
+    let activity: (String, i64) = db
+        .query_row(
+            "SELECT transport,download_delta FROM device_activity",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(activity, ("hysteria2".into(), 100));
+}
+
+#[test]
 fn overflow_or_bad_state_rolls_back_the_entire_sample() {
     let mut db = db();
     db.execute(

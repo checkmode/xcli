@@ -120,6 +120,17 @@ impl Config {
                 kinds.push("hysteria2".to_owned());
             }
         }
+        if let Some(value) = cfg.get("hysteria2_brutal_port") {
+            if value != 0 {
+                let brutal = port(cfg, "hysteria2_brutal_port", 0)?;
+                if !kinds.iter().any(|kind| kind == "hysteria2")
+                    || brutal == port(cfg, "hysteria2_port", 443)?
+                {
+                    return Err(Invalid);
+                }
+                kinds.push("hysteria2-brutal".to_owned());
+            }
+        }
         if let Some(value) = cfg.get("vmess_ws_path") {
             if !value.is_null() && value != "" {
                 if !text(cfg, "vmess_ws_path", 1024)?.starts_with('/') {
@@ -202,6 +213,7 @@ impl Config {
         let transport = match exit {
             Some(entry) if entry["hysteria2"] == true => "hysteria2",
             Some(_) => "websocket",
+            None if kind == "hysteria2-brutal" => "hysteria2",
             None => kind,
         };
         let id = text(cfg, "uuid", 36)?;
@@ -214,7 +226,12 @@ impl Config {
             } else {
                 id.to_owned()
             };
-            json!({"protocol":"hysteria","settings":{"version":2,"address":public_ip,"port":port(cfg,"hysteria2_port",443)?},
+            let port_key = if kind == "hysteria2-brutal" {
+                "hysteria2_brutal_port"
+            } else {
+                "hysteria2_port"
+            };
+            json!({"protocol":"hysteria","settings":{"version":2,"address":public_ip,"port":port(cfg,port_key,443)?},
                 "streamSettings":{"network":"hysteria","security":"tls","hysteriaSettings":{"version":2,"auth":auth},
                     "tlsSettings":{"serverName":domain,"allowInsecure":false,"useSystemCA":true,"alpn":["h3"]},
                     "finalmask":{"quicParams":{"congestion":"bbr"}}}})

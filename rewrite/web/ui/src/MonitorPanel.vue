@@ -15,7 +15,7 @@ function parse(value: unknown): Monitor {
   const data = value as Partial<Monitor>;
   if (!['healthy', 'failed', 'unknown', 'stale'].includes(data.status ?? '') ||
       !['server', 'external'].includes(data.scope ?? '') || !Number.isSafeInteger(data.updated) ||
-      (data.updated ?? -1) < 0 || !Array.isArray(data.checks) || data.checks.length > 44) throw new Error('invalid report');
+      (data.updated ?? -1) < 0 || !Array.isArray(data.checks) || data.checks.length > 45) throw new Error('invalid report');
   if (!data.checks.every(row => row && typeof row.transport === 'string' &&
       ['healthy', 'failed', 'unknown'].includes(row.status) && typeof row.udp_supported === 'boolean' &&
       Number.isSafeInteger(row.last_success) && typeof row.error === 'string' &&
@@ -34,7 +34,7 @@ async function refresh() {
   finally { loading.value = false; }
 }
 function label(value: string): string {
-  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
+  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', 'hysteria2-brutal': 'Hysteria 2 Brutal 40 Mbps', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
 }
 function state(value: string): string {
   return ({ healthy: '正常', failed: '失败', unknown: '等待结果', stale: '结果已过期' } as Record<string, string>)[value] ?? '未知';

@@ -98,6 +98,10 @@ pub fn validate(settings: &Value) -> Result<()> {
     }
     let ws = settings["ws_path"].as_str().ok_or(Error::Base)?;
     let hy2 = port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)?;
+    let hy2_brutal = port(settings, "hysteria2_brutal_port", 0, 0).ok_or(Error::Base)?;
+    if hy2_brutal > 0 && (hy2 == 0 || hy2_brutal == hy2) {
+        return Err(Error::Base);
+    }
     port(settings, "public_port", 443, 1).ok_or(Error::Base)?;
     if settings
         .get("node_address_ip")
@@ -321,8 +325,16 @@ pub fn validate(settings: &Value) -> Result<()> {
 /// after the service restarts with updated settings.
 pub fn inbound_tags(settings: &Value) -> Result<Vec<String>> {
     let mut tags = vec!["reality".into(), "websocket".into()];
-    if port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)? > 0 {
+    let hy2 = port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)?;
+    let brutal = port(settings, "hysteria2_brutal_port", 0, 0).ok_or(Error::Base)?;
+    if brutal > 0 && (hy2 == 0 || brutal == hy2) {
+        return Err(Error::Base);
+    }
+    if hy2 > 0 {
         tags.push("hysteria2".into());
+    }
+    if brutal > 0 {
+        tags.push("hysteria2-brutal".into());
     }
     if settings.get("vmess_ws_path").is_some() {
         text(&settings["vmess_ws_path"], 1, 256).ok_or(Error::Base)?;
@@ -372,6 +384,19 @@ mod tests {
             inbound_tags(&json!({"residential_exits":[{"tag":"residential-27"},
                                                            {"tag":"residential-27"}]}))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn optional_brutal_entry_has_an_independent_valid_port() {
+        assert_eq!(
+            inbound_tags(&json!({"hysteria2_port":443,"hysteria2_brutal_port":8443})).unwrap(),
+            vec!["reality", "websocket", "hysteria2", "hysteria2-brutal"]
+        );
+        assert!(inbound_tags(&json!({"hysteria2_brutal_port":8443})).is_err());
+        assert!(inbound_tags(&json!({"hysteria2_port":443,"hysteria2_brutal_port":443})).is_err());
+        assert!(
+            inbound_tags(&json!({"hysteria2_port":443,"hysteria2_brutal_port":65536})).is_err()
         );
     }
 }

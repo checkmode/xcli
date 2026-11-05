@@ -33,7 +33,7 @@ async function refresh() {
   finally { if (request === sequence) loading.value = false; }
 }
 function label(value: string): string {
-  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
+  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', 'hysteria2-brutal': 'Hysteria 2 Brutal 40 Mbps', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
 }
 function bytes(value: number): string {
   if (value < 1024) return `${value} B`;

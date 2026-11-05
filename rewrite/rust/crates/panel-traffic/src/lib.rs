@@ -27,7 +27,7 @@ fn add(a: i64, b: i64) -> Result<i64> {
 }
 fn format() -> &'static Regex {
     static FORMAT: OnceLock<Regex> = OnceLock::new();
-    FORMAT.get_or_init(|| Regex::new(r"^user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2|vmess|residential-[0-9]{2}(?:-hy2)?)>>>traffic>>>(uplink|downlink)$").expect("fixed regex"))
+    FORMAT.get_or_init(|| Regex::new(r"^user>>>([0-9a-f]{32})\.([0-9a-f]{8})@(reality|websocket|hysteria2(?:-brutal)?|vmess|residential-[0-9]{2}(?:-hy2)?)>>>traffic>>>(uplink|downlink)$").expect("fixed regex"))
 }
 
 /// Atomically update legacy counters, usage, activity and history tables.
@@ -138,7 +138,7 @@ pub fn apply_in_transaction(
             } else {
                 0
             };
-            let transport = if tag.ends_with("-hy2") {
+            let transport = if tag == "hysteria2-brutal" || tag.ends_with("-hy2") {
                 "hysteria2"
             } else if tag.starts_with("residential-") {
                 "websocket"

@@ -57,7 +57,7 @@ pub struct History {
 }
 impl History {
     pub fn open(path: &Path, transports: Vec<String>) -> Result<Self> {
-        if transports.len() > 44
+        if transports.len() > 45
             || transports.iter().any(|value| !valid_transport(value))
             || transports.iter().collect::<BTreeSet<_>>().len() != transports.len()
         {
@@ -188,8 +188,10 @@ fn record_history(
     Ok(())
 }
 fn valid_transport(tag: &str) -> bool {
-    matches!(tag, "reality" | "websocket" | "hysteria2" | "vmess")
-        || tag
-            .strip_prefix("residential-")
-            .is_some_and(|suffix| suffix.len() == 2 && suffix.bytes().all(|c| c.is_ascii_digit()))
+    matches!(
+        tag,
+        "reality" | "websocket" | "hysteria2" | "hysteria2-brutal" | "vmess"
+    ) || tag
+        .strip_prefix("residential-")
+        .is_some_and(|suffix| suffix.len() == 2 && suffix.bytes().all(|c| c.is_ascii_digit()))
 }

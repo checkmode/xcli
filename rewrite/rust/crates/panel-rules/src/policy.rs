@@ -122,6 +122,11 @@ pub fn apply_client_policy(
     let mut top = Vec::new();
     let mut main = vec![json!("故障转移"), json!("自动选择")];
     main.extend(servers.clone());
+    // The fixed-rate entry is explicitly selectable, but never silently added
+    // to automatic or fallback groups for existing users.
+    if let Some(value) = outbound.get("hysteria2-brutal") {
+        main.push(json!(value));
+    }
     if !countries.is_empty() {
         main.push(json!("住宅节点"));
     }
