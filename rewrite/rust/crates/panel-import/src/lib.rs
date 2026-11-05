@@ -18,9 +18,9 @@ pub mod queue;
 pub mod report;
 pub mod request;
 #[cfg(target_os = "linux")]
-pub mod systemd;
-#[cfg(target_os = "linux")]
 pub mod runner;
+#[cfg(target_os = "linux")]
+pub mod systemd;
 #[cfg(target_os = "linux")]
 pub mod validate;
 pub mod vmess;
