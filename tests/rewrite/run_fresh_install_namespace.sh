@@ -33,6 +33,10 @@ cleanup() {
 }
 trap cleanup EXIT
 chmod 0755 "$fixture"
+# The candidate is started as xgateway and must be reachable even when the
+# original release is under a CI runner's private temporary directory.
+cp -a "$release" "$fixture/release"
+release="$fixture/release"
 cp "$xray" "$fixture/xray"
 cp "$node" "$fixture/node"
 mkdir -p "$fixture/nginx/modules-enabled" "$fixture/ssl"
