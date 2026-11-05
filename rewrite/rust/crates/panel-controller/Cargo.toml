@@ -1,0 +1,14 @@
+[package]
+name = "xcli-panel-controller"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+regex = "1.12"
+rusqlite = { version = "0.38", features = ["bundled"] }
+xcli-panel-traffic = { path = "../panel-traffic" }
+xcli-panel-users = { path = "../panel-users" }
+
+[dev-dependencies]
+tempfile = "3.23"

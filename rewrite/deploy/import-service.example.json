@@ -1,0 +1,29 @@
+{
+  "mode": "preview",
+  "key": "/etc/xcli/security.key",
+  "inbox": "/var/lib/xcli/proxy-import",
+  "state": "/var/lib/xcli-import/state",
+  "journal": "/var/lib/xcli-import/journal",
+  "update_lock": "/var/lib/xcli-import/journal/update.lock",
+  "report_directory": "/var/lib/xcli-import/report",
+  "panel_uid": 1001,
+  "panel_gid": 1001,
+  "probe_uid": 1002,
+  "probe_gid": 1002,
+  "targets": {
+    "settings": "/etc/xcli/settings.json",
+    "core": "/etc/xcli/core.json",
+    "monitor": "/etc/xcli-monitor/monitor.json",
+    "nginx": "/etc/nginx/xcli.conf",
+    "locations": "/etc/nginx/xcli-import-locations.conf",
+    "pool": "/etc/xcli/imported-proxies.json"
+  },
+  "database": "/var/lib/xcli/gateway.sqlite",
+  "core_pid_file": "/sys/fs/cgroup/system.slice/xcli-core.service/cgroup.procs",
+  "core_api": "127.0.0.1:10085",
+  "panel_port": 18080,
+  "monitor_report": "/var/lib/xcli-monitor/report.json",
+  "core_unit": "xcli-core.service",
+  "panel_unit": "xcli-panel.service",
+  "monitor_unit": "xcli-monitor.service"
+}

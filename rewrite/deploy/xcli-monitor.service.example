@@ -1,0 +1,22 @@
+[Unit]
+Description=XCLI public entry monitor
+After=network-online.target xcli-panel.service xcli-web.service
+Wants=network-online.target
+
+[Service]
+User=xgprobe
+Group=xgmonitor
+ExecStart=/usr/local/lib/xcli/xcli-monitor-service --experimental --config /etc/xcli-monitor/monitor.json --state-dir /var/lib/xcli-monitor --scope server --interval 60
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xcli-monitor
+CapabilityBoundingSet=
+UMask=0027
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

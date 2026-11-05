@@ -1,0 +1,133 @@
+DOMAIN-SUFFIX,easelian.com,EaseLian
+DOMAIN-SUFFIX,openai.com,独立 · AI
+DOMAIN-SUFFIX,chatgpt.com,独立 · AI
+DOMAIN-SUFFIX,chat.com,独立 · AI
+DOMAIN-SUFFIX,sora.com,独立 · AI
+DOMAIN-SUFFIX,oaistatic.com,独立 · AI
+DOMAIN-SUFFIX,oaistatsig.com,独立 · AI
+DOMAIN-SUFFIX,oaiusercontent.com,独立 · AI
+DOMAIN-SUFFIX,anthropic.com,独立 · AI
+DOMAIN-SUFFIX,clau.de,独立 · AI
+DOMAIN-SUFFIX,claude.ai,独立 · AI
+DOMAIN-SUFFIX,claude.com,独立 · AI
+DOMAIN-SUFFIX,claude.dev,独立 · AI
+DOMAIN-SUFFIX,claudemcpclient.com,独立 · AI
+DOMAIN-SUFFIX,claudemcpcontent.com,独立 · AI
+DOMAIN-SUFFIX,claudeusercontent.com,独立 · AI
+DOMAIN-SUFFIX,gemini.google.com,独立 · AI
+DOMAIN-SUFFIX,gemini.google,独立 · AI
+DOMAIN-SUFFIX,gemini.gstatic.com,独立 · AI
+DOMAIN-SUFFIX,bard.google.com,独立 · AI
+DOMAIN-SUFFIX,aistudio.google.com,独立 · AI
+DOMAIN-SUFFIX,makersuite.google.com,独立 · AI
+DOMAIN-SUFFIX,notebooklm.google.com,独立 · AI
+DOMAIN-SUFFIX,notebooklm.google,独立 · AI
+DOMAIN-SUFFIX,notebook.google,独立 · AI
+DOMAIN-SUFFIX,generativeai.google,独立 · AI
+DOMAIN-SUFFIX,generativelanguage.googleapis.com,独立 · AI
+DOMAIN-SUFFIX,perplexity.ai,独立 · AI
+DOMAIN-SUFFIX,perplexity.com,独立 · AI
+DOMAIN-SUFFIX,pplx.ai,独立 · AI
+DOMAIN-SUFFIX,grok.com,独立 · AI
+DOMAIN-SUFFIX,x.ai,独立 · AI
+DOMAIN-SUFFIX,grok.x.com,独立 · AI
+DOMAIN-SUFFIX,githubcopilot.com,独立 · AI
+DOMAIN,ai.google.dev,独立 · AI
+DOMAIN,alkalicore-pa.clients6.google.com,独立 · AI
+DOMAIN,alkalimakersuite-pa.clients6.google.com,独立 · AI
+DOMAIN,webchannel-alkalimakersuite-pa.clients6.google.com,独立 · AI
+DOMAIN,geminiweb-pa.clients.google.com,独立 · AI
+DOMAIN,geminiweb-pa.clients6.google.com,独立 · AI
+DOMAIN,cloudaicompanion.googleapis.com,独立 · AI
+DOMAIN,cloudcode-pa.googleapis.com,独立 · AI
+DOMAIN,daily-cloudcode-pa.googleapis.com,独立 · AI
+DOMAIN,notebooklm-pa.googleapis.com,独立 · AI
+DOMAIN,notebooklm.googleapis.com,独立 · AI
+DOMAIN,openaiapi-site.azureedge.net,独立 · AI
+DOMAIN,openaiassets.blob.core.windows.net,独立 · AI
+DOMAIN,openaicom.imgix.net,独立 · AI
+DOMAIN,servd-anthropic-website.b-cdn.net,独立 · AI
+DOMAIN,ppl-ai-file-upload.s3.amazonaws.com,独立 · AI
+DOMAIN,pplx-res.cloudinary.com,独立 · AI
+DOMAIN,copilot.microsoft.com,独立 · AI
+DOMAIN,copilot-proxy.githubusercontent.com,独立 · AI
+DOMAIN-SUFFIX,t.me,独立 · Telegram
+DOMAIN-SUFFIX,tdesktop.com,独立 · Telegram
+DOMAIN-SUFFIX,telegra.ph,独立 · Telegram
+DOMAIN-SUFFIX,telegram.me,独立 · Telegram
+DOMAIN-SUFFIX,telegram.org,独立 · Telegram
+DOMAIN-SUFFIX,telegram.dog,独立 · Telegram
+DOMAIN-SUFFIX,telesco.pe,独立 · Telegram
+IP-CIDR,91.108.56.0/22,独立 · Telegram
+IP-CIDR,91.108.4.0/22,独立 · Telegram
+IP-CIDR,91.108.8.0/22,独立 · Telegram
+IP-CIDR,91.108.16.0/22,独立 · Telegram
+IP-CIDR,91.108.12.0/22,独立 · Telegram
+IP-CIDR,149.154.160.0/20,独立 · Telegram
+IP-CIDR,91.105.192.0/23,独立 · Telegram
+IP-CIDR,91.108.20.0/22,独立 · Telegram
+IP-CIDR,185.76.151.0/24,独立 · Telegram
+IP-CIDR6,2001:b28:f23d::/48,独立 · Telegram
+IP-CIDR6,2001:b28:f23f::/48,独立 · Telegram
+IP-CIDR6,2001:67c:4e8::/48,独立 · Telegram
+IP-CIDR6,2001:b28:f23c::/48,独立 · Telegram
+IP-CIDR6,2a0a:f280::/32,独立 · Telegram
+DOMAIN-SUFFIX,youtube.com,独立 · YouTube
+DOMAIN-SUFFIX,youtu.be,独立 · YouTube
+DOMAIN-SUFFIX,googlevideo.com,独立 · YouTube
+DOMAIN-SUFFIX,ytimg.com,独立 · YouTube
+DOMAIN-SUFFIX,youtube-nocookie.com,独立 · YouTube
+DOMAIN-SUFFIX,yt.be,独立 · YouTube
+DOMAIN,youtubei.googleapis.com,独立 · YouTube
+DOMAIN,youtube.googleapis.com,独立 · YouTube
+DOMAIN-SUFFIX,netflix.com,独立 · Netflix
+DOMAIN-SUFFIX,netflix.net,独立 · Netflix
+DOMAIN-SUFFIX,nflxext.com,独立 · Netflix
+DOMAIN-SUFFIX,nflximg.com,独立 · Netflix
+DOMAIN-SUFFIX,nflximg.net,独立 · Netflix
+DOMAIN-SUFFIX,nflxso.net,独立 · Netflix
+DOMAIN-SUFFIX,nflxvideo.net,独立 · Netflix
+DOMAIN-SUFFIX,disneyplus.com,独立 · 国外媒体
+DOMAIN-SUFFIX,disney-plus.net,独立 · 国外媒体
+DOMAIN-SUFFIX,bamgrid.com,独立 · 国外媒体
+DOMAIN-SUFFIX,dssott.com,独立 · 国外媒体
+DOMAIN-SUFFIX,hbo.com,独立 · 国外媒体
+DOMAIN-SUFFIX,hbomax.com,独立 · 国外媒体
+DOMAIN-SUFFIX,max.com,独立 · 国外媒体
+DOMAIN-SUFFIX,hulu.com,独立 · 国外媒体
+DOMAIN-SUFFIX,huluim.com,独立 · 国外媒体
+DOMAIN-SUFFIX,hulustream.com,独立 · 国外媒体
+DOMAIN-SUFFIX,primevideo.com,独立 · 国外媒体
+DOMAIN-SUFFIX,amazonvideo.com,独立 · 国外媒体
+DOMAIN-SUFFIX,aiv-cdn.net,独立 · 国外媒体
+DOMAIN-SUFFIX,aiv-delivery.net,独立 · 国外媒体
+DOMAIN-SUFFIX,spotify.com,独立 · 国外媒体
+DOMAIN-SUFFIX,scdn.co,独立 · 国外媒体
+DOMAIN-SUFFIX,spoti.fi,独立 · 国外媒体
+DOMAIN-SUFFIX,twitch.tv,独立 · 国外媒体
+DOMAIN-SUFFIX,twitchcdn.net,独立 · 国外媒体
+DOMAIN-SUFFIX,ttvnw.net,独立 · 国外媒体
+DOMAIN-SUFFIX,jtvnw.net,独立 · 国外媒体
+DOMAIN-SUFFIX,soundcloud.com,独立 · 国外媒体
+DOMAIN-SUFFIX,sndcdn.com,独立 · 国外媒体
+DOMAIN-SUFFIX,deezer.com,独立 · 国外媒体
+DOMAIN-SUFFIX,dzcdn.net,独立 · 国外媒体
+DOMAIN-SUFFIX,tidal.com,独立 · 国外媒体
+DOMAIN-SUFFIX,bbc.co.uk,独立 · 国外媒体
+DOMAIN-SUFFIX,bbci.co.uk,独立 · 国外媒体
+DOMAIN-SUFFIX,bilibili.com,DIRECT
+DOMAIN-SUFFIX,biliapi.com,DIRECT
+DOMAIN-SUFFIX,biliapi.net,DIRECT
+DOMAIN-SUFFIX,bilivideo.com,DIRECT
+DOMAIN-SUFFIX,hdslb.com,DIRECT
+DOMAIN-SUFFIX,apple.com,DIRECT
+DOMAIN-SUFFIX,apple.co,DIRECT
+DOMAIN-SUFFIX,apple-cloudkit.com,DIRECT
+DOMAIN-SUFFIX,aaplimg.com,DIRECT
+DOMAIN-SUFFIX,appstore.com,DIRECT
+DOMAIN-SUFFIX,cdn-apple.com,DIRECT
+DOMAIN-SUFFIX,icloud.com,DIRECT
+DOMAIN-SUFFIX,icloud-content.com,DIRECT
+DOMAIN-SUFFIX,me.com,DIRECT
+DOMAIN-SUFFIX,mzstatic.com,DIRECT
+DOMAIN,www-cdn.icloud.com.akadns.net,DIRECT

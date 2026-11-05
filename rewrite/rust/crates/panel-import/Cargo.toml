@@ -1,0 +1,34 @@
+[package]
+name = "xcli-panel-import"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "xcli-import-probe"
+path = "src/probe_main.rs"
+
+[[bin]]
+name = "xcli-import-service"
+path = "src/service_main.rs"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.4"
+hex = "0.4"
+idna = "1.1"
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "socks"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = "1.0"
+xcli-auth-compat = { path = "../auth-compat" }
+xcli-panel-users = { path = "../panel-users" }
+xcli-panel-monitor = { path = "../panel-monitor" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.23"

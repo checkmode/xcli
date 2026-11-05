@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/node-ledger", "crates/node-protocol", "crates/node-transport", "crates/node-controller", "crates/node-xray", "crates/node-service", "crates/auth-compat", "crates/certificates", "crates/panel-auth", "crates/panel-provision", "crates/panel-runtime", "crates/panel-service", "crates/panel-users", "crates/panel-traffic", "crates/panel-controller", "crates/panel-xray", "crates/panel-nodes", "crates/panel-subscription", "crates/panel-rules", "crates/panel-clash", "crates/panel-shadowrocket", "crates/panel-backup", "crates/panel-webshare", "crates/panel-import", "crates/panel-monitor", "crates/panel-operations"]
+resolver = "2"

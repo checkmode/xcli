@@ -212,6 +212,8 @@ tbody tr:hover { background: #f8fafd; }
 .tabs button { flex: 0 1 auto; min-width: 95px; padding: 10px 14px; border-radius: 0; border-bottom: 2px solid transparent; color: #5b6e87; }
 .tabs button.active, .tabs button.selected { border-bottom-color: #1a73e8; background: transparent; color: #185abc; box-shadow: none; font-weight: 600; }
 dialog { padding: 24px; border: 1px solid #d6deea; border-radius: 6px; box-shadow: 0 18px 55px #101f3a33; }
+#subscription-diagnostics-dialog { width: min(720px, calc(100vw - 32px)); }
+.subscription-diagnostic-item { padding: 12px 0; border-top: 1px solid var(--line); line-height: 1.7; overflow-wrap: anywhere; }
 dialog::backdrop { background: #101c2da8; backdrop-filter: none; }
 .dialog-heading h2 { font-size: 18px; }
 .close { color: #66778b; }

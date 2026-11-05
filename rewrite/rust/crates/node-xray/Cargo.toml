@@ -1,0 +1,16 @@
+[package]
+name = "xcli-node-xray"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libc = "0.2"
+serde_json = "1.0"
+uuid = { version = "1.18", features = ["v4"] }
+wait-timeout = "0.2"
+xcli-node-controller = { path = "../node-controller" }
+xcli-node-protocol = { path = "../node-protocol" }
+
+[dev-dependencies]
+tempfile = "3.23"

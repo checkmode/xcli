@@ -1,0 +1,15 @@
+[package]
+name = "xcli-node-service"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ctrlc = { version = "3.5", features = ["termination"] }
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+xcli-node-controller = { path = "../node-controller" }
+xcli-node-ledger = { path = "../node-ledger" }
+xcli-node-transport = { path = "../node-transport" }
+xcli-node-xray = { path = "../node-xray" }

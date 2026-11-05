@@ -220,7 +220,7 @@ def existing_paths(root=Path('/'), coexist=False):
     return [str(path) for value in paths if (path := root / value.lstrip('/')).exists() or path.is_symlink()]
 
 
-def preflight(args):
+def preflight(args, required_files=None):
     if os.geteuid() != 0 or platform.system() != 'Linux' or not Path('/run/systemd/system').is_dir():
         raise ValueError('需要 root 权限和使用 systemd 的 Ubuntu 服务器')
     os_release = platform.freedesktop_os_release()
@@ -285,7 +285,9 @@ def preflight(args):
         raise ValueError('--certificate 和 --private-key 必须一起提供')
     if not args.check and not re.fullmatch('[0-9a-f]{40}', args.commit):
         raise ValueError('安装必须使用固定的 40 位提交；请通过 install.sh 或传入 --commit')
-    for name in ('cpp/CMakeLists.txt', 'static/index.html', 'deploy/templates/nginx.conf'):
+    if required_files is None:
+        required_files = ('cpp/CMakeLists.txt', 'static/index.html', 'deploy/templates/nginx.conf')
+    for name in required_files:
         if not (args.source / name).is_file():
             raise ValueError('源码包不完整：' + name)
     return arch

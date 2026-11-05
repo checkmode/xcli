@@ -1,0 +1,17 @@
+[package]
+name = "xcli-panel-rules"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# DNS rule priority depends on object insertion order, as in ordered_json in
+# the existing panel. Workspace compatibility tests cover this feature change.
+serde_json = { version = "1.0", features = ["preserve_order"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+getrandom = "0.4"
+hex = "0.4"
+xcli-panel-users = { path = "../panel-users" }
+
+[dev-dependencies]
+tempfile = "3.23"

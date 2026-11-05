@@ -1,0 +1,377 @@
+name: Rust and TypeScript rewrite
+on:
+  push:
+    branches: [main]
+    paths: ['rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
+  pull_request:
+    paths: ['rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ledger:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Test Rust node components and build test drivers
+        working-directory: rewrite/rust
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked
+          cargo build --locked --examples --bin xcli-node-service --bin xcli-panel-service --bin xcli-webshare-service --bin xcli-import-probe --bin xcli-import-service --bin xcli-monitor-service --bin xcli-webhook-sender
+          cargo build --locked --example managed_driver --example migration_compare_driver --bin xcli-cert-renew
+      - name: Test the Linux import privilege boundary in an isolated fixture
+        working-directory: rewrite/rust
+        run: |
+          cargo test --locked -p xcli-panel-import --lib --no-run --message-format=json > "$RUNNER_TEMP/xcli-import-test.json"
+          test_binary="$(python3 -c 'import json,sys; [print(m["executable"]) for line in open(sys.argv[1]) if (m:=json.loads(line)).get("reason")=="compiler-artifact" and m.get("target",{}).get("name")=="xcli_panel_import" and m.get("profile",{}).get("test") and m.get("executable")]' "$RUNNER_TEMP/xcli-import-test.json")"
+          test -n "$test_binary"
+          sudo env XCLI_TEST_PROBE_UID="$(id -u)" XCLI_TEST_PROBE_GID="$(id -g)" \
+            XCLI_TEST_IMPORT_HELPER="$PWD/target/debug/xcli-import-probe" \
+            "$test_binary" 'launcher::tests::' --test-threads=1
+          sudo env XCLI_TEST_PROBE_UID="$(id -u)" XCLI_TEST_PROBE_GID="$(id -g)" \
+            "$test_binary" 'preview::tests::' --test-threads=1
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+            XCLI_IMPORT_REPORT_DRIVER="$PWD/target/debug/examples/import_report_driver" \
+            /usr/bin/python3 -m unittest discover -s ../../tests/rewrite -p test_import_report_permissions.py -v
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+            XCLI_PANEL_SERVICE="$PWD/target/debug/xcli-panel-service" \
+            /usr/bin/python3 -m unittest discover -s ../../tests/rewrite -p test_import_http_permissions.py -v
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+            XCLI_PANEL_SERVICE="$PWD/target/debug/xcli-panel-service" \
+            XCLI_IMPORT_RUNNER="$PWD/target/debug/examples/import_runner_fixture" \
+            /usr/bin/python3 -m unittest discover -s ../../tests/rewrite -p test_import_worker_http.py -v
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+            XCLI_SWITCH_FIXTURE="$PWD/target/debug/examples/systemd_hooks_fixture" \
+            /usr/bin/python3 -m unittest discover -s ../../tests/rewrite -p test_import_systemd_hooks.py -v
+          cargo test --locked -p xcli-certificates --lib --no-run --message-format=json > "$RUNNER_TEMP/xcli-cert-test.json"
+          cert_binary="$(python3 -c 'import json,sys; [print(m["executable"]) for line in open(sys.argv[1]) if (m:=json.loads(line)).get("reason")=="compiler-artifact" and m.get("target",{}).get("name")=="xcli_certificates" and m.get("profile",{}).get("test") and m.get("executable")]' "$RUNNER_TEMP/xcli-cert-test.json")"
+          test -n "$cert_binary"
+          sudo env XCLI_TEST_CERT_UID="$(id -u)" XCLI_TEST_CERT_GID="$(id -g)" \
+            "$cert_binary" 'tests::root_validation_drops_identity_groups_and_capabilities' --ignored --test-threads=1
+          cargo test --locked -p xcli-certificates --test bundle --no-run --message-format=json > "$RUNNER_TEMP/xcli-cert-bundle-test.json"
+          bundle_binary="$(python3 -c 'import json,sys; [print(m["executable"]) for line in open(sys.argv[1]) if (m:=json.loads(line)).get("reason")=="compiler-artifact" and m.get("target",{}).get("name")=="bundle" and m.get("profile",{}).get("test") and m.get("executable")]' "$RUNNER_TEMP/xcli-cert-bundle-test.json")"
+          test -n "$bundle_binary"
+          sudo env XCLI_TEST_CERT_UID="$(id -u)" XCLI_TEST_CERT_GID="$(id -g)" \
+            "$bundle_binary" 'linux::root_publishes_for_core_group_after_dropped_validation' --ignored --test-threads=1
+          sudo env XCLI_TEST_CERT_UID="$(id -u)" XCLI_TEST_CERT_GID="$(id -g)" \
+            XCLI_CERT_RENEW="$PWD/target/debug/xcli-cert-renew" \
+            /usr/bin/python3 -m unittest discover -s ../../tests/rewrite -p test_cert_renew_cli.py -v
+      - name: Test real notification delivery in isolated network and mount namespaces
+        run: sudo bash tests/rewrite/run_notification_namespace.sh "$PWD" "$(id -un)"
+      - name: Compare persisted ledger with legacy Python
+        run: |
+          XCLI_LEDGER_DRIVER="$PWD/rewrite/rust/target/debug/examples/ledger_driver" \
+          XCLI_PROTOCOL_DRIVER="$PWD/rewrite/rust/target/debug/examples/protocol_driver" \
+            python3 -m unittest discover -s tests/rewrite -v
+          XCLI_WEBSHARE_SERVICE="$PWD/rewrite/rust/target/debug/xcli-webshare-service" \
+            python3 -m unittest discover -s tests/rewrite -p test_webshare_service.py -v
+          XCLI_IMPORT_PROBE="$PWD/rewrite/rust/target/debug/xcli-import-probe" \
+            python3 -m unittest discover -s tests/rewrite -p test_import_probe_helper.py -v
+          XCLI_IMPORT_PUBLISHER_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_publisher_driver" \
+            python3 -m unittest discover -s tests/rewrite -p test_import_publisher_crash.py -v
+      - name: Verify Xray adapter and experimental node with isolated real traffic
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, os, pathlib, sys, urllib.request, zipfile
+          sys.path.insert(0, 'deploy')
+          from provision import XRAY_ASSETS, XRAY_VERSION
+          asset, expected = XRAY_ASSETS['x86_64']
+          url = f'https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{asset}'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit('Xray archive checksum mismatch')
+          binary = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xcli-test-xray'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              binary.write_bytes(archive.read('xray'))
+          binary.chmod(0o700)
+          PY
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_XRAY_DRIVER="$PWD/rewrite/rust/target/debug/examples/xray_driver" \
+            python3 -m unittest discover -s tests/rewrite -p test_xray_integration.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_NODE_SERVICE="$PWD/rewrite/rust/target/debug/xcli-node-service" \
+            python3 -m unittest discover -s tests/rewrite -p test_node_service_integration.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_MANAGED_DRIVER="$PWD/rewrite/rust/target/debug/examples/managed_driver" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_xray_integration.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+            python3 -m unittest discover -s tests/rewrite -p test_xray_inbound_drain.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+            python3 -m unittest discover -s tests/rewrite -p test_xray_hysteria_revocation.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_CERT_BUNDLE_DRIVER="$PWD/rewrite/rust/target/debug/examples/bundle_fixture" \
+          XCLI_CERT_RENEWAL_DRIVER="$PWD/rewrite/rust/target/debug/examples/renewal_fixture" \
+            python3 -m unittest discover -s tests/rewrite -p test_xray_certificate_reload.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_MONITOR_DRIVER="$PWD/rewrite/rust/target/debug/examples/monitor_driver" \
+            python3 -m unittest discover -s tests/rewrite -p test_monitor_config_compat.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+            cargo test --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-monitor --lib real_xray_
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_NODE_SERVICE="$PWD/rewrite/rust/target/debug/xcli-node-service" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_node_end_to_end.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_controller_service.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+            cargo test --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-import real_xray_vmess_tunnel_carries_https_and_dns_in_isolation
+          sudo apt-get update
+          sudo apt-get install -y nginx
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_TEST_NGINX=/usr/sbin/nginx \
+            cargo test --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-import --lib validate::tests::
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_TEST_NGINX=/usr/sbin/nginx \
+          XCLI_IMPORT_CONFIG_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_config_driver" \
+            python3 -m unittest discover -s tests/rewrite -p test_import_candidate_validation.py -v
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['24', '26']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: rewrite/web/package-lock.json
+      - name: Build and test Web gateway and Vue preview
+        working-directory: rewrite/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+  fresh-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: rewrite/web/package-lock.json
+      - name: Build the experimental release
+        run: bash rewrite/build-release.sh "$RUNNER_TEMP/xcli-rewrite-release"
+      - name: Prepare real Xray and Nginx for isolated installation tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx libnginx-mod-stream iproute2 iptables
+          python3 - <<'PYTHON'
+          import hashlib, io, os, pathlib, sys, urllib.request, zipfile
+          sys.path.insert(0, 'deploy')
+          from provision import XRAY_ASSETS, XRAY_VERSION
+          asset, expected = XRAY_ASSETS['x86_64']
+          url = f'https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{asset}'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit('Xray archive checksum mismatch')
+          binary = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xcli-fresh-xray'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              binary.write_bytes(archive.read('xray'))
+          binary.chmod(0o755)
+          PYTHON
+      - name: Check generated configurations and install both roles in private namespaces
+        run: |
+          python3 -m unittest discover -s tests/rewrite -p test_dualstack_install.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-fresh-xray" XCLI_TEST_NGINX=/usr/sbin/nginx \
+            python3 -m unittest discover -s tests/rewrite -p test_fresh_render.py -v
+          revision="$(git rev-parse HEAD)"
+          git archive --format=tar.gz --prefix="xcli-$revision/" "$revision" > "$RUNNER_TEMP/xcli-bootstrap-fixture.tar.gz"
+          sudo env XCLI_TEST_BOOTSTRAP_ARCHIVE="$RUNNER_TEMP/xcli-bootstrap-fixture.tar.gz" \
+            bash tests/rewrite/run_fresh_install_namespace.sh "$PWD" "$RUNNER_TEMP/xcli-rewrite-release" \
+            "$(command -v node)" "$RUNNER_TEMP/xcli-fresh-xray" "$PWD"
+      - name: Verify core synchronization using real temporary systemd services
+        run: |
+          sudo env XCLI_TEST_PANEL_BIN="$RUNNER_TEMP/xcli-rewrite-release/bin/xcli-panel-service" \
+            XCLI_TEST_PANEL_INIT="$RUNNER_TEMP/xcli-rewrite-release/bin/xcli-panel-init" \
+            bash tests/rewrite/run_systemd_core_fixture.sh "$PWD" "$(id -un)" "$RUNNER_TEMP/xcli-fresh-xray"
+  panel-http:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: rewrite/web/package-lock.json
+      - name: Build experimental HTTP chain
+        run: |
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-service
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-runtime --bin xcli-host-disk-probe
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-provision --example provision_fixture
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-import --example import_runner_fixture
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml -p xcli-panel-import --bin xcli-import-service
+          cd rewrite/web
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Test login and CSRF through the Node gateway
+        run: |
+          cp rewrite/rust/target/debug/xcli-host-disk-probe "$RUNNER_TEMP/xcli-host-disk-probe"
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+          XCLI_DISK_PROBE="$RUNNER_TEMP/xcli-host-disk-probe" \
+          XCLI_STRICT_SETTINGS=1 \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_http_integration.py -v
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_mfa_http.py -v
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+            python3 -m unittest discover -s tests/rewrite -p test_webshare_http.py -v
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+            python3 -m unittest discover -s tests/rewrite -p test_monitor_http.py -v
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_IMPORT_RUNNER="$PWD/rewrite/rust/target/debug/examples/import_runner_fixture" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" XCLI_TEST_NODE="$(command -v node)" \
+            /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_import_worker_http.py -v
+          sudo env XCLI_TEST_REPORT_UID="$(id -u)" XCLI_TEST_REPORT_GID="$(id -g)" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_IMPORT_RUNNER="$PWD/rewrite/rust/target/debug/examples/import_runner_fixture" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" XCLI_TEST_NODE="$(command -v node)" \
+          XCLI_TEST_IMPORT_APPLY=1 \
+            /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_import_worker_http.py -v
+      - name: Verify the Rust import service with isolated system commands
+        run: sudo env "PATH=$PATH" bash tests/rewrite/run_import_service_namespace.sh "$PWD" "$(id -un)"
+      - name: Verify core synchronization through Node and real isolated Xray
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, io, os, pathlib, sys, urllib.request, zipfile
+          sys.path.insert(0, 'deploy')
+          from provision import XRAY_ASSETS, XRAY_VERSION
+          asset, expected = XRAY_ASSETS['x86_64']
+          url = f'https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{asset}'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit('Xray archive checksum mismatch')
+          binary = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xcli-test-xray'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              binary.write_bytes(archive.read('xray'))
+          binary.chmod(0o700)
+          PYTHON
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_controller_service.py -v
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_WEB_GATEWAY="$PWD/rewrite/web/dist/gateway/main.js" \
+            python3 -m unittest discover -s tests/rewrite -p test_backup_restore_http.py -v
+          sudo apt-get update
+          sudo apt-get install -y nginx
+          sudo env "PATH=$PATH" bash tests/rewrite/run_import_real_namespace.sh "$PWD" "$(id -un)" "$RUNNER_TEMP/xcli-test-xray"
+  legacy-compat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install C++ build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libcpp-httplib-dev nlohmann-json3-dev \
+            libsqlite3-dev libssl-dev libcurl4-openssl-dev libqrencode-dev libpng-dev libgrpc++-dev \
+            libprotobuf-dev protobuf-compiler protobuf-compiler-grpc python3-cryptography python3-yaml zbar-tools
+      - name: Build legacy panel and Rust comparison drivers
+        run: |
+          cmake -S cpp -B /tmp/xcli-legacy-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DXG_BUILD_COMPAT_FIXTURES=ON
+          cmake --build /tmp/xcli-legacy-build --target xray-gateway-panel xg-traffic-compat-driver xg-rules-compat-driver xg-host-compat-driver --parallel 2
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml --example migration_compare_driver --example provision_fixture --example host_fixture --bin xcli-panel-init
+          cargo build --locked --manifest-path rewrite/rust/Cargo.toml --bin xcli-panel-service --bin xcli-panel-checkpoint --example auth_driver --example user_input_driver --example user_store_driver --example traffic_driver --example node_sync_driver --example links_driver --example rules_driver --example rules_apply_driver --example policy_driver --example clash_driver --example shadow_driver --example backup_driver --example webshare_driver --example provider_driver --example import_driver --example import_request_driver --example import_config_driver --example import_queue_driver --example vmess_driver
+      - name: Verify panel handover and rollback without restarting Xray
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, os, pathlib, sys, urllib.request, zipfile
+          sys.path.insert(0, 'deploy')
+          from provision import XRAY_ASSETS, XRAY_VERSION
+          asset, expected = XRAY_ASSETS['x86_64']
+          url = f'https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{asset}'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit('Xray archive checksum mismatch')
+          binary = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xcli-test-xray'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              binary.write_bytes(archive.read('xray'))
+          binary.chmod(0o700)
+          PY
+          XCLI_TEST_XRAY="$RUNNER_TEMP/xcli-test-xray" \
+          XCLI_LEGACY_PANEL=/tmp/xcli-legacy-build/xray-gateway-panel \
+          XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service" \
+          XCLI_PANEL_CHECKPOINT="$PWD/rewrite/rust/target/debug/xcli-panel-checkpoint" \
+            python3 -m unittest discover -s tests/rewrite -p test_panel_handover_continuity.py -v
+      - name: Compare authentication, users, nodes, traffic and links with the legacy panel
+        run: |
+          export XCLI_LEGACY_PANEL=/tmp/xcli-legacy-build/xray-gateway-panel
+          export XCLI_AUTH_DRIVER="$PWD/rewrite/rust/target/debug/examples/auth_driver"
+          export XCLI_USER_INPUT_DRIVER="$PWD/rewrite/rust/target/debug/examples/user_input_driver"
+          export XCLI_USER_STORE_DRIVER="$PWD/rewrite/rust/target/debug/examples/user_store_driver"
+          export XCLI_LEGACY_TRAFFIC_DRIVER=/tmp/xcli-legacy-build/xg-traffic-compat-driver
+          export XCLI_TRAFFIC_DRIVER="$PWD/rewrite/rust/target/debug/examples/traffic_driver"
+          export XCLI_NODE_SYNC_DRIVER="$PWD/rewrite/rust/target/debug/examples/node_sync_driver"
+          export XCLI_PANEL_SERVICE="$PWD/rewrite/rust/target/debug/xcli-panel-service"
+          export XCLI_LINKS_DRIVER="$PWD/rewrite/rust/target/debug/examples/links_driver"
+          export XCLI_RULES_DRIVER="$PWD/rewrite/rust/target/debug/examples/rules_driver"
+          export XCLI_LEGACY_RULES_APPLY_DRIVER=/tmp/xcli-legacy-build/xg-rules-compat-driver
+          export XCLI_RULES_APPLY_DRIVER="$PWD/rewrite/rust/target/debug/examples/rules_apply_driver"
+          export XCLI_POLICY_DRIVER="$PWD/rewrite/rust/target/debug/examples/policy_driver"
+          export XCLI_CLASH_DRIVER="$PWD/rewrite/rust/target/debug/examples/clash_driver"
+          export XCLI_SHADOW_DRIVER="$PWD/rewrite/rust/target/debug/examples/shadow_driver"
+          export XCLI_BACKUP_DRIVER="$PWD/rewrite/rust/target/debug/examples/backup_driver"
+          export XCLI_MIGRATION_DRIVER="$PWD/rewrite/rust/target/debug/examples/migration_compare_driver"
+          export XCLI_PROVISION_FIXTURE="$PWD/rewrite/rust/target/debug/examples/provision_fixture"
+          export XCLI_PANEL_INIT_CLI="$PWD/rewrite/rust/target/debug/xcli-panel-init"
+          export XCLI_LEGACY_HOST_DRIVER=/tmp/xcli-legacy-build/xg-host-compat-driver
+          export XCLI_HOST_DRIVER="$PWD/rewrite/rust/target/debug/examples/host_fixture"
+          export XCLI_WEBSHARE_DRIVER="$PWD/rewrite/rust/target/debug/examples/webshare_driver"
+          export XCLI_WEBSHARE_PROVIDER_DRIVER="$PWD/rewrite/rust/target/debug/examples/provider_driver"
+          export XCLI_IMPORT_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_driver"
+          export XCLI_IMPORT_REQUEST_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_request_driver"
+          export XCLI_IMPORT_CONFIG_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_config_driver"
+          export XCLI_IMPORT_QUEUE_DRIVER="$PWD/rewrite/rust/target/debug/examples/import_queue_driver"
+          export XCLI_VMESS_DRIVER="$PWD/rewrite/rust/target/debug/examples/vmess_driver"
+          export XCLI_REQUIRE_QR_DECODER=1
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_auth_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_password_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_security_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_users_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_user_store_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_traffic_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_nodes_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_lock_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_subscription_links_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_subscription_diagnostics_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_panel_rules_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_rules_apply_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_client_policy_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_clash_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_backup_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_migration_snapshot_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_fresh_initialization_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_settings_preflight_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_host_runtime_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_history_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_webshare_control_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_webshare_provider_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_import_input_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_import_config_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_import_queue_compat.py -v
+          /usr/bin/python3 -m unittest discover -s tests/rewrite -p test_vmess_input_compat.py -v

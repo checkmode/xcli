@@ -1,0 +1,13 @@
+[Unit]
+Description=XCLI firewall rules
+Before=xcli-core.service xcli-node.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/xcli/firewall.sh start
+ExecStop=/usr/local/lib/xcli/firewall.sh stop
+
+[Install]
+WantedBy=multi-user.target

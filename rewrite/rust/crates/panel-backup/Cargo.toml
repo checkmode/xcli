@@ -1,0 +1,20 @@
+[package]
+name = "xcli-panel-backup"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.4"
+hex = "0.4"
+libc = "0.2"
+rusqlite = { version = "0.38", features = ["bundled", "backup", "serialize"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+sha2 = "0.10"
+subtle = "2.6"
+xcli-auth-compat = { path = "../auth-compat" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.23"

@@ -33,7 +33,7 @@ jobs:
           test ! -e /etc/xray-gateway
           # Push builds exercise the public download entry point and immutable archive.
           if [ "$GITHUB_EVENT_NAME" = push ]; then
-            sudo bash install.sh --ref "$GITHUB_SHA" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
+            sudo bash install.sh --legacy --ref "$GITHUB_SHA" --yes --domain panel.install.example --public-ip "$PUBLIC_IP" \
               --certificate "$FIXTURE/server.crt" --private-key "$FIXTURE/server.key" --tune-network
           else
             work=$(mktemp -d /var/tmp/xcli-source.XXXXXXXX)
@@ -49,7 +49,8 @@ jobs:
           XG_TEST_BINARY=/usr/local/lib/xray-gateway/panel-current XG_TEST_XRAY=/usr/local/lib/xray-gateway/xray XG_LEGACY_APP="$PWD/app.py" \
             python3 -m pytest -q --tb=short cpp/tests/test_core_integration.py cpp/tests/test_http.py cpp/tests/test_remote_nodes.py \
               cpp/tests/test_features.py cpp/tests/test_operations.py cpp/tests/test_runtime.py cpp/tests/test_clash.py cpp/tests/test_webshare.py \
-              cpp/tests/test_client_policy.py cpp/tests/test_shadowrocket_services.py cpp/tests/test_rule_templates.py
+              cpp/tests/test_client_policy.py cpp/tests/test_shadowrocket_services.py cpp/tests/test_rule_templates.py \
+              cpp/tests/test_subscription_diagnostics.py
       - name: Verify optional configuration changes keep the application release sealed
         if: matrix.os == 'ubuntu-26.04-arm'
         run: |

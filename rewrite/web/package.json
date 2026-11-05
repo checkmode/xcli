@@ -1,0 +1,22 @@
+{
+  "name": "xcli-web-rewrite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24 <27" },
+  "scripts": {
+    "build:gateway": "tsc -p tsconfig.gateway.json",
+    "build:ui": "vue-tsc --noEmit -p tsconfig.ui.json && vite build",
+    "build": "npm run build:gateway && npm run build:ui",
+    "test": "npm run build:gateway && node --test test/*.test.mjs",
+    "start": "node dist/gateway/main.js"
+  },
+  "dependencies": { "vue": "3.5.44" },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.14"
+  }
+}

@@ -24,7 +24,7 @@ def panel_origin(value):
     return panel_url(value)
 
 
-def node_preflight(args):
+def node_preflight(args, required_files=None):
     if args.coexist or args.bundle or args.dns_relay_ip or args.tune_network:
         raise ValueError('节点模式暂不支持共存、预构建面板包、DNS 转发或网络调优')
     for path in ('/etc/xcli-node', '/var/lib/xcli-node', '/usr/local/lib/xcli-node',
@@ -37,7 +37,7 @@ def node_preflight(args):
                  'deploy/node_certificate.py', 'deploy/xcli-node.service', 'deploy/xcli-node-firewall.service'):
         if not (args.source / name).is_file():
             raise ValueError('源码包不完整：' + name)
-    return install.preflight(args)
+    return install.preflight(args) if required_files is None else install.preflight(args, required_files)
 
 
 def node_input(args):

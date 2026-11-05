@@ -1,21 +1,39 @@
 # xcli
 
-本仓库提供通用源码、测试和部署模板。文档中的文件路径与服务名是软件默认值，域名和 IP 为示例；不包含任何生产站点配置、用户数据、密钥或实际上线记录。
+本仓库提供源码、测试和部署模板。下文的域名和 IP 为示例；安装路径和服务名为默认值。实际迭代及部署进度记录在项目文档中，不包含用户凭据或密钥。
 
-自托管的 Xray 节点管理面板。C++20 后端负责用户、订阅、用量、二次验证和加密备份；官方 Xray-core 负责代理协议与数据转发。前端使用原生 HTML、CSS 和 JavaScript，不加载第三方资源。
+持续迭代的候选方向、决策和进度见 [演进路线图](docs/evolution-roadmap.md)，各阶段的验证方法见 [迭代验收规范](docs/evolution-acceptance.md)。路线图中的候选项目不代表已经批准实施。
 
-当前版本为 1.3.0，提供 REALITY / XTLS Vision、WebSocket / TLS 两个 VLESS 入口，以及 Hysteria 2 / QUIC 入口；可额外启用 VMess / WebSocket / TLS。`app.py` 是迁移前的兼容实现，保留用于测试与本机维护；在线管理服务使用 C++。
+新的 Rust / Node.js / Vue 技术栈和验收进度见 [重构计划](docs/rust-refactor.md)。新安装器默认安装测试版；保留旧版安装入口供已有部署使用。
+
+自托管的 Xray 节点管理面板。新版本使用 Rust 实现业务服务、Node.js / TypeScript 接入 Web 请求，管理页面使用 Vue / TypeScript；官方 Xray-core 负责代理协议与数据转发。
+
+旧版本为 1.3.0，使用 C++ 后端和原生 HTML 页面；`app.py` 及旧实现保留用于兼容测试和维护。
 
 安装器固定使用官方 Xray-core **v26.10.21（上游预发布版本）**并校验 AMD64、ARM64 文件的 SHA-256。上游因证书信任库问题撤下了 v26.10.10 和 v26.10.17，安装器不再引用这些版本；说明见 [v26.10.21 发布页](https://github.com/XTLS/Xray-core/releases/tag/v26.10.21)。真实核心测试覆盖四个入口、64～4096 字节随机 UDP 报文、计费和权限撤销。升级脚本保留旧核心供回退。
 
-## 一键安装
+## 一键安装 Rust 测试版
+
+在全新的 Ubuntu 24.04 / 26.04 服务器上，先将域名 A 记录指向服务器 IPv4；如果配置 AAAA 记录，也应指向本机 IPv6。放行 TCP 80、443 和 UDP 443，然后运行：
+
+```sh
+git clone git@github.com:checkmode/xcli.git
+cd xcli
+sudo bash ./install.sh
+```
+
+按提示选择“面板及本机节点”或“独立服务器节点”。面板安装完成后，管理员凭据位于 `/etc/xcli/initial-admin.txt`，设置和用户数据分别位于 `/etc/xcli/` 与 `/var/lib/xcli/`。节点安装后，在现有面板添加 `/etc/xcli-node/registration.json` 中的注册信息。
+
+可先运行 `sudo bash ./install.sh --check` 检查并缓存输入；正式安装时交互提示可使用这些默认值。无人值守时可使用 `--role panel|node`、`--domain`、`--public-ip`、`--no-email`、`--agree-tos` 和 `--yes`；节点还需 `--panel https://面板域名`。安装使用当前 Git 提交，不包含未提交的修改。新安装器不支持直接升级现有部署、共存安装或旧版发布包；Rust 测试版暂未提供原地更新命令，下文的 `update.sh` 仅适用于旧版。
+
+## 旧版一键安装
 
 准备一台**全新的 Ubuntu 24.04 或 26.04 服务器**，支持 AMD64 / ARM64。需要 root 或 sudo 权限、systemd、公网 IPv4，以及能访问 Ubuntu 软件源、GitHub 和 Let's Encrypt 的网络。建议至少 2 GB 内存并预留 4 GB 磁盘空间用于编译。
 
 先把域名的 A 记录指向这台服务器的公网 IPv4；只保留该地址，移除 AAAA 记录，并关闭 CDN 代理。云安全组和上游防火墙须放行 TCP 80、443 及 UDP 443。Hysteria 2 使用 UDP 443，可以与 HTTPS 的 TCP 443 同时运行。随后在服务器终端执行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- --legacy
 ```
 
 安装器会询问安装模式：选择“面板及本机节点”可运行管理面板并提供本机 VPN 入口；选择“独立服务器节点”可接入已有面板。先安装面板，再按下文添加其他节点。面板安装需要填写域名、证书邮箱和公网 IPv4。
@@ -25,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 如果已经克隆仓库，在仓库目录运行以下命令并选择模式：
 
 ```sh
-sudo bash ./install.sh
+sudo bash ./install.sh --legacy
 ```
 
 该命令自动选择当前检出的 Git 提交，并从 GitHub 下载对应源码；该提交必须已存在于 GitHub，本地未提交的修改不会包含在安装包中。通过 `curl | bash` 运行时，默认使用 GitHub `main` 的最新提交；也可用 `--ref` 指定完整提交编号。
@@ -46,7 +64,7 @@ sudo cat /etc/xray-gateway/initial-admin.txt
 
 先准备已运行的面板，并为新服务器配置独立域名。新服务器仍需满足上面的系统、DNS 和端口条件；安装器要求该域名的 A 记录仅指向节点自身公网 IPv4，且没有 AAAA 记录。节点服务器还必须能访问面板的 HTTPS 地址，并保持系统时钟同步。当前独立节点安装不支持与现有服务共存。
 
-1. 在新服务器克隆仓库后运行 `sudo bash ./install.sh`，选择“独立服务器节点”。按提示填写节点域名、公网 IPv4、证书选项，以及已有面板的 HTTPS 地址，例如 `https://panel.example.com`。也可以运行 `sudo bash ./install.sh --role node` 直接选择节点模式。
+1. 在新服务器克隆仓库后运行 `sudo bash ./install.sh --legacy`，选择“独立服务器节点”。按提示填写节点域名、公网 IPv4、证书选项，以及已有面板的 HTTPS 地址，例如 `https://panel.example.com`。也可以运行 `sudo bash ./install.sh --legacy --role node` 直接选择节点模式。
 2. 安装结束后运行 `sudo cat /etc/xcli-node/registration.json`。在面板的“接入节点 → 添加服务器”中粘贴完整 JSON，填写节点名称并选择允许使用的用户。注册信息含节点密钥，应通过可信渠道传递。保存后面板不回显密钥；需要重新查看时在节点服务器执行该命令。
 3. 等节点状态显示“已连接”，让所选用户更新订阅。每个独立节点提供 REALITY、WebSocket / TLS 和 Hysteria 2 三种连接方式。修改授权、停用用户或停用节点后，节点会同步撤销权限，已有连接可能短暂中断。
 
@@ -58,7 +76,7 @@ sudo cat /etc/xray-gateway/initial-admin.txt
 
 现有 `update.sh` 用于面板，独立节点暂未提供原地升级命令。节点的身份、注册信息与用量账本需要保留，不能通过重新安装来覆盖。
 
-节点无人值守安装可指定 `--role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --no-email --agree-tos --yes`；将参数替换为实际值。只检查时使用 `--role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --check --yes`，不会安装服务。
+旧版节点无人值守安装可指定 `--legacy --role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --no-email --agree-tos --yes`；将参数替换为实际值。只检查时使用 `--legacy --role node --panel https://面板域名 --domain 节点域名 --public-ip 公网IPv4 --check --yes`，不会安装服务。
 
 ### 无人值守与预检查
 
@@ -66,7 +84,7 @@ sudo cat /etc/xray-gateway/initial-admin.txt
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- \
-  --domain panel.example.com --email admin@example.com --public-ip 203.0.113.10 \
+  --legacy --domain panel.example.com --email admin@example.com --public-ip 203.0.113.10 \
   --agree-tos --yes
 ```
 
@@ -74,10 +92,10 @@ curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | su
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/checkmode/xcli/main/install.sh | sudo bash -s -- \
-  --domain panel.example.com --public-ip 203.0.113.10 --check --yes
+  --legacy --domain panel.example.com --public-ip 203.0.113.10 --check --yes
 ```
 
-检查后可直接运行 `sudo bash ./install.sh`：安装器会分别记住面板和独立节点的输入，并在交互提示中显示域名、公网 IP、节点连接的面板地址等默认值；按回车沿用，也可以输入新值。通过参数提供的邮箱、端口、REALITY 目标及其他安装选项也会记住。检查未通过时，已通过格式校验的域名和 IP 仍会保存，便于修正 DNS 后重试。安装时仍需明确同意证书服务条款并确认开始安装。
+检查后可直接运行 `sudo bash ./install.sh --legacy`：安装器会分别记住面板和独立节点的输入，并在交互提示中显示域名、公网 IP、节点连接的面板地址等默认值；按回车沿用，也可以输入新值。通过参数提供的邮箱、端口、REALITY 目标及其他安装选项也会记住。检查未通过时，已通过格式校验的域名和 IP 仍会保存，便于修正 DNS 后重试。安装时仍需明确同意证书服务条款并确认开始安装。
 
 缓存位于 `/root/.cache/xcli-install/answers.json`，仅 root 可读；证书和私钥只保存文件路径，不保存文件内容或节点密钥。命令行明确提供的选项优先于缓存，`--yes` 无人值守安装不会自动使用缓存。加上 `--no-cache` 可忽略缓存，检查时也不会写入；需要删除缓存时运行 `sudo rm /root/.cache/xcli-install/answers.json`。
 
@@ -248,6 +266,8 @@ sudo python3 deploy/webshare-pool.py expand --source "$PWD" \
 ## 用户规则模板
 
 在管理页面的“用户管理”中，可以为每个用户选择规则模板。“沿用原配置”保留该用户原有的订阅行为；已有用户不会因为升级而自动更换模板。内置“标准分流”和“独立服务分组”可以直接选择、编辑和发布，也可以复制为自定义模板。
+
+用户列表中的“订阅诊断”按需生成当前面板的节点订阅、Clash 配置和小火箭远程配置摘要，显示模板的已发布版本、节点数和生成的策略组。诊断不返回订阅地址或节点凭据，也不记录客户端请求；最近获取时间和客户端是否启用均显示未知。小火箭配置如果继承客户端的 `default.conf`，面板无法列出该文件中的分组。各摘要只用于同一格式之间比较；Clash 对结构化配置计算摘要，其他格式对生成文本计算。配置在诊断期间发生变化时，各结果可能来自不同时间点，请重新检查。
 
 内置和自定义模板的普通修改先保存为草稿。发布后，使用该模板的用户在下次更新 Clash 订阅或小火箭配置时获取新规则；“沿用原配置”的用户不受内置模板发布影响。发布不会主动切换客户端的策略组或重启 Xray。保存和发布检查草稿版本，其他管理员同时修改时需要重新读取。用户可以重新选择模板或切回“沿用原配置”。
 
@@ -450,7 +470,8 @@ HTTP 兼容性测试还需要 Python 的 pytest、FastAPI、Pydantic 和二维�
 XG_LEGACY_APP="$PWD/app.py" \
 XG_TEST_BINARY="$PWD/build/xray-gateway-panel" \
   python3 -m pytest -q cpp/tests/test_http.py cpp/tests/test_features.py cpp/tests/test_operations.py \
-  cpp/tests/test_core_integration.py cpp/tests/test_runtime.py cpp/tests/test_rule_templates.py
+  cpp/tests/test_core_integration.py cpp/tests/test_runtime.py cpp/tests/test_rule_templates.py \
+  cpp/tests/test_subscription_diagnostics.py
 
 cmake -S cpp -B build-asan -G Ninja -DXG_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-asan -j2

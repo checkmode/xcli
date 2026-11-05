@@ -12,3 +12,6 @@ build*/
 *.pem
 *.conf.private
 diagnostics/
+rewrite/rust/target/
+rewrite/web/node_modules/
+rewrite/web/dist/

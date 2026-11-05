@@ -111,6 +111,7 @@ HttpServer::HttpServer(Backend& backend) : backend_(backend) {
   server_.Post(R"(/api/users/([^/]+)/rotate)",wrap([this](const Request& request,Response& response){backend_.rotate_user(cookie(request),request.get_header_value("X-CSRF-Token"),request.matches[1].str());json(response,{{"ok",true}});}));
   server_.Post(R"(/api/users/([^/]+)/reset-traffic)",wrap([this](const Request& request,Response& response){backend_.reset_traffic(cookie(request),request.get_header_value("X-CSRF-Token"),request.matches[1].str());json(response,{{"ok",true}});}));
   server_.Get(R"(/api/users/([^/]+)/links)",wrap([this](const Request& request,Response& response){json(response,backend_.links(cookie(request),request.matches[1].str()));}));
+  server_.Get(R"(/api/users/([^/]+)/subscription-diagnostics)",wrap([this](const Request& request,Response& response){json(response,backend_.subscription_diagnostics(cookie(request),request.matches[1].str()));}));
   server_.Get(R"(/api/users/([^/]+)/shadowrocket)",wrap([this](const Request& request,Response& response){json(response,backend_.shadowrocket_links(cookie(request),request.matches[1].str()));}));
   server_.Get(R"(/api/users/([^/]+)/qr/([^/]+))",wrap([this](const Request& request,Response& response){response.set_content(backend_.qr(cookie(request),request.matches[1].str(),request.matches[2].str()),"image/png");}));
   server_.Post("/api/password",wrap([this](const Request& request,Response& response) {

@@ -165,6 +165,7 @@ class Backend {
   void rotate_user(const std::string& token, const std::string& csrf, const std::string& id);
   void reset_traffic(const std::string& token, const std::string& csrf, const std::string& id);
   Json links(const std::string& token, const std::string& id);
+  Json subscription_diagnostics(const std::string& token, const std::string& id);
   Json shadowrocket_links(const std::string& token, const std::string& id);
   Json rule_templates(const std::string& token);
   Json validate_rule_template_input(const std::string& token, const std::string& csrf, const Json& input);

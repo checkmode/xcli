@@ -1,0 +1,23 @@
+[package]
+name = "xcli-panel-xray"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libc = "0.2"
+prost = "0.14"
+tokio = { version = "1.0", features = ["rt", "time", "net"] }
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+xcli-panel-controller = { path = "../panel-controller" }
+xcli-panel-traffic = { path = "../panel-traffic" }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3.2"
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.23"

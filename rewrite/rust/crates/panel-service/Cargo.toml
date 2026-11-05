@@ -1,0 +1,38 @@
+[package]
+name = "xcli-panel-service"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+hex = "0.4"
+libc = "0.2"
+png = "0.17"
+qrcode = { version = "0.14", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+xcli-panel-auth = { path = "../panel-auth" }
+xcli-panel-runtime = { path = "../panel-runtime" }
+xcli-panel-backup = { path = "../panel-backup" }
+xcli-panel-controller = { path = "../panel-controller" }
+xcli-panel-import = { path = "../panel-import" }
+xcli-panel-monitor = { path = "../panel-monitor" }
+xcli-panel-operations = { path = "../panel-operations" }
+xcli-panel-clash = { path = "../panel-clash" }
+xcli-panel-nodes = { path = "../panel-nodes" }
+xcli-panel-rules = { path = "../panel-rules" }
+xcli-panel-shadowrocket = { path = "../panel-shadowrocket" }
+xcli-panel-subscription = { path = "../panel-subscription" }
+xcli-panel-users = { path = "../panel-users" }
+xcli-panel-webshare = { path = "../panel-webshare" }
+xcli-panel-xray = { path = "../panel-xray" }
+xcli-node-transport = { path = "../node-transport" }
+zeroize = "1.8"
+
+[dev-dependencies]
+rusqlite = { version = "0.38", features = ["bundled"] }
+tempfile = "3.23"

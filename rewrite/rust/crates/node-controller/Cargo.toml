@@ -1,0 +1,13 @@
+[package]
+name = "xcli-node-controller"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1.0"
+xcli-node-ledger = { path = "../node-ledger" }
+xcli-node-protocol = { path = "../node-protocol" }
+
+[dev-dependencies]
+tempfile = "3.23"

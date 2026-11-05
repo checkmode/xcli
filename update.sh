@@ -42,6 +42,10 @@ HELP
     . /etc/os-release
     [[ "$ID" == ubuntu && ( "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || return 1
     case "$(uname -m)" in x86_64|aarch64|arm64) ;; *) return 1 ;; esac
+    if [[ -f /etc/systemd/system/xcli-panel.service || -f /etc/systemd/system/xcli-node.service ]]; then
+        echo '检测到 Rust 测试版；此旧版更新器不适用，当前尚无测试版原地更新命令。' >&2
+        return 1
+    fi
     [[ -L /usr/local/lib/xray-gateway/panel-current && -f /etc/xray-gateway/security.key && -f /etc/xcli-monitor/monitor.json ]] || { echo '未找到完整的已有部署。' >&2; return 1; }
     [[ $(/usr/local/lib/xray-gateway/panel-current --version) == 'xray-gateway-panel 1.3.0 (C++20)' ]] || { echo '仅支持已有 1.3.0 面板，请先完成版本迁移。' >&2; return 1; }
     for service in xray-gateway-panel xray-gateway-core xray-gateway-monitor nginx; do systemctl is-active --quiet "$service"; done

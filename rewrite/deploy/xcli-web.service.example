@@ -1,0 +1,22 @@
+[Unit]
+Description=XCLI Node.js web gateway
+After=xcli-panel.service
+Wants=xcli-panel.service
+
+[Service]
+User=xgateway
+Group=xgateway
+Environment=XCLI_CORE_PORT=18080
+Environment=XCLI_WEB_PORT=8080
+ExecStart=/usr/local/lib/xcli/node /opt/xcli/current/web/gateway/main.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

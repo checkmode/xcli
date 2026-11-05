@@ -1,0 +1,25 @@
+[package]
+name = "xcli-panel-webshare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "xcli-webshare-service"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.4"
+hex = "0.4"
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "socks"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json = "1.0"
+subtle = "2.6"
+tokio = { version = "1.0", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+xcli-auth-compat = { path = "../auth-compat" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.23"

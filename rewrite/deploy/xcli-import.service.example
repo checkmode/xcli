@@ -1,0 +1,26 @@
+# Experimental example only. Not installed by install.sh.
+[Unit]
+Description=XCLI fixed proxy import worker (experimental)
+After=network-online.target xcli-panel.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/lib/xcli/xcli-import-service --experimental --config /etc/xcli/import-service.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xcli /var/lib/xcli-import /etc/xcli /etc/xcli-monitor /etc/nginx /run /var/log/nginx
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

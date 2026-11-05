@@ -1,0 +1,23 @@
+[package]
+name = "xcli-panel-monitor"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "xcli-monitor-service"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.4"
+hex = "0.4"
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots", "socks"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
+uuid = "1.0"
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.23"

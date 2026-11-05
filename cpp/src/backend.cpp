@@ -6,6 +6,7 @@
 #include <limits>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -319,6 +320,54 @@ Json Backend::links_for(const User& user) const {
   return result;
 }
 Json Backend::links(const std::string& token,const std::string& id) {session(token);auto database=db();return links_for(get_user(database,id));}
+Json Backend::subscription_diagnostics(const std::string& token,const std::string& id) {
+  session(token);auto database=db();const auto user=get_user(database,id);
+  const auto registry=rule_templates(token);
+  Json selected={{"name","沿用原配置"},{"revision",nullptr},{"published_at",nullptr}};
+  for(const auto& assignment:registry.at("users"))if(assignment.at("id")==id) {
+    const auto choice=assignment.at("template_id").get<std::string>();
+    if(choice=="legacy"&&assignment.value("legacy_independent",false))selected["name"]="沿用原配置（独立服务分组）";
+    else for(const auto& item:registry.at("templates"))if(item.at("id")==choice) {
+      selected={{"name",item.at("name")},{"revision",item.at("published_revision")},{"published_at",item.at("published_at")}};break;
+    }
+    break;
+  }
+  Json result={{"generated_at",now()},{"origin",settings_.at("origin")},{"user_status",user.status()},
+    {"template",selected},{"client_enabled","unknown"},{"last_fetch","unknown"},{"formats",Json::object()}};
+  if(!user.active()) {
+    for(const auto* name:{"nodes","clash","shadowrocket"})result["formats"][name]={{"status","inactive"}};
+    return result;
+  }
+  auto generate=[&](const char* name,const auto& fn) {
+    try {result["formats"][name]=fn();}
+    catch(const HttpError& e) {result["formats"][name]={{"status",e.status==404?"unavailable":"error"}};}
+    catch(const std::exception&) {result["formats"][name]={{"status","error"}};}
+  };
+  generate("nodes",[&] {
+    const auto content=subscription(user.token).first;const auto decoded=unbase64(content);
+    const auto count=std::count(decoded.begin(),decoded.end(),'\n');
+    return Json{{"status","ready"},{"node_count",count},{"sha256",sha256(content)}};
+  });
+  generate("clash",[&] {
+    const auto configuration=clash_configuration(user);
+    Json groups=Json::array();for(const auto& group:configuration.at("proxy-groups"))groups.push_back(group.at("name"));
+    return Json{{"status","ready"},{"node_count",configuration.at("proxies").size()},{"groups",groups},{"sha256",sha256(configuration.dump())}};
+  });
+  generate("shadowrocket",[&] {
+    const auto content=shadowrocket_profile(user.token);std::istringstream input(content);std::string line;bool in_groups=false;
+    Json groups=Json::array();
+    while(std::getline(input,line)) {
+      if(!line.empty()&&line.back()=='\r')line.pop_back();
+      if(!line.empty()&&line.front()=='['){in_groups=line=="[Proxy Group]";continue;}
+      if(!in_groups||line.empty()||line.front()=='#'||line.front()==';')continue;
+      const auto eq=line.find('=');if(eq==std::string::npos)continue;
+      auto end=line.find_last_not_of(" \t",eq?eq-1:0);auto start=line.find_first_not_of(" \t");
+      if(start!=std::string::npos&&end!=std::string::npos&&start<=end&&end<eq)groups.push_back(line.substr(start,end-start+1));
+    }
+    return Json{{"status","ready"},{"groups",groups},{"inherits_local_base",content.find("include = default.conf")!=std::string::npos},{"sha256",sha256(content)}};
+  });
+  return result;
+}
 Json Backend::shadowrocket_links_for(const User& user) const {
   auto origin=settings_.at("origin").get<std::string>();
   auto module=origin+"/shadowrocket-dns.sgmodule";

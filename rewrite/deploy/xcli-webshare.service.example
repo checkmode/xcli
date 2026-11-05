@@ -1,0 +1,22 @@
+# The listener starts unconfigured; a Webshare key and plan are set in the panel.
+[Unit]
+Description=XCLI dynamic residential gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=xgateway
+Group=xgateway
+ExecStart=/usr/local/lib/xcli/xcli-webshare-service --experimental --state /var/lib/xcli --settings /etc/xcli/settings.json --secret-key /etc/xcli/security.key
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xcli
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

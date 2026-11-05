@@ -1,0 +1,25 @@
+# Experimental service definition; installed only by the new installer.
+[Unit]
+Description=XCLI Xray core
+After=network-online.target xcli-firewall.service
+Wants=network-online.target
+Requires=xcli-firewall.service
+StartLimitIntervalSec=0
+
+[Service]
+User=xgateway
+Group=xgateway
+ExecStart=/usr/local/lib/xcli/xray run -config /etc/xcli/core.json
+Restart=always
+RestartSec=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
