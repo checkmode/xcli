@@ -93,7 +93,7 @@ onUnmounted(clearSecrets);
       <div v-if="!editing" class="actions"><button type="button" @click="edit">修改通知设置</button>
         <button type="button" :disabled="!status.delivery_active || !status.configured || testing" @click="sendTest">{{ testing ? '正在排队…' : '发送测试通知' }}</button></div>
       <p v-if="testMessage" class="footnote" aria-live="polite">{{ testMessage }}</p>
-      <form v-else class="notification-form" @submit.prevent="save">
+      <form v-if="editing" class="notification-form" @submit.prevent="save">
         <label class="check"><input v-model="form.enabled" type="checkbox"> 启用故障与恢复通知</label>
         <div class="fields"><label>Webhook 地址<input v-model="form.url" type="password" autocomplete="off" maxlength="4096" placeholder="留空保留已保存地址"></label>
           <label>Bearer Token<input v-model="form.bearer" type="password" autocomplete="off" maxlength="2048" placeholder="留空保留已保存凭据"></label>
