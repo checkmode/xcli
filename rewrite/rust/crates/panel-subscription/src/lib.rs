@@ -149,6 +149,10 @@ pub fn build(
         return Err(Error::InvalidConfiguration);
     }
     let hy2_port = port(settings, "hysteria2_port", 0)?;
+    let hy2_brutal_port = port(settings, "hysteria2_brutal_port", 0)?;
+    if hy2_brutal_port > 0 && (hy2_port == 0 || hy2_brutal_port == hy2_port) {
+        return Err(Error::InvalidConfiguration);
+    }
     let node_host = if flag(settings, "node_address_ip", false)? {
         address
     } else {
@@ -183,6 +187,36 @@ pub fn build(
                 hy2_port,
                 quote(domain, false, false),
                 quote(&format!("{} · Hysteria 2", user.name), false, true)
+            ),
+        ));
+    }
+    if hy2_brutal_port > 0 {
+        inbound_tags.push("hysteria2-brutal".into());
+        entries.push((
+            "hysteria2-brutal".into(),
+            format!(
+                "hysteria2://{}@{}:{}/?sni={}#{}",
+                quote(&user.uuid, false, false),
+                node_host,
+                hy2_brutal_port,
+                quote(domain, false, false),
+                quote(
+                    &format!("{} · Hysteria 2 Brutal 40 Mbps", user.name),
+                    false,
+                    true
+                )
+            ),
+        ));
+        inbound_tags.push("hysteria2-brutal-current".into());
+        entries.push((
+            "hysteria2-brutal-current".into(),
+            format!(
+                "hysteria2://{}@{}:{}/?sni={}#{}",
+                quote(&user.uuid, false, false),
+                node_host,
+                hy2_brutal_port,
+                quote(domain, false, false),
+                quote(&format!("{} · Hysteria 2 Brutal", user.name), false, true)
             ),
         ));
     }

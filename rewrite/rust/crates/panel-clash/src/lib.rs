@@ -109,6 +109,14 @@ pub fn build(
     let domain = field(settings, "domain")?;
     let public_port = number(settings, "public_port", 443)?;
     let hy2_port = number(settings, "hysteria2_port", 0)?;
+    let hy2_brutal_port = number(settings, "hysteria2_brutal_port", 0)?;
+    let hy2_brutal_mbps = number(settings, "hysteria2_brutal_mbps", 40)?;
+    if !(0..=65535).contains(&hy2_brutal_port)
+        || !(1..=1000).contains(&hy2_brutal_mbps)
+        || hy2_brutal_port > 0 && (hy2_port <= 0 || hy2_brutal_port == hy2_port)
+    {
+        return Err(invalid());
+    }
     let path = field(settings, "ws_path")?;
     let mut proxies = Vec::new();
     let mut names = Vec::new();
@@ -149,6 +157,18 @@ pub fn build(
             &mut proxies,
             &mut names,
             json!({"name":"Hysteria 2","type":"hysteria2","server":address,"port":hy2_port,"password":user.uuid,"sni":domain,"skip-cert-verify":false}),
+        )?;
+    }
+    if hy2_brutal_port > 0 {
+        add(
+            &mut proxies,
+            &mut names,
+            json!({"name":"Hysteria 2 Brutal 40 Mbps","type":"hysteria2","server":address,"port":hy2_brutal_port,"password":user.uuid,"sni":domain,"skip-cert-verify":false,"down":format!("{hy2_brutal_mbps} Mbps")}),
+        )?;
+        add(
+            &mut proxies,
+            &mut names,
+            json!({"name":"Hysteria 2 Brutal","type":"hysteria2","server":address,"port":hy2_brutal_port,"password":user.uuid,"sni":domain,"skip-cert-verify":false,"down":format!("{hy2_brutal_mbps} Mbps")}),
         )?;
     }
     if settings.get("vmess_ws_path").is_some() {
@@ -274,6 +294,16 @@ pub fn build(
     }
     if hy2_port > 0 {
         outbound.insert("hysteria2".into(), "Hysteria 2".into());
+    }
+    if hy2_brutal_port > 0 {
+        outbound.insert(
+            "hysteria2-brutal".into(),
+            "Hysteria 2 Brutal 40 Mbps".into(),
+        );
+        outbound.insert(
+            "hysteria2-brutal-current".into(),
+            "Hysteria 2 Brutal".into(),
+        );
     }
     if settings.get("vmess_ws_path").is_some() {
         outbound.insert("vmess".into(), "VMess TLS".into());

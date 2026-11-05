@@ -208,7 +208,8 @@ impl PreviewRunner {
                 match self.queue.claim(now) {
                     Ok(Some(request)) => {
                         let id = request.id().to_owned();
-                        let applying = request.action() == Action::Apply;
+                        let applying =
+                            matches!(request.action(), Action::Apply | Action::BrutalRate);
                         if applying && apply_hooks.is_none() {
                             coordinator.discard();
                             shared.transition(State {

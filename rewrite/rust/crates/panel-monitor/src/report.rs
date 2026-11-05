@@ -52,7 +52,7 @@ pub fn aggregate(
         .and_then(|value| value.get("checks"))
         .and_then(Value::as_array)
     {
-        if rows.len() > 44 {
+        if rows.len() > 45 {
             return Err(Invalid);
         }
         for row in rows {

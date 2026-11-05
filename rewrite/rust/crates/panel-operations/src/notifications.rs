@@ -68,7 +68,7 @@ impl Notifications {
             || !site
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'.')
-            || services.len() > 44
+            || services.len() > 45
             || services.iter().any(|(tag, label)| {
                 !crate::valid_transport(tag)
                     || label.is_empty()
@@ -582,7 +582,7 @@ fn collect_monitor_tx(
         && (-60..=180).contains(&now.saturating_sub(updated));
     let mut checks = BTreeMap::new();
     if fresh {
-        if let Some(rows) = report["checks"].as_array().filter(|rows| rows.len() <= 44) {
+        if let Some(rows) = report["checks"].as_array().filter(|rows| rows.len() <= 45) {
             for row in rows {
                 let Some(name) = row["transport"]
                     .as_str()

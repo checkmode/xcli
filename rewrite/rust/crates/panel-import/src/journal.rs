@@ -403,6 +403,104 @@ impl Store {
         .map_err(|_| JournalError::Invalid)?;
         Ok((files, signatures))
     }
+    /// Prepare only the Brutal sender rate, retaining every other file byte
+    /// for the existing journal's validation, checkpoint and rollback path.
+    pub fn brutal_rate_candidate(
+        &self,
+        rate: u64,
+    ) -> Result<(Option<Candidate>, BTreeMap<String, String>)> {
+        if !(1..=1000).contains(&rate) {
+            return Err(JournalError::Invalid);
+        }
+        let _guard = lock(&self.lock)?;
+        if read(&self.root.join("transaction.json"), 4096)?.is_some() {
+            return Err(JournalError::Pending);
+        }
+        let current = self.current()?;
+        let signatures = current
+            .iter()
+            .map(|(key, file)| {
+                (
+                    key.clone(),
+                    file.as_ref().map_or_else(String::new, signature),
+                )
+            })
+            .collect();
+        let bytes = |key: &str| {
+            current[key]
+                .as_ref()
+                .map(|v| v.data.as_slice())
+                .ok_or(JournalError::Unavailable)
+        };
+        let mut settings: Value =
+            serde_json::from_slice(bytes("settings")?).map_err(|_| JournalError::Invalid)?;
+        let mut core: Value =
+            serde_json::from_slice(bytes("core")?).map_err(|_| JournalError::Invalid)?;
+        let old = settings
+            .get("hysteria2_brutal_mbps")
+            .map_or(Some(40), Value::as_u64)
+            .filter(|v| (1..=1000).contains(v))
+            .ok_or(JournalError::Invalid)?;
+        let port = settings
+            .get("hysteria2_brutal_port")
+            .and_then(Value::as_u64)
+            .filter(|v| (1024..=65535).contains(v))
+            .ok_or(JournalError::Invalid)?;
+        let entries = core
+            .get_mut("inbounds")
+            .and_then(Value::as_array_mut)
+            .ok_or(JournalError::Invalid)?;
+        let mut matches = entries
+            .iter_mut()
+            .filter(|v| v.get("tag").and_then(Value::as_str) == Some("hysteria2-brutal"));
+        let inbound = matches.next().ok_or(JournalError::Invalid)?;
+        if matches.next().is_some()
+            || inbound.get("port").and_then(Value::as_u64) != Some(port)
+            || inbound.get("protocol").and_then(Value::as_str) != Some("hysteria")
+        {
+            return Err(JournalError::Invalid);
+        }
+        let params = inbound
+            .pointer_mut("/streamSettings/finalmask/quicParams")
+            .and_then(Value::as_object_mut)
+            .ok_or(JournalError::Invalid)?;
+        if params.get("congestion").and_then(Value::as_str) != Some("force-brutal")
+            || !params
+                .get("brutalUp")
+                .and_then(Value::as_str)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case(&format!("{old} mbps")))
+        {
+            return Err(JournalError::Conflict);
+        }
+        if rate == old {
+            return Ok((None, signatures));
+        }
+        params.insert("brutalUp".into(), json!(format!("{rate} mbps")));
+        settings
+            .as_object_mut()
+            .ok_or(JournalError::Invalid)?
+            .insert("hysteria2_brutal_mbps".into(), json!(rate));
+        let mut values: BTreeMap<String, Vec<u8>> = current
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    value
+                        .as_ref()
+                        .map_or_else(Vec::new, |file| file.data.to_vec()),
+                )
+            })
+            .collect();
+        values.insert(
+            "settings".into(),
+            serde_json::to_vec_pretty(&settings).map_err(|_| JournalError::Invalid)?,
+        );
+        values.insert(
+            "core".into(),
+            serde_json::to_vec_pretty(&core).map_err(|_| JournalError::Invalid)?,
+        );
+        Ok((Some(Candidate::new(values)?), signatures))
+    }
     fn write_manifest(&self, backup: &Path, manifest: &Value) -> Result<()> {
         let bytes =
             Zeroizing::new(serde_json::to_vec(manifest).map_err(|_| JournalError::Unavailable)?);
@@ -508,6 +606,13 @@ impl Store {
             let mut expected_files = expected.clone();
             self.verify(&expected_files)?;
             for key in KEYS {
+                // A rate-only update retains absent optional files as absent.
+                if current[key].is_none()
+                    && candidate.0[key].is_empty()
+                    && ["locations", "pool"].contains(&key)
+                {
+                    continue;
+                }
                 let info = manifest["files"][key]
                     .as_object()
                     .ok_or(JournalError::Invalid)?;
@@ -816,6 +921,80 @@ mod tests {
             }
             Ok(())
         }
+    }
+    fn brutal_fixture() -> Fixture {
+        let fixture = Fixture::new();
+        fs::write(
+            &fixture.paths["settings"],
+            br#"{"hysteria2_port":443,"hysteria2_brutal_port":8443,"preserved":"yes"}"#,
+        )
+        .unwrap();
+        fs::write(&fixture.paths["core"], br#"{"inbounds":[{"tag":"hysteria2","port":443,"protocol":"hysteria","streamSettings":{"finalmask":{"quicParams":{"congestion":"bbr"}}}},{"tag":"hysteria2-brutal","port":8443,"protocol":"hysteria","streamSettings":{"finalmask":{"quicParams":{"congestion":"force-brutal","brutalUp":"40 mbps"}}}}],"routing":{"preserved":true}}"#).unwrap();
+        fixture
+    }
+    #[test]
+    fn brutal_rate_changes_only_its_fields_and_preserves_absent_files() {
+        let fixture = brutal_fixture();
+        let before_core: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths["core"]).unwrap()).unwrap();
+        let (candidate, expected) = fixture.store.brutal_rate_candidate(60).unwrap();
+        let mut hooks = FakeHooks::default();
+        fixture
+            .store
+            .apply(&expected, &candidate.unwrap(), &mut hooks)
+            .unwrap();
+        let after_core: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths["core"]).unwrap()).unwrap();
+        let settings: Value =
+            serde_json::from_slice(&fs::read(&fixture.paths["settings"]).unwrap()).unwrap();
+        assert_eq!(settings["hysteria2_brutal_mbps"], 60);
+        assert_eq!(settings["preserved"], "yes");
+        assert_eq!(before_core["inbounds"][0], after_core["inbounds"][0]);
+        assert_eq!(before_core["routing"], after_core["routing"]);
+        assert_eq!(
+            after_core["inbounds"][1]["streamSettings"]["finalmask"]["quicParams"]["brutalUp"],
+            "60 mbps"
+        );
+        assert!(!fixture.paths["locations"].exists() && !fixture.paths["pool"].exists());
+        assert_eq!(
+            fs::read_to_string(&fixture.paths["monitor"]).unwrap(),
+            "old-monitor"
+        );
+        assert_eq!((hooks.stops, hooks.starts), (1, 1));
+        assert!(fixture.store.brutal_rate_candidate(60).unwrap().0.is_none());
+        assert!(fixture.store.brutal_rate_candidate(0).is_err());
+        assert!(fixture.store.brutal_rate_candidate(1001).is_err());
+    }
+    #[test]
+    fn failed_brutal_rate_change_restores_original_and_refuses_external_edits() {
+        let fixture = brutal_fixture();
+        let before_settings = fs::read(&fixture.paths["settings"]).unwrap();
+        let before_core = fs::read(&fixture.paths["core"]).unwrap();
+        let (candidate, expected) = fixture.store.brutal_rate_candidate(60).unwrap();
+        let mut hooks = FakeHooks {
+            fail: Some("core"),
+            ..Default::default()
+        };
+        assert_eq!(
+            fixture
+                .store
+                .apply(&expected, &candidate.unwrap(), &mut hooks),
+            Err(JournalError::RolledBack)
+        );
+        assert_eq!(
+            fs::read(&fixture.paths["settings"]).unwrap(),
+            before_settings
+        );
+        assert_eq!(fs::read(&fixture.paths["core"]).unwrap(), before_core);
+        assert!(!fixture.paths["locations"].exists() && !fixture.paths["pool"].exists());
+        let mut core: Value = serde_json::from_slice(&before_core).unwrap();
+        core["inbounds"][1]["streamSettings"]["finalmask"]["quicParams"]["brutalUp"] =
+            json!("70 mbps");
+        fs::write(&fixture.paths["core"], serde_json::to_vec(&core).unwrap()).unwrap();
+        assert!(matches!(
+            fixture.store.brutal_rate_candidate(80),
+            Err(JournalError::Conflict)
+        ));
     }
     #[test]
     fn commits_all_files_and_preserves_existing_permissions() {

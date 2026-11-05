@@ -41,6 +41,19 @@ sudo bash ./upgrade.sh
 
 回退程序时继续使用当前数据库，不会用旧备份覆盖已经写入的数据；若旧版服务无法恢复，脚本会保留当前数据库并显示备份位置。
 
+### 可选 Hysteria 2 Brutal 入口
+
+由旧版迁移、使用 `xray-gateway-core` 的 Rust 面板可以选择增加一个独立的 Brutal 入口；独立节点及使用 `xcli-core` 的全新安装暂不支持此操作。原 Hysteria 2 / BBR 入口、用户凭据、原订阅和默认选择保持不变；新节点使用同一账号并计入该账号的流量配额。以下以 UDP 8443 为例，端口须空闲，且云安全组和上游防火墙允许该 UDP 端口：
+
+```sh
+sudo env XCLI_HYSTERIA_BRUTAL_PORT=8443 bash ./upgrade.sh --check
+sudo env XCLI_HYSTERIA_BRUTAL_PORT=8443 bash ./upgrade.sh
+```
+
+启用时脚本验证并备份现有配置，通过 Xray 管理接口动态添加入口，不主动重启 Xray 核心；管理服务会短暂重启。配置和防火墙规则会持久化，失败时尝试恢复原值。用户更新原订阅后，可手动选择 `Hysteria 2 Brutal`；旧名称 `Hysteria 2 Brutal 40 Mbps` 保留用于兼容已保存的选择，两者是同一入口。它们不会自动加入故障转移或自动选择组；通用订阅也提供独立节点。
+
+面板“概览”中的“Hysteria 2 Brutal 速率”可设置服务器发送速率，范围为 1–1000 Mbps，未设置时默认 40 Mbps。保存会先检查配置并采集流量计数，再短暂重启核心及管理服务，连接可能中断；失败会尝试回滚。完成后请更新客户端订阅，以同步 Clash 的速率参数。实际速度取决于链路，配置值不是严格的流量限速保证。
+
 ## 旧版一键安装
 
 准备一台**全新的 Ubuntu 24.04 或 26.04 服务器**，支持 AMD64 / ARM64。需要 root 或 sudo 权限、systemd、公网 IPv4，以及能访问 Ubuntu 软件源、GitHub 和 Let's Encrypt 的网络。建议至少 2 GB 内存并预留 4 GB 磁盘空间用于编译。

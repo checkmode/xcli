@@ -3,6 +3,21 @@ use serde_json::json;
 use xcli_panel_operations::{Error, History};
 
 #[test]
+fn history_accepts_the_optional_brutal_transport() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("panel.sqlite");
+    Connection::open(&path).unwrap();
+    let mut history = History::open(&path, vec!["hysteria2-brutal".into()]).unwrap();
+    let now = 2_000_100;
+    let report = json!({"status":"healthy","updated":now,"checks":[
+        {"transport":"hysteria2-brutal","status":"healthy","https_ms":20,"udp_ms":30}]});
+    history.collect(&report, now).unwrap();
+    let result = history.query("1h", now).unwrap();
+    assert_eq!(result["summary"][0]["transport"], "hysteria2-brutal");
+    assert_eq!(result["summary"][0]["healthy"], 1);
+}
+
+#[test]
 fn history_preserves_existing_data_deduplicates_reports_and_excludes_unknown_from_success_rate() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("panel.sqlite");

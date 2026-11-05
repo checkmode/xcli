@@ -95,7 +95,7 @@ fn valid_tag(tag: &str) -> bool {
     static FORMAT: OnceLock<Regex> = OnceLock::new();
     FORMAT
         .get_or_init(|| {
-            Regex::new(r"^(?:reality|websocket|hysteria2|vmess|residential-[0-9]{2}(?:-hy2)?)$")
+            Regex::new(r"^(?:reality|websocket|hysteria2(?:-brutal)?|vmess|residential-[0-9]{2}(?:-hy2)?)$")
                 .unwrap()
         })
         .is_match(tag)

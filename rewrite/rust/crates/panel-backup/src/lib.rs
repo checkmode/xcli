@@ -168,6 +168,26 @@ struct RestorePlan {
     users: Vec<SavedUser>,
     rules: Option<String>,
 }
+
+// A rate change does not alter the server identity or the database restore
+// contract; restore keeps the current server-side rate and configuration.
+fn same_server_settings(current: &Value, saved: &Value) -> Result<bool> {
+    let normalized = |value: &Value| -> Result<Zeroizing<Vec<u8>>> {
+        let mut value = SecretBundle(value.clone());
+        let object = value.0.as_object_mut().ok_or(BackupError::Invalid)?;
+        if let Some(rate) = object.shift_remove("hysteria2_brutal_mbps") {
+            if !rate.as_u64().is_some_and(|v| (1..=1000).contains(&v)) {
+                return Err(BackupError::Invalid);
+            }
+        }
+        Ok(Zeroizing::new(
+            serde_json::to_vec(&value.0).map_err(|_| BackupError::Invalid)?,
+        ))
+    };
+    let a = Sha256::digest(normalized(current)?.as_slice());
+    let b = Sha256::digest(normalized(saved)?.as_slice());
+    Ok(bool::from(a.as_slice().ct_eq(b.as_slice())))
+}
 impl Drop for RestorePlan {
     fn drop(&mut self) {
         if let Some(value) = &mut self.rules {
@@ -270,16 +290,10 @@ impl BackupStore {
     pub fn inspect(&self, id: &str) -> Result<Value> {
         let bundle = self.bundle(id)?;
         let mut result = summary(&bundle.0, id)?;
-        let current = Zeroizing::new(
-            serde_json::to_vec(&self.settings).map_err(|_| BackupError::Unavailable)?,
-        );
-        let saved = Zeroizing::new(
-            serde_json::to_vec(bundle.0.get("settings").ok_or(BackupError::Invalid)?)
-                .map_err(|_| BackupError::Invalid)?,
-        );
-        let a = Sha256::digest(current.as_slice());
-        let b = Sha256::digest(saved.as_slice());
-        result["same_server"] = json!(bool::from(a.as_slice().ct_eq(b.as_slice())));
+        result["same_server"] = json!(same_server_settings(
+            &self.settings,
+            bundle.0.get("settings").ok_or(BackupError::Invalid)?
+        )?);
         result["preserves"] = json!([
             "当前管理员密码和二次验证",
             "当前流量累计下限",
@@ -543,16 +557,10 @@ impl BackupStore {
 
     fn restore_plan(&self, id: &str) -> Result<RestorePlan> {
         let bundle = self.bundle(id)?;
-        let current = Zeroizing::new(
-            serde_json::to_vec(&self.settings).map_err(|_| BackupError::Unavailable)?,
-        );
-        let saved = Zeroizing::new(
-            serde_json::to_vec(bundle.0.get("settings").ok_or(BackupError::Invalid)?)
-                .map_err(|_| BackupError::Invalid)?,
-        );
-        let a = Sha256::digest(current.as_slice());
-        let b = Sha256::digest(saved.as_slice());
-        if !bool::from(a.as_slice().ct_eq(b.as_slice())) {
+        if !same_server_settings(
+            &self.settings,
+            bundle.0.get("settings").ok_or(BackupError::Invalid)?,
+        )? {
             return Err(BackupError::DifferentServer);
         }
         let encoded = bundle

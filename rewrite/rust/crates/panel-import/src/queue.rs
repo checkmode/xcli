@@ -33,6 +33,7 @@ pub enum Action {
     Preview,
     Manage,
     Apply,
+    BrutalRate,
 }
 pub struct Claimed {
     id: String,
@@ -262,6 +263,7 @@ impl Queue {
             Some("preview") => Action::Preview,
             Some("manage") => Action::Manage,
             Some("apply") => Action::Apply,
+            Some("brutal_rate") => Action::BrutalRate,
             _ => return Err(QueueError::Invalid),
         };
         let (mut replay, existed) = Replay::load(&self.state, self.legacy.as_deref(), now)?;

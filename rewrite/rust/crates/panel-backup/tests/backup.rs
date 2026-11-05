@@ -109,6 +109,26 @@ fn offline_restore_keeps_current_credentials_and_usage_floors() {
 }
 
 #[test]
+fn changing_brutal_rate_keeps_existing_backups_restorable_without_changing_current_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.sqlite");
+    fixture(&path);
+    let settings = json!({"domain":"example.test","hysteria2_brutal_port":8443});
+    let mut before = BackupStore::open(&path, settings.clone(), [7; 32], "1.3.0".into()).unwrap();
+    let id = before.create("manual", 1_700_000_000).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let current =
+        json!({"domain":"example.test","hysteria2_brutal_mbps":60,"hysteria2_brutal_port":8443});
+    let mut after = BackupStore::open(&path, current, [7; 32], "1.3.0".into()).unwrap();
+    assert_eq!(after.inspect(&id).unwrap()["same_server"], true);
+    after
+        .restore_with_flush(&id, 1_700_000_001, || Ok(()))
+        .unwrap();
+}
+
+#[test]
 fn restore_does_not_mutate_state_when_flush_or_transaction_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.sqlite");

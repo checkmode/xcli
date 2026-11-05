@@ -38,9 +38,14 @@ fn residential_hy2(tag: &str) -> bool {
     tag.strip_suffix("-hy2").is_some_and(residential)
 }
 fn valid_tag(tag: &str) -> bool {
-    matches!(tag, "reality" | "websocket" | "hysteria2" | "vmess")
-        || residential(tag)
+    matches!(
+        tag,
+        "reality" | "websocket" | "hysteria2" | "hysteria2-brutal" | "vmess"
+    ) || residential(tag)
         || residential_hy2(tag)
+}
+fn direct_hy2(tag: &str) -> bool {
+    matches!(tag, "hysteria2" | "hysteria2-brutal")
 }
 fn timeout<T>(input: T) -> tonic::Request<T> {
     let mut request = tonic::Request::new(input);
@@ -95,14 +100,14 @@ async fn users(
             continue;
         }
         let account = user.account.ok_or(Error::CoreUnavailable)?;
-        let value = if tag == "hysteria2" || hy2.contains(tag) {
+        let value = if direct_hy2(tag) || hy2.contains(tag) {
             if account.r#type != "xray.proxy.hysteria.account.Account" {
                 return Err(Error::CoreUnavailable);
             }
             let auth = hysteria::account::Account::decode(account.value.as_slice())
                 .map_err(|_| Error::CoreUnavailable)?
                 .auth;
-            if tag == "hysteria2" {
+            if direct_hy2(tag) {
                 auth
             } else {
                 auth.strip_suffix(&format!(".{tag}"))
@@ -135,8 +140,8 @@ async fn add(
     hy2: &BTreeSet<String>,
 ) -> Result<()> {
     let email = user.email(tag)?;
-    let account = if tag == "hysteria2" || hy2.contains(tag) {
-        let auth = if tag == "hysteria2" {
+    let account = if direct_hy2(tag) || hy2.contains(tag) {
+        let auth = if direct_hy2(tag) {
             user.uuid.clone()
         } else {
             format!("{}.{tag}", user.uuid)

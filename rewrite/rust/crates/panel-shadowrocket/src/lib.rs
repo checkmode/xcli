@@ -551,6 +551,14 @@ pub fn profile(
             ("REALITY".into(), format!("{} · REALITY", user.name)),
             ("HTTPS".into(), format!("{} · HTTPS", user.name)),
             ("Hysteria 2".into(), format!("{} · Hysteria 2", user.name)),
+            (
+                "Hysteria 2 Brutal 40 Mbps".into(),
+                format!("{} · Hysteria 2 Brutal 40 Mbps", user.name),
+            ),
+            (
+                "Hysteria 2 Brutal".into(),
+                format!("{} · Hysteria 2 Brutal", user.name),
+            ),
             ("VMess TLS".into(), format!("{} · VMess TLS", user.name)),
         ]
         .into_iter()

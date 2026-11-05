@@ -122,6 +122,13 @@ pub fn apply_client_policy(
     let mut top = Vec::new();
     let mut main = vec![json!("故障转移"), json!("自动选择")];
     main.extend(servers.clone());
+    // The fixed-rate entry is explicitly selectable, but never silently added
+    // to automatic or fallback groups for existing users.
+    for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
+        if let Some(value) = outbound.get(tag) {
+            main.push(json!(value));
+        }
+    }
     if !countries.is_empty() {
         main.push(json!("住宅节点"));
     }
@@ -162,6 +169,11 @@ pub fn apply_client_policy(
                 choices.push(node.clone());
             }
         }
+        for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
+            if let Some(value) = outbound.get(tag) {
+                choices.push(json!(value));
+            }
+        }
         let label = if category.name == "EaseLian" {
             "EaseLian".to_owned()
         } else {
@@ -172,6 +184,11 @@ pub fn apply_client_policy(
     let mut google = vec![json!("故障转移"), json!("自动选择")];
     google.extend(countries);
     google.extend(servers);
+    for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
+        if let Some(value) = outbound.get(tag) {
+            google.push(json!(value));
+        }
+    }
     top.push(group("独立 · Google", google));
     top.push(group("其他流量", vec![json!("PROXY"), json!("DIRECT")]));
     for item in groups {
