@@ -3,24 +3,35 @@
 set -euo pipefail
 
 main() {
-  local root revision build_revision work node_arch node_hash node_version=24.22.2 release node
+  local root revision installed_revision build_revision work node_arch node_hash node_version=24.22.2 release node check=0
   root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
   [[ $EUID == 0 ]] || { echo '请使用 sudo bash ./upgrade.sh。' >&2; return 1; }
   [[ $# -le 1 ]] || { echo '用法：sudo bash ./upgrade.sh [--check]' >&2; return 1; }
   if [[ ${1:-} == --check ]]; then
-    python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
-    return
+    check=1
+  elif [[ $# != 0 ]]; then
+    echo '用法：sudo bash ./upgrade.sh [--check]' >&2
+    return 1
   fi
-  [[ $# == 0 ]] || { echo '用法：sudo bash ./upgrade.sh [--check]' >&2; return 1; }
   revision="$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)"
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo '无法读取 Git 提交。' >&2; return 1; }
   if [[ -f /etc/systemd/system/xcli-panel.service ]]; then
-    if [[ -f /opt/xcli/current/COMMIT && $(cat /opt/xcli/current/COMMIT) == "$revision" ]]; then
-      echo '当前版本已经安装。'
-      return
+    if [[ -f /opt/xcli/current/COMMIT ]]; then
+      installed_revision="$(cat /opt/xcli/current/COMMIT)"
+      if [[ "$installed_revision" == "$revision" ]] || {
+        [[ "$installed_revision" =~ ^[0-9a-f]{40}$ ]] &&
+          git -c safe.directory="$root" -C "$root" diff --quiet "$installed_revision" "$revision" -- rewrite/rust rewrite/web rewrite/deploy deploy
+      }; then
+        echo '当前业务版本已经安装。'
+        return
+      fi
     fi
     echo '检测到新版面板；新版之间的更新暂不由此脚本处理。' >&2
     return 1
+  fi
+  if ((check)); then
+    python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
+    return
   fi
   python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
   build_revision="${XCLI_UPGRADE_BUILD_REVISION:-$revision}"
