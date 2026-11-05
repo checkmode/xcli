@@ -46,6 +46,9 @@ function size(value: number): string {
   return `${current.toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 function usage(value: Memory | null | undefined): string { return value ? `${size(value.used)} / ${size(value.total)}` : '未知'; }
+function percentage(value: Memory | null | undefined): number | null {
+  return value && value.total > 0 ? Math.min(100, value.used / value.total * 100) : null;
+}
 function uptime(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return '未知';
   const hours = Math.floor(seconds / 3600); const days = Math.floor(hours / 24);
@@ -56,14 +59,14 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 </script>
 
 <template>
-  <section aria-labelledby="host-heading">
+  <section class="host-panel" aria-labelledby="host-heading">
     <div class="users-heading"><div><h2 id="host-heading">主机状态</h2><p>数据来自服务器内核，不能代表客户端的网络质量。</p></div><button type="button" @click="refresh">刷新</button></div>
     <p v-if="loading" class="table-message">正在读取主机状态…</p>
     <p v-else-if="!snapshot || snapshot.stale || !snapshot.host" class="table-message">主机采样暂不可用或已过期。</p>
     <template v-else><dl class="host-grid">
-      <div><dt>CPU</dt><dd>{{ snapshot.host.cpu_percent === null ? '等待下一次采样' : `${snapshot.host.cpu_percent.toFixed(1)}%` }}</dd></div>
-      <div><dt>内存</dt><dd>{{ usage(snapshot.host.memory) }}</dd></div>
-      <div><dt>磁盘</dt><dd>{{ usage(snapshot.host.disk) }}</dd></div>
+      <div><dt>CPU</dt><dd>{{ snapshot.host.cpu_percent === null ? '等待下一次采样' : `${snapshot.host.cpu_percent.toFixed(1)}%` }}</dd><span v-if="snapshot.host.cpu_percent !== null" class="metric-track" aria-hidden="true"><span :style="{ width: `${snapshot.host.cpu_percent}%` }"></span></span></div>
+      <div><dt>内存</dt><dd>{{ usage(snapshot.host.memory) }}</dd><span v-if="percentage(snapshot.host.memory) !== null" class="metric-track" aria-hidden="true"><span :style="{ width: `${percentage(snapshot.host.memory)}%` }"></span></span></div>
+      <div><dt>磁盘</dt><dd>{{ usage(snapshot.host.disk) }}</dd><span v-if="percentage(snapshot.host.disk) !== null" class="metric-track" aria-hidden="true"><span :style="{ width: `${percentage(snapshot.host.disk)}%` }"></span></span></div>
       <div><dt>运行时间</dt><dd>{{ uptime(snapshot.host.uptime_seconds) }}</dd></div>
       <div><dt>系统负载（1 / 5 / 15 分钟）</dt><dd>{{ snapshot.host.load ? snapshot.host.load.map(v => v.toFixed(2)).join(' / ') : '未知' }}</dd></div>
     </dl><p class="host-sampled">最近采样：{{ new Date(snapshot.sampled * 1000).toLocaleString() }} · {{ snapshot.host.disk ? '磁盘为面板状态目录所在文件系统' : '磁盘状态未知' }}</p></template>

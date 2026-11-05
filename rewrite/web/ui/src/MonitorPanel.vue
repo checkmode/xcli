@@ -51,10 +51,10 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       <button type="button" @click="refresh">刷新</button></div>
     <p v-if="loading" class="table-message">正在读取自检结果…</p>
     <template v-else-if="monitor && !failure">
-      <div class="webshare-status"><strong>{{ state(monitor.status) }}</strong><span>{{ monitor.message || `最近更新：${time(monitor.updated)}` }}</span></div>
+      <div class="webshare-status"><strong class="status-badge" :class="monitor.status">{{ state(monitor.status) }}</strong><span>{{ monitor.message || `最近更新：${time(monitor.updated)}` }}</span></div>
       <div v-if="monitor.checks.length" class="table-wrap"><table><thead><tr><th>入口</th><th>状态</th><th>HTTPS</th><th>DNS</th><th>最近成功</th><th>说明</th></tr></thead>
         <tbody><tr v-for="check in monitor.checks" :key="check.transport"><td>{{ label(check.transport) }}</td>
-          <td>{{ monitor.status === 'stale' ? '结果已过期' : state(check.status) }}</td><td>{{ latency(check.https_ms) }}</td>
+          <td><span class="status-badge" :class="monitor.status === 'stale' ? 'stale' : check.status">{{ monitor.status === 'stale' ? '结果已过期' : state(check.status) }}</span></td><td>{{ latency(check.https_ms) }}</td>
           <td>{{ check.udp_supported ? 'UDP ' + latency(check.udp_ms) : 'DoH ' + latency(check.doh_ms) }}</td>
           <td>{{ time(check.last_success) }}</td><td>{{ check.error || '—' }}</td></tr></tbody></table></div>
     </template>

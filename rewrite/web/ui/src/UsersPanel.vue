@@ -328,7 +328,7 @@ onUnmounted(() => { disposed = true; syncRequest++; if (syncTimer) clearTimeout(
     <div v-else class="table-wrap user-list"><table>
       <thead><tr><th>用户</th><th>状态</th><th>流量 / 配额</th><th>到期</th><th>操作</th></tr></thead>
       <tbody><tr v-for="user in users" :key="user.id">
-        <td>{{ user.name }}</td><td><span class="mobile-user-label" aria-hidden="true">状态：</span>{{ statusLabel[user.status] }}</td>
+        <td>{{ user.name }}</td><td><span class="mobile-user-label" aria-hidden="true">状态：</span><span class="status-badge" :class="user.status">{{ statusLabel[user.status] }}</span></td>
         <td><span class="mobile-user-label" aria-hidden="true">流量 / 配额：</span>{{ bytes(BigInt(user.upload) + BigInt(user.download)) }} / {{ user.quota === '0' ? '不限' : bytes(BigInt(user.quota)) }}</td>
         <td><span class="mobile-user-label" aria-hidden="true">到期：</span>{{ displayDate(user.expires) }}</td>
         <td class="user-actions"><button type="button" @click="showLinks(user)">客户端</button><button type="button" @click="showDiagnostic(user)">订阅诊断</button><button type="button" @click="edit(user)">编辑</button><button type="button" @click="pending = { action: 'rotate', user }; editor = false; closeDiagnostic()">重置凭据</button><button type="button" @click="pending = { action: 'reset', user }; editor = false; closeDiagnostic()">清零流量</button><button type="button" @click="pending = { action: 'delete', user }; editor = false; closeDiagnostic()">删除</button></td>

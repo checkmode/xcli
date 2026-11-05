@@ -58,17 +58,17 @@ onBeforeUnmount(() => { checkGeneration++; window.removeEventListener('hashchang
       <p class="intro">{{ serviceRouting ? '安装或更新专属远程配置。' : '按顺序导入节点与 DNS 模块。' }}</p>
       <p class="client-status" role="status" aria-live="polite">{{ message }}</p>
       <button v-if="stage === 'error'" type="button" @click="check">重新检查</button>
-      <ol v-if="stage === 'ready'" class="client-steps">
-        <li><h2>{{ serviceRouting ? '安装或更新专属配置' : '导入节点订阅' }}</h2>
+      <ol v-if="stage === 'ready'" class="client-steps" role="list">
+        <li><span class="client-step-number" aria-hidden="true">1</span><h2>{{ serviceRouting ? '安装或更新专属配置' : '导入节点订阅' }}</h2>
           <p v-if="serviceRouting">先更新首页节点订阅，再更新并使用此配置；全局路由保持「配置」。节点订阅和远程配置需要分别更新。</p>
           <p v-else>在小火箭中确认添加订阅，完成后返回此页。</p>
           <div class="client-actions"><a class="primary-link" :href="importLink">{{ serviceRouting ? '安装或更新配置' : '导入节点' }}</a><button type="button" @click="copy(serviceRouting ? resource : subscription, serviceRouting ? '配置地址' : '订阅地址')">复制地址</button></div>
         </li>
-        <li v-if="!serviceRouting"><h2>安装 DNS 模块</h2><p>在「配置 → 模块」启用「Xcli DNS 随所选节点」。</p>
+        <li v-if="!serviceRouting"><span class="client-step-number" aria-hidden="true">2</span><h2>安装 DNS 模块</h2><p>在「配置 → 模块」启用「Xcli DNS 随所选节点」。</p>
           <div class="client-actions"><a class="primary-link" :href="dnsLink">安装 DNS 模块</a><button type="button" @click="copy(resource, '模块地址')">复制模块地址</button></div>
         </li>
-        <li v-if="!serviceRouting"><h2>关闭兼容模式</h2><p>在小火箭「设置 → 代理」中手动关闭兼容模式，然后重连 VPN。</p></li>
-        <li v-if="!serviceRouting"><h2>选择节点并连接</h2><p>将「全局路由」切换为「代理」，选择节点并打开连接。</p><a class="primary-link" href="shadowrocket://route/proxy">切换为全局代理</a></li>
+        <li v-if="!serviceRouting"><span class="client-step-number" aria-hidden="true">3</span><h2>关闭兼容模式</h2><p>在小火箭「设置 → 代理」中手动关闭兼容模式，然后重连 VPN。</p></li>
+        <li v-if="!serviceRouting"><span class="client-step-number" aria-hidden="true">4</span><h2>选择节点并连接</h2><p>将「全局路由」切换为「代理」，选择节点并打开连接。</p><a class="primary-link" href="shadowrocket://route/proxy">切换为全局代理</a></li>
       </ol>
       <p v-if="integrated && stage === 'ready'" class="client-note">请关闭旧的「Xcli DNS 随所选节点」模块，避免覆盖配置内的 DNS 分流。更新后断开并重连 VPN。</p>
       <p v-if="copied" class="client-note" role="status">{{ copied }}</p>

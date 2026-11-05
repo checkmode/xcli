@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, type Component } from 'vue';
+import { Activity, BellRing, Cable, ChartNoAxesCombined, House, LayoutDashboard, ListFilter,
+  LogOut, ScrollText, Server, ShieldCheck, UsersRound } from '@lucide/vue';
 import UsersPanel from './UsersPanel.vue';
 import NodesPanel from './NodesPanel.vue';
 import RulesPanel from './RulesPanel.vue';
@@ -28,22 +30,22 @@ const rulesPanel = ref<InstanceType<typeof RulesPanel> | null>(null);
 const usersPanel = ref<InstanceType<typeof UsersPanel> | null>(null);
 
 type Page = 'overview' | 'users' | 'nodes' | 'imports' | 'webshare' | 'rules' | 'activity' | 'history' | 'events' | 'notifications' | 'security';
-type NavigationItem = { id: Page; label: string; description: string };
+type NavigationItem = { id: Page; label: string; description: string; icon: Component };
 const navigation: Array<{ title: string; items: NavigationItem[] }> = [
   { title: '管理', items: [
-    { id: 'overview', label: '概览', description: '查看服务连接及入口自检。' },
-    { id: 'users', label: '用户管理', description: '管理用户、配额和客户端连接。' },
-    { id: 'nodes', label: '独立节点', description: '管理独立节点和用户授权。' },
-    { id: 'imports', label: '固定代理', description: '检测固定代理与出口。' },
-    { id: 'webshare', label: '动态住宅池', description: '管理住宅套餐和地区出口。' },
-    { id: 'rules', label: '规则模板', description: '编辑和发布客户端分流策略。' },
+    { id: 'overview', label: '概览', description: '查看服务连接及入口自检。', icon: LayoutDashboard },
+    { id: 'users', label: '用户管理', description: '管理用户、配额和客户端连接。', icon: UsersRound },
+    { id: 'nodes', label: '独立节点', description: '管理独立节点和用户授权。', icon: Server },
+    { id: 'imports', label: '固定代理', description: '检测固定代理与出口。', icon: Cable },
+    { id: 'webshare', label: '动态住宅池', description: '管理住宅套餐和地区出口。', icon: House },
+    { id: 'rules', label: '规则模板', description: '编辑和发布客户端分流策略。', icon: ListFilter },
   ] },
   { title: '运行与安全', items: [
-    { id: 'activity', label: '入口活动', description: '查看用户近期入口流量。' },
-    { id: 'history', label: '历史趋势', description: '查看历史流量和入口状态。' },
-    { id: 'events', label: '操作记录', description: '查看最近的管理操作。' },
-    { id: 'notifications', label: '故障通知', description: '设置服务故障通知。' },
-    { id: 'security', label: '安全与备份', description: '管理账户安全和数据备份。' },
+    { id: 'activity', label: '入口活动', description: '查看用户近期入口流量。', icon: Activity },
+    { id: 'history', label: '历史趋势', description: '查看历史流量和入口状态。', icon: ChartNoAxesCombined },
+    { id: 'events', label: '操作记录', description: '查看最近的管理操作。', icon: ScrollText },
+    { id: 'notifications', label: '故障通知', description: '设置服务故障通知。', icon: BellRing },
+    { id: 'security', label: '安全与备份', description: '管理账户安全和数据备份。', icon: ShieldCheck },
   ] },
 ];
 const page = ref<Page>('overview');
@@ -126,39 +128,52 @@ onMounted(() => { void checkHealth(); void restoreSession(); });
   <div class="shell">
     <a class="skip-link" href="#main-heading">跳到主要内容</a>
     <header class="app-header">
-      <div class="brand"><strong>XCLI</strong><span>测试版</span></div>
-      <div v-if="stage === 'signed-in'" class="header-account"><span>{{ session?.username }}</span><button type="button" :disabled="busy" @click="logout">退出登录</button></div>
+      <div class="brand"><strong>XCLI</strong><span>管理控制台</span><span class="brand-version">测试版</span></div>
+      <div v-if="stage === 'signed-in'" class="header-account">
+        <span class="header-health" :class="health" title="最近一次管理服务健康检查"><span class="status-dot" aria-hidden="true"></span>{{ health === 'available' ? '最近检查正常' : health === 'checking' ? '正在检查' : '最近检查失败' }}</span>
+        <span class="account-name"><span class="account-avatar" aria-hidden="true">{{ session?.username.slice(0, 1).toUpperCase() }}</span>{{ session?.username }}</span>
+        <button class="logout-button" type="button" :disabled="busy" @click="logout"><LogOut :size="15" aria-hidden="true" />退出登录</button>
+      </div>
     </header>
     <main :class="{ 'signed-in-layout': stage === 'signed-in' }">
       <template v-if="stage !== 'signed-in'">
-        <div class="login-heading"><p class="eyebrow">MANAGEMENT</p><h1 id="main-heading">管理服务</h1>
-          <p class="intro">管理用户、节点与订阅。</p></div>
-        <section class="account" aria-labelledby="account-heading">
-          <div class="section-heading"><div><h2 id="account-heading">管理员账户</h2><p>使用现有管理员账号登录。</p></div></div>
-          <p v-if="stage === 'checking'" aria-live="polite">正在检查登录状态…</p>
-          <div v-else-if="stage === 'unavailable'" class="account-state">
-            <p>管理服务暂时不可用。</p><button type="button" @click="restoreSession">重试</button>
+        <div class="login-layout">
+          <div class="login-heading"><p class="eyebrow">XCLI MANAGEMENT</p><h1 id="main-heading" tabindex="-1">管理服务</h1>
+            <p class="intro">在一个清晰的工作台中管理用户、节点与订阅。</p>
+            <div class="login-features" aria-label="管理功能">
+              <span><UsersRound :size="16" aria-hidden="true" />用户与订阅</span>
+              <span><Server :size="16" aria-hidden="true" />节点与入口</span>
+              <span><ShieldCheck :size="16" aria-hidden="true" />规则与安全</span>
+            </div>
           </div>
-          <form v-else @submit.prevent="login">
-            <label>账号<input v-model="form.username" autocomplete="username" maxlength="64" required></label>
-            <label>密码<input v-model="form.password" type="password" autocomplete="current-password" maxlength="256" required></label>
-            <label>二次验证码或恢复码<input v-model="form.code" autocomplete="one-time-code" maxlength="128"></label>
-            <div><button class="primary" type="submit" :disabled="busy">{{ busy ? '正在登录…' : '登录' }}</button></div>
-          </form>
-          <p v-if="message" class="message" role="alert">{{ message }}</p>
-        </section>
+          <section class="account login-card" aria-labelledby="account-heading">
+            <div class="login-card-symbol"><ShieldCheck :size="20" :stroke-width="1.7" aria-hidden="true" /></div>
+            <div class="section-heading"><div><h2 id="account-heading">管理员登录</h2><p>使用管理员账号继续。</p></div></div>
+            <p v-if="stage === 'checking'" aria-live="polite">正在检查登录状态…</p>
+            <div v-else-if="stage === 'unavailable'" class="account-state">
+              <p>管理服务暂时不可用。</p><button type="button" @click="restoreSession">重试</button>
+            </div>
+            <form v-else @submit.prevent="login">
+              <label>账号<input v-model="form.username" autocomplete="username" maxlength="64" required></label>
+              <label>密码<input v-model="form.password" type="password" autocomplete="current-password" maxlength="256" required></label>
+              <label>二次验证码或恢复码<input v-model="form.code" autocomplete="one-time-code" maxlength="128"></label>
+              <div><button class="primary login-submit" type="submit" :disabled="busy">{{ busy ? '正在登录…' : '登录管理控制台' }}</button></div>
+            </form>
+            <p v-if="message" class="message" role="alert">{{ message }}</p>
+          </section>
+        </div>
       </template>
       <template v-else-if="session">
         <nav class="workspace-navigation" aria-label="管理导航">
           <div v-for="group in navigation" :key="group.title" class="navigation-group">
             <p>{{ group.title }}</p>
             <button v-for="item in group.items" :key="item.id" type="button" :class="{ selected: page === item.id }"
-              :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)">{{ item.label }}</button>
+              :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span></button>
           </div>
         </nav>
         <div class="page-content">
           <div class="page-heading"><p class="eyebrow">{{ page === 'overview' ? 'OVERVIEW' : 'MANAGEMENT' }}</p>
-            <h1 id="main-heading">{{ currentPage().label }}</h1><p class="intro">{{ currentPage().description }}</p></div>
+            <h1 id="main-heading" tabindex="-1">{{ currentPage().label }}</h1><p class="intro">{{ currentPage().description }}</p></div>
           <p v-if="message" class="message" role="alert">{{ message }}</p>
           <template v-if="page === 'overview'">
             <HostPanel @expired="endSession()" />
@@ -167,7 +182,7 @@ onMounted(() => { void checkHealth(); void restoreSession(); });
             <MonitorPanel @expired="endSession()" />
             <section class="health" aria-labelledby="health-heading">
               <div><h2 id="health-heading">后端连接</h2><p>检查管理服务健康接口的响应。</p></div>
-              <div class="result"><span aria-live="polite">{{ health === 'checking' ? '正在检查' : health === 'available' ? '接口可用' : '接口不可用' }}</span><button type="button" @click="checkHealth">重新检查</button></div>
+              <div class="result"><span class="status-badge" :class="health" aria-live="polite">{{ health === 'checking' ? '正在检查' : health === 'available' ? '接口可用' : '接口不可用' }}</span><button type="button" @click="checkHealth">重新检查</button></div>
             </section>
             <p class="footnote">接口可用不代表节点可用或用户连接正常。</p>
           </template>

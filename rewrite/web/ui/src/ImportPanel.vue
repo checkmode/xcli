@@ -184,7 +184,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); form.text = ''; clearEdit()
           <label>新 UUID<input v-model="edit.uuid" type="password" autocomplete="new-password" placeholder="留空保留原值"></label>
           <div class="editor-grid"><label>传输<select v-model="edit.network"><option value="tcp">TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option></select></label>
             <label>加密<select v-model="edit.security"><option>auto</option><option>aes-128-gcm</option><option>chacha20-poly1305</option><option>none</option><option>zero</option></select></label></div>
-          <label><input v-model="edit.tls" type="checkbox">启用 TLS</label>
+          <label class="checkbox"><input v-model="edit.tls" type="checkbox">启用 TLS</label>
           <div class="editor-grid"><label>TLS 服务名<input v-model="edit.server_name" maxlength="253"></label><label>Host<input v-model="edit.host" maxlength="253"></label></div>
           <label>路径或 gRPC 服务名<input v-model="edit.path" maxlength="1024"></label>
           <div class="editor-grid"><label>ALPN<input v-model="edit.alpn" maxlength="100"></label><label>TLS 指纹<input v-model="edit.fingerprint" maxlength="32"></label></div>
