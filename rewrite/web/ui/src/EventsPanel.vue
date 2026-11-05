@@ -13,7 +13,7 @@ const labels: Record<string, string> = {
   recovery_regenerated:'重新生成恢复码', backup_created:'创建加密备份', backup_restored:'恢复备份',
   rule_template_created:'新建规则模板', rule_template_saved:'保存规则草稿', rule_template_published:'发布规则模板',
   rule_template_reset:'恢复模板默认', rule_template_reset_undone:'撤销模板恢复', user_rule_template_changed:'切换用户规则模板',
-  node_added:'添加服务器节点', node_updated:'更新服务器节点', proxy_import_requested:'固定代理导入',
+  node_added:'添加服务器节点', node_updated:'更新服务器节点', proxy_import_requested:'固定代理导入', brutal_rate_requested:'调整 Brutal 速率',
   webshare_configured:'动态住宅池配置变更', webshare_requested:'动态住宅池操作', notifications_configured:'通知配置变更',
   notification_test:'发送测试通知', fault_detected:'检测到持续故障', fault_recovered:'故障已恢复',
 };

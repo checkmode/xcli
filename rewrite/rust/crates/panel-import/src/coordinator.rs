@@ -88,6 +88,18 @@ impl Coordinator {
         }
         let input = request.payload();
         match request.action() {
+            Action::BrutalRate => {
+                self.slot = None;
+                if !exact(input, &["id", "requested_at", "action", "mbps"]) {
+                    return Err(PreviewError::Invalid);
+                }
+                let rate = input["mbps"].as_u64().filter(|v| (1..=1000).contains(v)).ok_or(PreviewError::Invalid)?;
+                let (candidate, snapshot) = store.brutal_rate_candidate(rate)?;
+                if let Some(candidate) = candidate {
+                    store.apply(&snapshot, &candidate, hooks)?;
+                }
+                Ok(json!({"id":request.id(),"status":"complete"}))
+            }
             Action::Preview => {
                 self.slot = None;
                 let protocol = input["protocol"].as_str().ok_or(PreviewError::Invalid)?;

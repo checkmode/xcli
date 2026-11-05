@@ -81,7 +81,7 @@ fn decoded(cipher: &[u8], key: &[u8]) -> Result<SecretJson> {
         return Err(PublishError::Invalid);
     }
     match value["action"].as_str() {
-        Some("preview" | "manage" | "apply") => Ok(payload),
+        Some("preview" | "manage" | "apply" | "brutal_rate") => Ok(payload),
         _ => Err(PublishError::Invalid),
     }
 }
@@ -98,6 +98,10 @@ fn audit(value: &Value) -> Result<AuditRecord> {
     let detail = match value["action"].as_str() {
         Some("preview") => "请求检测固定代理".to_owned(),
         Some("apply") => "确认应用代理变更".to_owned(),
+        Some("brutal_rate") => {
+            let rate = value["mbps"].as_u64().filter(|v| (1..=1000).contains(v)).ok_or(PublishError::Invalid)?;
+            format!("请求调整 Brutal 速率至 {rate} Mbps")
+        },
         Some("manage") => {
             let action = value["operation"]
                 .as_str()
@@ -168,7 +172,7 @@ impl Publisher {
         );
         let request =
             decoded(&desired, self.key.as_ref()).map_err(|_| PublishError::Unavailable)?;
-        if preview_only && request.as_value()["action"] == "apply" {
+        if preview_only && ["apply", "brutal_rate"].iter().any(|v| request.as_value()["action"] == *v) {
             return Err(PublishError::Unavailable);
         }
         let event = audit(request.as_value()).map_err(|_| PublishError::Unavailable)?;
@@ -247,7 +251,7 @@ impl Publisher {
         }
         let _guard = self.lock()?;
         let value = decoded(prepared.encrypted(), self.key.as_ref())?;
-        if preview_only && value.as_value()["action"] == "apply" {
+        if preview_only && ["apply", "brutal_rate"].iter().any(|v| value.as_value()["action"] == *v) {
             return Err(PublishError::Invalid);
         }
         self.recover_locked(now, auditor, preview_only)?;

@@ -99,6 +99,8 @@ pub fn validate(settings: &Value) -> Result<()> {
     let ws = settings["ws_path"].as_str().ok_or(Error::Base)?;
     let hy2 = port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)?;
     let hy2_brutal = port(settings, "hysteria2_brutal_port", 0, 0).ok_or(Error::Base)?;
+    settings.get("hysteria2_brutal_mbps").map_or(Some(40), Value::as_u64)
+        .filter(|v| (1..=1000).contains(v)).ok_or(Error::Base)?;
     if hy2_brutal > 0 && (hy2 == 0 || hy2_brutal == hy2) {
         return Err(Error::Base);
     }

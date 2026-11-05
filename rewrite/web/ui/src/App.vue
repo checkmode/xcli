@@ -8,6 +8,7 @@ import MfaPanel from './MfaPanel.vue';
 import WebsharePanel from './WebsharePanel.vue';
 import MonitorPanel from './MonitorPanel.vue';
 import CoreStatusPanel from './CoreStatusPanel.vue';
+import BrutalRatePanel from './BrutalRatePanel.vue';
 import HostPanel from './HostPanel.vue';
 import HistoryPanel from './HistoryPanel.vue';
 import NotificationsPanel from './NotificationsPanel.vue';
@@ -162,6 +163,7 @@ onMounted(() => { void checkHealth(); void restoreSession(); });
           <template v-if="page === 'overview'">
             <HostPanel @expired="endSession()" />
             <CoreStatusPanel @expired="endSession()" />
+            <BrutalRatePanel :csrf="session.csrf" @expired="endSession()" />
             <MonitorPanel @expired="endSession()" />
             <section class="health" aria-labelledby="health-heading">
               <div><h2 id="health-heading">后端连接</h2><p>检查管理服务健康接口的响应。</p></div>

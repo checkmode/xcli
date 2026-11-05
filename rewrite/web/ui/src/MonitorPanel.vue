@@ -34,7 +34,7 @@ async function refresh() {
   finally { loading.value = false; }
 }
 function label(value: string): string {
-  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', 'hysteria2-brutal': 'Hysteria 2 Brutal 40 Mbps', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
+  return ({ reality: 'REALITY', websocket: 'WebSocket / TLS', hysteria2: 'Hysteria 2', 'hysteria2-brutal': 'Hysteria 2 Brutal', vmess: 'VMess / TLS' } as Record<string, string>)[value] ?? value;
 }
 function state(value: string): string {
   return ({ healthy: '正常', failed: '失败', unknown: '等待结果', stale: '结果已过期' } as Record<string, string>)[value] ?? '未知';

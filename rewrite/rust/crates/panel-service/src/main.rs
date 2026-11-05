@@ -63,6 +63,7 @@ struct App {
     import_report: Option<Arc<ImportReport>>,
     import_preview: Option<Arc<Mutex<ImportPreview>>>,
     import_apply: bool,
+    brutal_rate: Option<u64>,
     history: Arc<Mutex<History>>,
     notifications: Option<Arc<Mutex<Notifications>>>,
     notification_delivery_active: Arc<AtomicBool>,
@@ -332,6 +333,7 @@ async fn import_status(State(app): State<App>, headers: HeaderMap) -> Response {
             .and_then(|report| report.read(timestamp).ok())
             .unwrap_or_else(|| json!({"status":"unavailable"}));
         report["apply_enabled"] = json!(app.import_apply);
+        report["brutal_rate_mbps"] = json!(app.brutal_rate);
         report["items"] = json!(app
             .import_report
             .as_ref()
@@ -385,7 +387,10 @@ async fn request_import_preview(
         let stamp = now().map_err(ImportRequestError::Auth)?;
         auth.session(&token, Some(&csrf), stamp)
             .map_err(ImportRequestError::Auth)?;
-        if input.0["action"] == "apply" && !app.import_apply {
+        if (input.0["action"] == "apply" || input.0["action"] == "brutal_rate") && !app.import_apply {
+            return Err(ImportRequestError::Disabled);
+        }
+        if input.0["action"] == "brutal_rate" && app.brutal_rate.is_none() {
             return Err(ImportRequestError::Disabled);
         }
         let report = app
@@ -3423,7 +3428,7 @@ async fn run() -> Result<(), &'static str> {
                 "reality" => Some("REALITY 入口"),
                 "websocket" => Some("WebSocket / TLS 入口"),
                 "hysteria2" => Some("Hysteria 2 入口"),
-                "hysteria2-brutal" => Some("Hysteria 2 Brutal 40 Mbps 入口"),
+                "hysteria2-brutal" => Some("Hysteria 2 Brutal 入口"),
                 "vmess" => Some("VMess / TLS 入口"),
                 _ => settings
                     .as_ref()
@@ -3486,6 +3491,10 @@ async fn run() -> Result<(), &'static str> {
         import_report,
         import_preview,
         import_apply: args.import_apply,
+        brutal_rate: settings.as_ref().and_then(|s| {
+            (s.get("hysteria2_brutal_port").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0)
+                .then(|| s.get("hysteria2_brutal_mbps").and_then(serde_json::Value::as_u64).unwrap_or(40))
+        }),
         history,
         notifications,
         notification_delivery_active: Arc::new(AtomicBool::new(false)),
@@ -3784,6 +3793,7 @@ mod tests {
             import_report: None,
             import_preview: None,
             import_apply: false,
+            brutal_rate: None,
             history: Arc::new(Mutex::new(History::open(&path, vec![]).unwrap())),
             notifications: None,
             notification_delivery_active: Arc::new(AtomicBool::new(false)),

@@ -49,6 +49,12 @@ class CandidateTests(unittest.TestCase):
         self.assertTrue(candidate['firewall'].endswith(b'# retain\n'))
         self.assertIsNone(brutal.build_candidates(candidate['settings'], candidate['core'],
                                                   candidate['monitor'], candidate['firewall'], 8443))
+        custom_settings = json.loads(candidate['settings'])
+        custom_settings['hysteria2_brutal_mbps'] = 60
+        custom_core = json.loads(candidate['core'])
+        custom_core['inbounds'][1]['streamSettings']['finalmask']['quicParams']['brutalUp'] = '60 mbps'
+        self.assertIsNone(brutal.build_candidates(json.dumps(custom_settings).encode(), json.dumps(custom_core).encode(),
+                                                  candidate['monitor'], candidate['firewall'], 8443))
 
     def test_rejects_collisions_custom_users_and_partial_prior_state(self):
         settings, core, monitor, firewall = fixture()

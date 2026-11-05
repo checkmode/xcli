@@ -218,6 +218,10 @@ pub fn prepare(
         "apply" if exact(input, &["action", "preview_id"]) => {
             result.value_mut()["preview_id"] = json!(identifier(&input["preview_id"])?);
         }
+        "brutal_rate" if exact(input, &["action", "mbps"]) => {
+            let rate = input["mbps"].as_u64().filter(|v| (1..=1000).contains(v)).ok_or_else(invalid)?;
+            result.value_mut()["mbps"] = json!(rate);
+        }
         _ => return Err(invalid()),
     }
     let bytes = Zeroizing::new(serde_json::to_vec(result.as_value()).map_err(|_| invalid())?);
@@ -297,5 +301,10 @@ mod tests {
         let edit = json!({"action":"manage","operation":"edit","tag":"residential-27","changes":{
             "label":"fixture","address":"8.8.8.8","port":80,"protocol":"http","password":"synthetic-secret"}});
         assert!(prepare(&edit, 100, &key, 0).is_ok());
+        assert!(prepare(&json!({"action":"brutal_rate","mbps":60}), 100, &key, 0).is_ok());
+        for rate in [json!(0), json!(1001), json!(1.5), json!("40")] {
+            assert!(prepare(&json!({"action":"brutal_rate","mbps":rate}), 100, &key, 0).is_err());
+        }
+        assert!(prepare(&json!({"action":"brutal_rate","mbps":40,"extra":true}), 100, &key, 0).is_err());
     }
 }

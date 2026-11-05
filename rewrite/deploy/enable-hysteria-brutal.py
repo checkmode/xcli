@@ -50,12 +50,16 @@ def build_candidates(settings_bytes, core_bytes, monitor_bytes, firewall_bytes, 
         raise ValueError('现有 Xray 入站配置无效')
     original = [item for item in entries if item.get('tag') == 'hysteria2']
     existing = [item for item in entries if item.get('tag') == TAG]
+    rate = settings.get('hysteria2_brutal_mbps', 40)
+    if type(rate) is not int or not 1 <= rate <= 1000:
+        raise ValueError('Brutal 速率必须为 1..1000 Mbps')
     anchor = f'    iptables -w -A XG_IN -p udp --dport {old_port} -j ACCEPT\n'.encode()
     rule = f'    iptables -w -A XG_IN -p udp --dport {port} -j ACCEPT\n'.encode()
     if settings.get(KEY) == port and len(existing) == 1:
         params = existing[0].get('streamSettings', {}).get('finalmask', {}).get('quicParams', {})
         if (existing[0].get('port') == port and existing[0].get('protocol') == 'hysteria'
-                and params.get('congestion') == 'force-brutal' and params.get('brutalUp') == '40 mbps'
+                and params.get('congestion') == 'force-brutal'
+                and str(params.get('brutalUp', '')).strip().lower() == f'{rate} mbps'
                 and monitor.get(KEY) == port and firewall_bytes.count(rule) == 1):
             return None
         raise ValueError('已有 Brutal 配置与预期不一致，请先检查')
@@ -88,7 +92,7 @@ def build_candidates(settings_bytes, core_bytes, monitor_bytes, firewall_bytes, 
     inbound['port'] = port
     options = inbound['streamSettings'].setdefault('finalmask', {}).setdefault('quicParams', {})
     options['congestion'] = 'force-brutal'
-    options['brutalUp'] = '40 mbps'
+    options['brutalUp'] = f'{rate} mbps'
     options.pop('bbrProfile', None)
     core['inbounds'].append(inbound)
     settings[KEY] = port
@@ -342,7 +346,7 @@ def enable(info, activation):
         if any(any(value < old for value, old in zip(row[7:9], old_usage[row[0]])) for row in after_users):
             raise RuntimeError('新增入口后累计流量异常')
         upgrade.atomic_file(backup / 'completed', 'ok\n')
-        print('已启用独立 Brutal 40 Mbps 入口；原 BBR 入口保持运行。', flush=True)
+        print('已启用独立 Brutal 入口；原 BBR 入口保持运行。', flush=True)
         print('配置备份：' + str(backup), flush=True)
     except BaseException:
         if started:

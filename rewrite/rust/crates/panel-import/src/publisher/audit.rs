@@ -50,6 +50,9 @@ fn detail_allowed(detail: &str) -> bool {
     if ["请求检测固定代理", "确认应用代理变更"].contains(&detail) {
         return true;
     }
+    if let Some(rate) = detail.strip_prefix("请求调整 Brutal 速率至 ").and_then(|v| v.strip_suffix(" Mbps")) {
+        return rate.parse::<u16>().is_ok_and(|v| (1..=1000).contains(&v) && v.to_string() == rate);
+    }
     let Some(tail) = detail.strip_prefix("请求管理代理 ") else {
         return false;
     };
@@ -77,9 +80,10 @@ impl Auditor for SqliteAuditor {
             )
             .map_err(|_| PublishError::Unavailable)?;
         if inserted == 1 {
+            let action = if event.detail.starts_with("请求调整 Brutal 速率至 ") { "brutal_rate_requested" } else { "proxy_import_requested" };
             tx.execute(
-                "INSERT INTO events(ts,action,detail) VALUES(?,'proxy_import_requested',?)",
-                params![event.timestamp, event.detail],
+                "INSERT INTO events(ts,action,detail) VALUES(?,?,?)",
+                params![event.timestamp, action, event.detail],
             )
             .map_err(|_| PublishError::Unavailable)?;
             tx.execute(
