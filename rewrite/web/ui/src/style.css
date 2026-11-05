@@ -88,6 +88,7 @@ section { margin-top: 20px; padding: 22px; border: 1px solid rgba(150, 166, 188,
 /* Main workspace */
 main.signed-in-layout { max-width: 1440px; display: grid; grid-template-columns: 216px minmax(0, 1fr); align-items: start; gap: 30px; padding-top: 28px; }
 .workspace-navigation { position: sticky; top: 90px; min-width: 0; max-height: calc(100vh - 110px); overflow-y: auto; padding: 12px 9px; border: 1px solid rgba(174, 190, 211, .27); border-radius: 15px; background: rgba(255, 255, 255, .66); box-shadow: 0 6px 22px rgba(47, 66, 92, .035); backdrop-filter: blur(14px); }
+.mobile-navigation-toggle { display: none; }
 .navigation-group + .navigation-group { margin-top: 20px; }
 .navigation-group > p { margin: 3px 10px 7px; color: #61718a; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .navigation-group button { width: 100%; min-height: 38px; display: flex; justify-content: flex-start; gap: 10px; padding: 8px 10px; border-color: transparent; background: transparent; color: #637286; text-align: left; font-size: 13px; font-weight: 500; }
@@ -220,11 +221,18 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 }
 @media (max-width: 800px) {
   main { padding: 32px 20px 56px; }
-  main.signed-in-layout { display: block; padding-top: 18px; }
-  .workspace-navigation { position: static; max-height: none; display: flex; gap: 7px; overflow-x: auto; margin: 0 0 22px; padding: 6px; border-radius: 12px; }
-  .navigation-group, .navigation-group + .navigation-group { display: flex; flex: 0 0 auto; gap: 4px; margin: 0; }
-  .navigation-group > p { display: none; }
-  .navigation-group button { width: auto; min-height: 36px; padding: 7px 10px; }
+  main.signed-in-layout { display: block; padding-top: 0; }
+  .workspace-navigation { top: 64px; z-index: 19; max-height: none; overflow: visible; margin: 0 0 20px; padding: 5px; border-radius: 12px; background: rgba(255, 255, 255, .96); }
+  .mobile-navigation-toggle { width: 100%; min-height: 42px; display: flex; justify-content: flex-start; padding: 8px 10px; border-color: transparent; background: transparent; color: #344d70; font-weight: 650; }
+  .mobile-navigation-current { margin-left: auto; color: #687588; font-size: 12px; font-weight: 500; }
+  .mobile-navigation-toggle > svg:last-child { transition: transform .16s; }
+  .mobile-navigation-toggle > svg.expanded:last-child { transform: rotate(180deg); }
+  .navigation-items { display: none; }
+  .navigation-items.expanded { position: absolute; top: calc(100% + 6px); right: 0; left: 0; display: block; max-height: calc(100vh - 140px); max-height: calc(100dvh - 140px); overflow-y: auto; padding: 9px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgba(33, 51, 76, .16); }
+  .navigation-group, .navigation-group + .navigation-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 6px; margin: 0; }
+  .navigation-group + .navigation-group { margin-top: 9px; }
+  .navigation-group > p { grid-column: 1 / -1; margin: 5px 9px 3px; }
+  .navigation-group button { min-height: 40px; padding: 8px 9px; }
   .header-health { display: none; }
   .login-layout { min-height: 0; grid-template-columns: 1fr; gap: 28px; }
   .login-heading h1 { font-size: 38px; }
@@ -245,6 +253,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 }
 @media (max-width: 600px) {
   .app-header, .client-page > header { height: 60px; padding: 0 16px; }
+  .workspace-navigation { top: 60px; }
   .brand { gap: 9px; }
   .brand > span:not(.brand-version) { padding-left: 9px; }
   .account-name { padding-left: 0; border: 0; }

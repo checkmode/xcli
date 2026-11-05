@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, type Component } from 'vue';
-import { Activity, BellRing, Cable, ChartNoAxesCombined, House, LayoutDashboard, ListFilter,
-  LogOut, ScrollText, Server, ShieldCheck, UsersRound } from '@lucide/vue';
+import { nextTick, onMounted, reactive, ref, type Component } from 'vue';
+import { Activity, BellRing, Cable, ChartNoAxesCombined, ChevronDown, House, LayoutDashboard, ListFilter,
+  LogOut, Menu, ScrollText, Server, ShieldCheck, UsersRound } from '@lucide/vue';
 import UsersPanel from './UsersPanel.vue';
 import NodesPanel from './NodesPanel.vue';
 import RulesPanel from './RulesPanel.vue';
@@ -49,12 +49,20 @@ const navigation: Array<{ title: string; items: NavigationItem[] }> = [
   ] },
 ];
 const page = ref<Page>('overview');
+const mobileNavigationOpen = ref(false);
+const mobileNavigationButton = ref<HTMLButtonElement | null>(null);
 const usersVisited = ref(false);
 const rulesVisited = ref(false);
 function currentPage(): NavigationItem {
   return navigation.flatMap(group => group.items).find(item => item.id === page.value)!;
 }
+function closeMobileNavigation() {
+  if (!mobileNavigationOpen.value) return;
+  mobileNavigationOpen.value = false;
+  void nextTick(() => mobileNavigationButton.value?.focus({ preventScroll: true }));
+}
 function navigate(next: Page) {
+  closeMobileNavigation();
   if (page.value === next) return;
   if (page.value === 'users') usersPanel.value?.closeLinks();
   page.value = next;
@@ -69,7 +77,7 @@ function navigate(next: Page) {
 }
 function endSession(reason = '') {
   session.value = null; stage.value = 'anonymous'; page.value = 'overview';
-  usersVisited.value = false; rulesVisited.value = false; message.value = reason;
+  mobileNavigationOpen.value = false; usersVisited.value = false; rulesVisited.value = false; message.value = reason;
 }
 
 function sessionBody(value: unknown): Session | null {
@@ -164,11 +172,18 @@ onMounted(() => { void checkHealth(); void restoreSession(); });
         </div>
       </template>
       <template v-else-if="session">
-        <nav class="workspace-navigation" aria-label="管理导航">
-          <div v-for="group in navigation" :key="group.title" class="navigation-group">
-            <p>{{ group.title }}</p>
-            <button v-for="item in group.items" :key="item.id" type="button" :class="{ selected: page === item.id }"
-              :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span></button>
+        <nav class="workspace-navigation" aria-label="管理导航" @keydown.esc.stop="closeMobileNavigation">
+          <button ref="mobileNavigationButton" class="mobile-navigation-toggle" type="button"
+            :aria-expanded="mobileNavigationOpen" aria-controls="workspace-navigation-items" @click="mobileNavigationOpen = !mobileNavigationOpen">
+            <Menu :size="18" aria-hidden="true" /><span>导航</span><span class="mobile-navigation-current">{{ currentPage().label }}</span>
+            <ChevronDown :size="16" :class="{ expanded: mobileNavigationOpen }" aria-hidden="true" />
+          </button>
+          <div id="workspace-navigation-items" class="navigation-items" :class="{ expanded: mobileNavigationOpen }">
+            <div v-for="group in navigation" :key="group.title" class="navigation-group">
+              <p>{{ group.title }}</p>
+              <button v-for="item in group.items" :key="item.id" type="button" :class="{ selected: page === item.id }"
+                :aria-current="page === item.id ? 'page' : undefined" @click="navigate(item.id)"><component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span></button>
+            </div>
           </div>
         </nav>
         <div class="page-content">
