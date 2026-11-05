@@ -2,9 +2,9 @@ name: Rust and TypeScript rewrite
 on:
   push:
     branches: [main]
-    paths: ['rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
+    paths: ['upgrade.sh', 'rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
   pull_request:
-    paths: ['rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
+    paths: ['upgrade.sh', 'rewrite/**', 'tests/rewrite/**', 'deploy/**', 'cpp/**', 'scripts/node_agent.py', 'scripts/node_ledger.py', 'scripts/proxy_import.py', 'scripts/proxy_vmess.py', 'scripts/probe.py', 'scripts/webshare.py', '.github/workflows/rewrite.yml']
   workflow_dispatch:
 permissions:
   contents: read

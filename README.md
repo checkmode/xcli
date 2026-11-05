@@ -24,18 +24,22 @@ sudo bash ./install.sh
 
 按提示选择“面板及本机节点”或“独立服务器节点”。面板安装完成后，管理员凭据位于 `/etc/xcli/initial-admin.txt`，设置和用户数据分别位于 `/etc/xcli/` 与 `/var/lib/xcli/`。节点安装后，在现有面板添加 `/etc/xcli-node/registration.json` 中的注册信息。
 
-可先运行 `sudo bash ./install.sh --check` 检查并缓存输入；正式安装时交互提示可使用这些默认值。无人值守时可使用 `--role panel|node`、`--domain`、`--public-ip`、`--no-email`、`--agree-tos` 和 `--yes`；节点还需 `--panel https://面板域名`。安装使用当前 Git 提交，不包含未提交的修改。新安装器不支持直接升级现有部署、共存安装或旧版发布包；Rust 测试版暂未提供原地更新命令，下文的 `update.sh` 仅适用于旧版。
+可先运行 `sudo bash ./install.sh --check` 检查并缓存输入；正式安装时交互提示可使用这些默认值。无人值守时可使用 `--role panel|node`、`--domain`、`--public-ip`、`--no-email`、`--agree-tos` 和 `--yes`；节点还需 `--panel https://面板域名`。安装使用当前 Git 提交，不包含未提交的修改。新安装器用于干净主机；已有部署使用下文的 `upgrade.sh`，`update.sh` 仅适用于旧版。
 
-## 将旧版面板升级到 Rust 测试版
+## 更新已有面板或独立节点
 
-在现有面板的源码目录运行：
+在服务器的源码目录运行：
 
 ```sh
 git pull --ff-only
 sudo bash ./upgrade.sh
 ```
 
-脚本保留现有用户数据库、域名、订阅地址、Xray 和 Nginx 配置，并在切换前备份配置和数据库。可先运行 `sudo bash ./upgrade.sh --check` 检查环境。当前升级入口面向旧版单机面板；正在运行动态住宅服务的部署，以及 Rust 版本之间的更新，尚不支持此入口。
+脚本根据已有安装选择更新方式：旧版单机面板可迁移到 Rust 测试版，已安装的 Rust 面板或独立节点可更新到当前 Git 提交。脚本保留用户数据库、节点账本、域名、订阅地址及现有 Xray 和 Nginx 配置，并在切换前备份数据；更新失败时尝试恢复上一版本。更新面板时脚本不会主动重启 Xray 核心；更新独立节点会重启该节点的核心，已有连接需要重连。
+
+可先运行 `sudo bash ./upgrade.sh --check` 检查环境。若当前业务版本已安装，脚本会直接退出。正在运行动态住宅服务的旧版面板以及旧版独立节点，暂不支持通过此入口迁移。
+
+回退程序时继续使用当前数据库，不会用旧备份覆盖已经写入的数据；若旧版服务无法恢复，脚本会保留当前数据库并显示备份位置。
 
 ## 旧版一键安装
 

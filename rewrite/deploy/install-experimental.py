@@ -71,6 +71,7 @@ echo '实验服务已停止；用户数据、凭据、证书与日志均保留�
             self.copy(self.node_binary, base / 'node', 0o755)
             release_dir = self.directory('/opt/xcli/releases/' + self.args.commit)
             shutil.copytree(self.release / 'web', release_dir / 'web')
+            private_file(release_dir / 'COMMIT', self.args.commit + '\n', 0o644)
             os.symlink(release_dir, '/opt/xcli/current')
         asset, digest = XRAY_ASSETS[self.arch]
         archive = self.backup / 'xray.zip'
@@ -147,6 +148,7 @@ echo '实验服务已停止；用户数据、凭据、证书与日志均保留�
                 write_json(path, value)
                 shutil.chown(path, 'root', 'xgateway')
             write_json(Path('/etc/xcli-node/registration.json'), data['registration'], 0o600)
+            private_file('/etc/xcli-node/revision', self.args.commit + '\n', 0o600)
         private_file('/usr/local/lib/xcli/firewall.sh', data['firewall'], 0o755)
         self.settings, self.nginx_text = data['settings'], data['nginx']
         self.install_units()

@@ -5,7 +5,7 @@ downloads, firewall application and systemd are simulated; Xray, Nginx,
 Rust services, Node and the generated configurations are real.
 """
 import argparse
-from contextlib import suppress
+from contextlib import closing, suppress
 import hashlib
 import http.server
 import importlib.util
@@ -24,6 +24,7 @@ import threading
 import time
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from test_panel_http_integration import request
 from test_node_service_integration import socket_open
@@ -108,10 +109,17 @@ class Services:
         if args[0] == 'daemon-reload':
             return 0
         if args[0] == 'stop':
+            for name in args[1:]:
+                self.stop(name)
+            return 0
+        if args[0] == 'start':
+            for name in args[1:]:
+                self.start(name)
             return 0
         if args[:2] == ['disable', '--now']:
             for name in args[2:]:
                 self.enabled.discard(name)
+                self.stop(name)
             return 0
         if args[:2] == ['enable', '--now']:
             for name in args[2:]:
@@ -128,6 +136,16 @@ class Services:
             child = self.processes.get(name)
             return 0 if name in self.enabled or child is not None and child.poll() is None else 3
         raise RuntimeError('unexpected simulated systemctl action: ' + repr(args))
+
+    def stop(self, name):
+        child = self.processes.get(name)
+        if child and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=5)
 
     def close(self):
         # Terminate the node before its Xray child, then stop the remaining services.
@@ -193,6 +211,80 @@ class FreshInstall(unittest.TestCase):
         module.XRAY_ASSETS = {'x86_64': ('fixture.zip', hashlib.sha256(archive.read_bytes()).hexdigest())}
         services = Services(fixture)
 
+        def update_existing(info, release=None, revision='b' * 40):
+            spec = importlib.util.spec_from_file_location('rewrite_updater', ROOT / 'rewrite/deploy/upgrade-rust.py')
+            updater = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(updater)
+
+            def fake_run(*command, check=True, timeout=120):
+                if command[0] != 'systemctl':
+                    return subprocess.run(command, check=check, timeout=timeout, capture_output=True, text=True)
+                if command[1] == 'show':
+                    if 'KillMode' in command:
+                        value = 'mixed\n'
+                    else:
+                        child = services.processes.get('xcli-node')
+                        value = 'success\n' if child is not None and child.returncode == 0 else 'exit-code\n'
+                    return subprocess.CompletedProcess(command, 0, value, '')
+                code = services.systemctl(list(command[1:]))
+                if check and code:
+                    raise subprocess.CalledProcessError(code, command)
+                return subprocess.CompletedProcess(command, code, '', '')
+
+            def running(name):
+                child = services.processes.get(name)
+                return child is not None and child.poll() is None
+
+            with patch.object(updater, 'run', side_effect=fake_run), patch.object(updater, 'active', side_effect=running):
+                updater.apply(info, release or Path(RELEASE), Path(NODE), revision)
+
+        def broken_release(component):
+            destination = fixture / ('broken-' + component)
+            shutil.copytree(RELEASE, destination)
+            if component == 'node':
+                binary = destination / 'bin/xcli-node-service'
+                binary.write_text('#!/bin/sh\nexit 23\n')
+                binary.chmod(0o755)
+            else:
+                (destination / 'web/gateway/main.js').write_text('process.exit(23)\n')
+            return destination
+
+        def check_wrapper(role):
+            checkout = fixture / 'wrapper-checkout'
+            (checkout / 'rewrite/deploy').mkdir(parents=True)
+            (checkout / 'rewrite/rust').mkdir()
+            shutil.copyfile(ROOT / 'upgrade.sh', checkout / 'upgrade.sh')
+            shutil.copyfile(ROOT / 'rewrite/deploy/upgrade-rust.py', checkout / 'rewrite/deploy/upgrade-rust.py')
+            runtime = checkout / 'rewrite/rust/fixture.txt'
+            runtime.write_text('first\n')
+            subprocess.run(['git', 'init', '-q', str(checkout)], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(checkout), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'first'], check=True, capture_output=True)
+            first = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip()
+            marker = Path('/opt/xcli/current/COMMIT') if role == 'panel' else Path('/etc/xcli-node/revision')
+            marker.write_text(first + '\n')
+            runtime.write_text('second\n')
+            subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(checkout), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'second'], check=True, capture_output=True)
+            second = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip()
+            commands = fixture / 'wrapper-bin'
+            commands.mkdir()
+            systemctl = commands / 'systemctl'
+            systemctl.write_text('#!/bin/sh\ncase "$1" in\n  is-active) exit 0;;\n  cat) cat "/etc/systemd/system/$2";;\n  *) exit 1;;\nesac\n')
+            systemctl.chmod(0o755)
+            env = dict(os.environ, PATH=str(commands) + ':' + os.environ['PATH'])
+            check = subprocess.run(['bash', str(checkout / 'upgrade.sh'), '--check'], env=env,
+                                   capture_output=True, text=True, timeout=20)
+            self.assertEqual(check.returncode, 0, check.stderr)
+            self.assertIn('可以更新到当前 Git 提交', check.stdout)
+            marker.write_text(second + '\n')
+            same = subprocess.run(['bash', str(checkout / 'upgrade.sh')], env=env,
+                                  capture_output=True, text=True, timeout=20)
+            self.assertEqual(same.returncode, 0, same.stderr)
+            self.assertIn('当前业务版本已经安装', same.stdout)
+
         base_installer = replacement.Replacement if REPLACE else module.Installer
         class FixtureInstaller(base_installer):
             def run(self, command, capture=False, timeout=1800, check=True):
@@ -224,6 +316,9 @@ class FreshInstall(unittest.TestCase):
         installer = FixtureInstaller(args, 'x86_64', ['1.1.1.1'], ROLE, Path(RELEASE), Path(NODE))
         try:
             self.assertEqual(installer.execute(), 0)
+            if not REPLACE:
+                revision_path = Path('/opt/xcli/current/COMMIT' if ROLE == 'panel' else '/etc/xcli-node/revision')
+                self.assertEqual(revision_path.read_text().strip(), 'a' * 40)
             if REPLACE:
                 self.assertTrue((installer.backup / 'old-current').is_symlink())
                 self.assertTrue((installer.backup / 'old-monitor-config/monitor.json').is_file())
@@ -260,6 +355,23 @@ class FreshInstall(unittest.TestCase):
                 self.assertTrue(wait_for(lambda: subprocess.run(['/usr/local/lib/xcli/xray', 'api', 'inboundusercount',
                     '--server=127.0.0.1:10085', '-tag=reality', '--timeout=1'], stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, timeout=3).returncode == 0), 'node core did not start')
+                node_info = {'role': 'node', 'db': Path('/var/lib/xcli-node/traffic.sqlite'),
+                             'config': Path('/etc/xcli-node/node.json'), 'core': Path('/etc/xcli-node/core.json')}
+                update_existing(node_info)
+                self.assertEqual(json.loads(Path('/etc/xcli-node/registration.json').read_text()), registration)
+                self.assertEqual(json.loads(Path('/etc/xcli-node/node.json').read_text()), config)
+                self.assertEqual(Path('/etc/xcli-node/revision').read_text().strip(), 'b' * 40)
+                self.assertTrue(wait_for(lambda: subprocess.run(['/usr/local/lib/xcli/xray', 'api', 'inboundusercount',
+                    '--server=127.0.0.1:10085', '-tag=reality', '--timeout=1'], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, timeout=3).returncode == 0), 'updated node core did not start')
+                with self.assertRaises(RuntimeError):
+                    update_existing(node_info, broken_release('node'), 'c' * 40)
+                self.assertEqual(Path('/etc/xcli-node/revision').read_text().strip(), 'b' * 40)
+                self.assertEqual(json.loads(Path('/etc/xcli-node/registration.json').read_text()), registration)
+                self.assertTrue(wait_for(lambda: subprocess.run(['/usr/local/lib/xcli/xray', 'api', 'inboundusercount',
+                    '--server=127.0.0.1:10085', '-tag=reality', '--timeout=1'], stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, timeout=3).returncode == 0), 'node did not recover after failed update')
+                check_wrapper('node')
                 return
             origin = 'https://' + domain + ':19443'
             self.assertTrue(wait_for(lambda: request(18080, '/internal/ready', origin=origin)[0] == 200),
@@ -283,13 +395,38 @@ class FreshInstall(unittest.TestCase):
                                       cookie, csrf, origin=origin)
             self.assertEqual(status, 200)
             user_id = json.loads(body)['id']
-            with sqlite3.connect('/var/lib/xcli/gateway.sqlite') as database:
+            with closing(sqlite3.connect('/var/lib/xcli/gateway.sqlite')) as database:
                 uuid = database.execute('SELECT uuid FROM users WHERE id=?', (user_id,)).fetchone()[0]
             def user_ready():
                 result = subprocess.run(['/usr/local/lib/xcli/xray', 'api', 'inbounduser',
                     '--server=127.0.0.1:10085', '-tag=websocket', '--timeout=1'], capture_output=True, timeout=3)
                 return result.returncode == 0 and uuid.encode() in result.stdout
             self.assertTrue(wait_for(user_ready), 'new user was not synchronized')
+
+            with closing(sqlite3.connect('/var/lib/xcli/gateway.sqlite')) as database:
+                token = database.execute('SELECT token FROM users WHERE id=?', (user_id,)).fetchone()[0]
+            subscription_before = request(8080, '/s/' + token + '/clash.yaml', origin=origin)
+            self.assertEqual(subscription_before[0], 200)
+            core_pid = services.processes['xcli-core'].pid
+            panel_info = {'role': 'panel', 'db': Path('/var/lib/xcli/gateway.sqlite'),
+                          'settings': Path('/etc/xcli/settings.json'), 'key': Path('/etc/xcli/security.key'),
+                          'core_pid': Path('/sys/fs/cgroup/system.slice/xcli-core.service/cgroup.procs'),
+                          'import_report': Path('/var/lib/xcli-import/report/report.json')}
+            update_existing(panel_info)
+            self.assertEqual(services.processes['xcli-core'].pid, core_pid)
+            with closing(sqlite3.connect('/var/lib/xcli/gateway.sqlite')) as database:
+                self.assertEqual(database.execute('SELECT uuid,token FROM users WHERE id=?', (user_id,)).fetchone(),
+                                 (uuid, token))
+            self.assertEqual(request(8080, '/s/' + token + '/clash.yaml', origin=origin)[2], subscription_before[2])
+            self.assertEqual(request(8080, '/api/users', cookie=cookie, origin=origin)[0], 200)
+            self.assertEqual(Path('/opt/xcli/current/COMMIT').read_text().strip(), 'b' * 40)
+            with self.assertRaises(RuntimeError):
+                update_existing(panel_info, broken_release('web'), 'c' * 40)
+            self.assertEqual(services.processes['xcli-core'].pid, core_pid)
+            self.assertEqual(Path('/opt/xcli/current/COMMIT').read_text().strip(), 'b' * 40)
+            self.assertEqual(request(8080, '/s/' + token + '/clash.yaml', origin=origin)[2], subscription_before[2])
+            self.assertEqual(request(8080, '/api/users', cookie=cookie, origin=origin)[0], 200)
+            check_wrapper('panel')
 
             payload = b'fresh-install-traffic' * 100
             class Origin(http.server.BaseHTTPRequestHandler):

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Upgrade a legacy panel using the checked-out Git revision.
+# Upgrade an installed XCLI panel or node using the checked-out Git revision.
 set -euo pipefail
 
 main() {
-  local root revision installed_revision build_revision work node_arch node_hash node_version=24.22.2 release node check=0
+  local root revision installed_revision build_revision work node_arch node_hash node_version=24.22.2 release node check=0 mode=legacy
   root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
   [[ $EUID == 0 ]] || { echo '请使用 sudo bash ./upgrade.sh。' >&2; return 1; }
   [[ $# -le 1 ]] || { echo '用法：sudo bash ./upgrade.sh [--check]' >&2; return 1; }
@@ -15,25 +15,33 @@ main() {
   fi
   revision="$(git -c safe.directory="$root" -C "$root" rev-parse HEAD)"
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo '无法读取 Git 提交。' >&2; return 1; }
-  if [[ -f /etc/systemd/system/xcli-panel.service ]]; then
-    if [[ -f /opt/xcli/current/COMMIT ]]; then
+  if [[ -f /etc/systemd/system/xcli-panel.service || -f /etc/systemd/system/xcli-node.service ]]; then
+    mode=rust
+    python3 "$root/rewrite/deploy/upgrade-rust.py" --check
+    installed_revision=''
+    if [[ -f /etc/systemd/system/xcli-panel.service && -f /opt/xcli/current/COMMIT ]]; then
       installed_revision="$(cat /opt/xcli/current/COMMIT)"
-      if [[ "$installed_revision" == "$revision" ]] || {
-        [[ "$installed_revision" =~ ^[0-9a-f]{40}$ ]] &&
-          git -c safe.directory="$root" -C "$root" diff --quiet "$installed_revision" "$revision" -- rewrite/rust rewrite/web rewrite/deploy deploy
-      }; then
-        echo '当前业务版本已经安装。'
-        return
-      fi
+    elif [[ -f /etc/systemd/system/xcli-node.service && -f /etc/xcli-node/revision ]]; then
+      installed_revision="$(cat /etc/xcli-node/revision)"
     fi
-    echo '检测到新版面板；新版之间的更新暂不由此脚本处理。' >&2
-    return 1
-  fi
-  if ((check)); then
+    if [[ "$installed_revision" == "$revision" ]] || {
+      [[ "$installed_revision" =~ ^[0-9a-f]{40}$ ]] &&
+        git -c safe.directory="$root" -C "$root" cat-file -e "$installed_revision^{commit}" 2>/dev/null &&
+        git -c safe.directory="$root" -C "$root" diff --quiet "$installed_revision" "$revision" -- rewrite/rust rewrite/web rewrite/deploy deploy
+    }; then
+      echo '当前业务版本已经安装。'
+      return
+    fi
+    if ((check)); then
+      echo '检查完成，可以更新到当前 Git 提交。'
+      return
+    fi
+  elif ((check)); then
     python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
     return
+  else
+    python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
   fi
-  python3 "$root/rewrite/deploy/upgrade-legacy.py" --check
   build_revision="${XCLI_UPGRADE_BUILD_REVISION:-$revision}"
   [[ "$build_revision" =~ ^[0-9a-f]{40}$ ]] || { echo '构建版本无效。' >&2; return 1; }
   if [[ "$build_revision" != "$revision" ]]; then
@@ -58,7 +66,7 @@ main() {
     git -c safe.directory="$root" -C "$root" archive "$revision" | tar -x -C "$work/source"
     echo '正在安装构建依赖并构建新版，原有服务继续运行。'
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends \
       build-essential pkg-config libssl-dev ca-certificates curl git python3 python3-cryptography xz-utils
     curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --connect-timeout 10 --max-time 180 \
       "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-$node_arch.tar.xz" -o "$work/node.tar.xz"
@@ -75,6 +83,6 @@ main() {
     release="$work/release"
     node="$work/node/bin/node"
   fi
-  python3 "$root/rewrite/deploy/upgrade-legacy.py" --release-dir "$release" --node-bin "$node" --revision "$revision"
+  python3 "$root/rewrite/deploy/upgrade-$mode.py" --release-dir "$release" --node-bin "$node" --revision "$revision"
 }
 main "$@"
