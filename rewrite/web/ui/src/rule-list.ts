@@ -1,5 +1,6 @@
 export type RuleLine = { index: number; text: string; fields: string[] | null };
 export type RuleFilters = { query: string; target: string; kind: string; resolution: string; selectedOnly: boolean };
+export type SystemRule = { kind: string; value: string; target: string; option: string; provider: string };
 
 export const ruleKinds = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'DST-PORT'];
 export const resolutionKinds = ['IP-CIDR', 'IP-CIDR6', 'GEOIP'];
@@ -21,6 +22,18 @@ export function filterRuleLines(lines: RuleLine[], filters: RuleFilters, selecte
     if (filters.kind && (!line.fields || line.fields[0] !== filters.kind)) return false;
     if (filters.resolution && (!line.fields || !resolutionKinds.includes(line.fields[0] ?? '') ||
         (line.fields[3] || 'default') !== filters.resolution)) return false;
+    return true;
+  });
+}
+
+export function filterSystemRules(lines: SystemRule[], filters: RuleFilters): SystemRule[] {
+  if (filters.selectedOnly) return [];
+  const query = filters.query.trim().toLowerCase();
+  return lines.filter(line => {
+    if (query && ![line.kind, line.value, line.target, line.option, line.provider].some(value => value.toLowerCase().includes(query))) return false;
+    if (filters.target && line.target !== filters.target) return false;
+    if (filters.kind && line.kind !== filters.kind) return false;
+    if (filters.resolution && (!resolutionKinds.includes(line.kind) || (line.option || 'default') !== filters.resolution)) return false;
     return true;
   });
 }

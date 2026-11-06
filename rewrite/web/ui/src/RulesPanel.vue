@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import RuleWorkspace from './RuleWorkspace.vue';
-import { changeSelectedRules, parseRuleLines } from './rule-list';
+import { changeSelectedRules, parseRuleLines, type SystemRule } from './rule-list';
 
 type Group = { name: string; default: string };
 type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[] };
@@ -11,6 +11,8 @@ type User = { id: string; name: string; template_id: string; legacy_independent:
 const props = defineProps<{ csrf: string }>();
 const emit = defineEmits<{ expired: []; policyChanged: [] }>();
 const templates = ref<Template[]>([]); const users = ref<User[]>([]); const selectedId = ref('');
+const systemRules = ref<Record<Spec['base'], SystemRule[]>>({ standard: [], independent: [] });
+const systemRulesAvailable = ref(false);
 const loading = ref(true); const busy = ref(false); const message = ref(''); const notice = ref('');
 const groupMessage = ref('');
 const creating = ref(false); const editingGroup = ref<number | null>(null);
@@ -43,6 +45,10 @@ function validSpec(value: unknown): value is Spec {
   return (keys === 'ai_outbound,base,rules' || keys === 'ai_outbound,base,groups,rules') &&
     (item.base === 'standard' || item.base === 'independent') && typeof item.ai_outbound === 'string' && typeof item.rules === 'string' &&
     (item.groups === undefined || Array.isArray(item.groups) && item.groups.every(group => group && typeof group.name === 'string' && typeof group.default === 'string'));
+}
+function validSystemRule(value: unknown): value is SystemRule {
+  return Boolean(value && typeof value === 'object' &&
+    ['kind', 'value', 'target', 'option', 'provider'].every(key => typeof (value as Record<string, unknown>)[key] === 'string'));
 }
 function open(item: Template) {
   selectedId.value = item.id; creating.value = false;
@@ -77,6 +83,10 @@ async function refresh(id?: string): Promise<boolean> {
     const next = body.templates as Template[]; const nextUsers = body.users as User[];
     if (!next.length || next.some(item => typeof item.id !== 'string' || typeof item.name !== 'string' || !validSpec(item.spec) || !Number.isSafeInteger(item.revision))) throw new Error('规则模板数据不可用。');
     if (nextUsers.some(user => typeof user.id !== 'string' || typeof user.name !== 'string' || typeof user.template_id !== 'string')) throw new Error('用户分配数据不可用。');
+    const generated = 'system_rules' in body && body.system_rules && typeof body.system_rules === 'object' ? body.system_rules as Record<string, unknown> : null;
+    systemRulesAvailable.value = Boolean(generated && Array.isArray(generated.standard) && Array.isArray(generated.independent) &&
+      generated.standard.every(validSystemRule) && generated.independent.every(validSystemRule));
+    systemRules.value = systemRulesAvailable.value ? { standard: generated!.standard as SystemRule[], independent: generated!.independent as SystemRule[] } : { standard: [], independent: [] };
     templates.value = next; users.value = nextUsers;
     const item = next.find(template => template.id === (id ?? selectedId.value)) ?? next[0];
     if (item) open(item);
@@ -245,7 +255,7 @@ onMounted(() => { void refresh(); });
           </div>
           <p v-if="groupMessage" class="message" role="alert">{{ groupMessage }}</p>
         </details>
-        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :busy="busy" @update:rules="updateRules" />
+        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :busy="busy" @update:rules="updateRules" />
         <div class="editor-actions"><button v-if="selected?.builtin && !creating" type="button" :disabled="busy" @click="templateAction('reset')">恢复默认</button><button v-if="selected?.can_undo_reset && !creating" type="button" :disabled="busy" @click="templateAction('undo-reset')">撤销恢复</button><button type="button" :disabled="busy || !form.name.trim()" @click="save">保存草稿</button><button class="primary" type="button" :disabled="busy || creating || dirty" @click="templateAction('publish')">发布</button></div>
       </div>
     </div>

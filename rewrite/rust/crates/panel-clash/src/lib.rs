@@ -480,6 +480,61 @@ pub fn build(
     Ok(result)
 }
 
+/// Describe the system-provided base rules using the same generator as a
+/// subscription. Template rules are deliberately empty: the editor displays
+/// those separately and they may override the base rules by precedence.
+/// Only rule descriptions are returned; no generated proxy credentials leave
+/// this function.
+pub fn system_rules_preview(domain: &str, base: &str) -> Result<Vec<Value>> {
+    if !matches!(base, "standard" | "independent") {
+        return Err(invalid());
+    }
+    let settings = json!({"public_ip":"192.0.2.1","domain":domain,"ws_path":"/preview",
+        "reality_sni":"example.com","reality_public":"preview","short_id":"preview"});
+    let user = User {
+        id: "0".repeat(32),
+        uuid: "00000000-0000-4000-8000-000000000000".into(),
+    };
+    let policy = json!({"base":base,"ai_outbound":"proxy","rules":"","managed":true});
+    let config = build(&settings, &user, &[], false, &policy)?;
+    let providers = config["rule-providers"].as_object().ok_or_else(invalid)?;
+    let mut output = Vec::new();
+    for rule in config["rules"].as_array().ok_or_else(invalid)? {
+        let rule = rule.as_str().ok_or_else(invalid)?;
+        let parts: Vec<_> = rule.split(',').collect();
+        if let ["RULE-SET", provider, target] = parts.as_slice() {
+            let payload = providers
+                .get(*provider)
+                .and_then(|p| p.get("payload"))
+                .and_then(Value::as_array)
+                .ok_or_else(invalid)?;
+            for entry in payload {
+                let (kind, value) = entry
+                    .as_str()
+                    .and_then(|v| v.split_once(','))
+                    .ok_or_else(invalid)?;
+                output.push(json!({"kind":kind,"value":value,"target":target,"option":"","provider":provider}));
+            }
+            continue;
+        }
+        let (kind, value, target, option) = match parts.as_slice() {
+            [kind, target] => (*kind, "全部剩余流量", *target, ""),
+            [kind, value, target] => (*kind, *value, *target, ""),
+            [kind, value, target, option] if matches!(*option, "resolve" | "no-resolve") => {
+                (*kind, *value, *target, *option)
+            }
+            _ => {
+                let (condition, target) = rule.rsplit_once(',').ok_or_else(invalid)?;
+                let (kind, value) = condition.split_once(',').ok_or_else(invalid)?;
+                (kind, value, target, "")
+            }
+        };
+        output
+            .push(json!({"kind":kind,"value":value,"target":target,"option":option,"provider":""}));
+    }
+    Ok(output)
+}
+
 fn apply_oracle(config: &mut Value) -> Result<()> {
     let mut names = BTreeSet::new();
     for item in config["proxies"]

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeSelectedRules, filterRuleLines, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
+import { changeSelectedRules, filterRuleLines, filterSystemRules, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
 
 const fixture = [
   '# AI rules',
@@ -43,4 +43,17 @@ test('bulk changes preserve unrelated rules, comments, line endings and non-rule
   assert.equal(changed, '# note\r\nDOMAIN,a.example, 独立 · Google \r\ninvalid\r\nIP-CIDR,192.0.2.0/24,DIRECT,no-resolve\r\n');
   const deleted = changeSelectedRules(source, new Set([0, 1, 2]), { type: 'delete' });
   assert.equal(deleted, '# note\r\ninvalid\r\nIP-CIDR,192.0.2.0/24,DIRECT,no-resolve\r\n');
+});
+
+test('system rules follow the group and other filters but are never selected for bulk edits', () => {
+  const system = [
+    { kind: 'DOMAIN-SUFFIX', value: 'google.com', target: '独立 · Google', option: '', provider: 'category-Google' },
+    { kind: 'DOMAIN-SUFFIX', value: 'oraclecloud.com', target: 'oracle-cloud', option: '', provider: 'xcli-oracle-cloud' },
+    { kind: 'IP-CIDR', value: '10.0.0.0/8', target: 'DIRECT', option: 'no-resolve', provider: '' },
+  ];
+  assert.deepEqual(filterSystemRules(system, { ...defaults, target: '独立 · Google', query: 'GOOGLE' }), [system[0]]);
+  assert.deepEqual(filterSystemRules(system, { ...defaults, target: 'oracle-cloud', kind: 'DOMAIN-SUFFIX' }), [system[1]]);
+  assert.deepEqual(filterSystemRules(system, { ...defaults, resolution: 'no-resolve' }), [system[2]]);
+  assert.deepEqual(filterSystemRules(system, { ...defaults, selectedOnly: true }), []);
+  assert.deepEqual(selectVisibleRules([], parseRuleLines(fixture), true), [1, 2, 4, 5, 6]);
 });

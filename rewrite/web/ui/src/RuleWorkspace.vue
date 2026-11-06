@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { changeSelectedRules, filterRuleLines, parseRuleLines, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine } from './rule-list';
+import { changeSelectedRules, filterRuleLines, filterSystemRules, parseRuleLines, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine, type SystemRule } from './rule-list';
 
-const props = defineProps<{ rules: string; targets: string[]; busy: boolean }>();
+const props = defineProps<{ rules: string; targets: string[]; systemRules: SystemRule[]; systemRulesAvailable: boolean; busy: boolean }>();
 const emit = defineEmits<{ 'update:rules': [value: string] }>();
 const filters = reactive({ query: '', target: '', kind: '', resolution: '', selectedOnly: false });
 const selectedLines = ref<number[]>([]);
 const editLine = ref<number | null>(null);
 const ruleInput = ref<HTMLInputElement | null>(null);
+const ruleHeading = ref<HTMLElement | null>(null);
+const groupPicker = ref<HTMLElement | null>(null);
 const lineForm = reactive({ kind: 'DOMAIN-SUFFIX', value: '', target: 'PROXY', option: '', position: 'end' });
 const bulkTarget = ref('PROXY');
 const error = ref('');
@@ -15,6 +17,7 @@ const error = ref('');
 const lines = computed(() => parseRuleLines(props.rules));
 const selectedSet = computed(() => new Set(selectedLines.value));
 const visibleLines = computed(() => filterRuleLines(lines.value, filters, selectedSet.value));
+const visibleSystemRules = computed(() => filterSystemRules(props.systemRules, filters));
 const totalRules = computed(() => lines.value.filter(line => line.fields).length);
 const visibleRules = computed(() => visibleLines.value.filter(line => line.fields));
 const visibleSelected = computed(() => visibleRules.value.filter(line => selectedSet.value.has(line.index)).length);
@@ -22,13 +25,15 @@ const hiddenSelected = computed(() => selectedLines.value.length - visibleSelect
 const allChecked = computed(() => visibleRules.value.length > 0 && visibleSelected.value === visibleRules.value.length);
 const someChecked = computed(() => visibleSelected.value > 0 && !allChecked.value);
 const filterActive = computed(() => Boolean(filters.query.trim() || filters.target || filters.kind || filters.resolution || filters.selectedOnly));
-const filterTargets = computed(() => [...new Set([...props.targets, ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])]);
+const filterTargets = computed(() => [...new Set([...props.targets, ...props.systemRules.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])]);
+const filterKinds = computed(() => [...new Set([...ruleKinds, ...props.systemRules.map(rule => rule.kind)])]);
 const targetCounts = computed(() => {
   const counts = new Map<string, number>();
   for (const line of lines.value) {
     const target = line.fields?.[2];
     if (target) counts.set(target, (counts.get(target) ?? 0) + 1);
   }
+  for (const rule of props.systemRules) counts.set(rule.target, (counts.get(rule.target) ?? 0) + 1);
   return counts;
 });
 const hasPending = computed(() => editLine.value !== null || Boolean(lineForm.value.trim()));
@@ -46,6 +51,12 @@ watch(() => filters.target, target => {
 
 function clearFilters() {
   Object.assign(filters, { query: '', target: '', kind: '', resolution: '', selectedOnly: false });
+}
+function chooseGroup(target: string) {
+  Object.assign(filters, { query: '', target, kind: '', resolution: '', selectedOnly: false });
+  if (window.matchMedia('(max-width: 800px)').matches) {
+    void nextTick(() => ruleHeading.value?.scrollIntoView({ block: 'start' }));
+  }
 }
 function cancelLine() {
   editLine.value = null; lineForm.value = ''; lineForm.option = ''; error.value = '';
@@ -105,22 +116,26 @@ function openRaw(event: MouseEvent) {
 <template>
   <div class="rule-workspace">
     <div class="rule-list-pane">
-      <div class="subheading rule-list-heading">
-        <div><h4>规则列表</h4><p>显示 {{ visibleRules.length }} / {{ totalRules }} 条规则</p></div>
-        <button v-if="filterActive" type="button" @click="clearFilters">清除筛选</button>
+      <div ref="groupPicker" class="group-picker" role="group" aria-label="查看分组规则">
+        <div class="group-picker-heading"><h4>查看分组</h4><span>点选分组查看规则，数量包含系统规则</span></div>
+        <div class="group-picker-items">
+          <button type="button" :class="{ active: !filters.target }" :aria-pressed="!filters.target" @click="chooseGroup('')"><span>全部分组</span><span>{{ totalRules + systemRules.length }}</span></button>
+          <button v-for="target in filterTargets" :key="target" type="button" :class="{ active: filters.target === target }" :aria-pressed="filters.target === target" @click="chooseGroup(target)"><span>{{ target }}</span><span>{{ targetCounts.get(target) ?? 0 }}</span></button>
+        </div>
+      </div>
+      <div ref="ruleHeading" class="subheading rule-list-heading">
+        <div><h4>{{ filters.target || '全部分组' }} · 规则列表</h4><p>模板规则 {{ visibleRules.length }} 条<template v-if="systemRulesAvailable"> · 系统规则 {{ visibleSystemRules.length }} 条</template></p></div>
+        <div class="rule-heading-actions"><button v-if="filters.target" type="button" @click="groupPicker?.scrollIntoView({ block: 'start' })">切换分组</button><button v-if="filterActive" type="button" @click="clearFilters">清除筛选</button></div>
       </div>
       <div class="rule-filters">
         <label class="rule-search">搜索<input v-model="filters.query" type="search" placeholder="搜索内容、类型或目标"></label>
-        <label>目标分组<select v-model="filters.target">
-          <option value="">全部分组</option>
-          <option v-for="target in filterTargets" :key="target" :value="target">{{ target }} · {{ targetCounts.get(target) ?? 0 }}</option>
-        </select></label>
-        <label>规则类型<select v-model="filters.kind"><option value="">全部类型</option><option v-for="kind in ruleKinds" :key="kind">{{ kind }}</option></select></label>
+        <label>规则类型<select v-model="filters.kind"><option value="">全部类型</option><option v-for="kind in filterKinds" :key="kind">{{ kind }}</option></select></label>
         <label>IP 解析<select v-model="filters.resolution"><option value="">全部</option><option value="default">默认</option><option value="resolve">resolve</option><option value="no-resolve">no-resolve</option></select></label>
       </div>
       <div class="rule-filter-footer">
         <label class="checkbox"><input v-model="filters.selectedOnly" type="checkbox">只看已选</label>
-        <span>列表仅包含模板规则；系统生成的规则不在此处显示。</span>
+        <span v-if="systemRulesAvailable">系统规则只读，实际匹配顺序和用户设置以客户端配置为准。</span>
+        <span v-else class="system-warning">系统规则暂不可用，请刷新页面或检查面板版本。</span>
       </div>
       <div class="bulk-actions">
         <label class="checkbox"><input type="checkbox" :checked="allChecked" :indeterminate.prop="someChecked" :disabled="busy || !visibleRules.length" @change="toggleVisible">全选当前结果</label>
@@ -142,13 +157,19 @@ function openRaw(event: MouseEvent) {
             </template>
             <td v-else colspan="5" class="rule-comment">{{ line.text }}</td>
           </tr>
-          <tr v-if="!visibleLines.length"><td colspan="6" class="rule-empty">{{ filterActive ? '没有匹配的规则，请调整筛选条件。' : '暂无规则，可在编辑区添加。' }}</td></tr>
+          <tr v-if="visibleSystemRules.length" class="system-rules-heading"><td colspan="6">系统基础规则 · 只读</td></tr>
+          <tr v-for="(line, index) in visibleSystemRules" :key="`system-${index}`" class="system-rule">
+            <td aria-hidden="true">—</td><td class="rule-type">{{ line.kind }}</td>
+            <td class="rule-content">{{ line.value }}<span class="mobile-rule-details">{{ line.kind }} · {{ line.target }}<template v-if="line.option"> · {{ line.option }}</template></span></td>
+            <td class="rule-target">{{ line.target }}</td><td class="rule-resolution">{{ line.option || '默认' }}</td><td><span class="system-rule-tag">系统</span></td>
+          </tr>
+          <tr v-if="!visibleLines.length && !visibleSystemRules.length"><td colspan="6" class="rule-empty">{{ filterActive ? '没有匹配的规则，请调整筛选条件。' : '暂无规则，可在编辑区添加。' }}</td></tr>
         </tbody></table>
       </div>
       <details class="raw-rules"><summary @click="openRaw">编辑规则文本</summary><textarea :value="rules" rows="8" spellcheck="false" aria-label="规则文本" :disabled="busy || hasPending" @input="updateRaw"></textarea><p v-if="hasPending">请先完成或取消当前规则编辑。</p></details>
     </div>
     <aside class="rule-editor-pane" aria-label="规则编辑">
-      <div><h4>{{ editLine === null ? '添加规则' : '编辑规则' }}</h4><p v-if="editLine !== null">正在修改第 {{ editLine + 1 }} 行</p><p v-else>选择类型和目标后添加。</p></div>
+      <div><h4>{{ editLine === null ? '添加规则' : '编辑规则' }}</h4><p v-if="editLine !== null">正在修改第 {{ editLine + 1 }} 行</p><p v-else-if="filters.target && !targets.includes(filters.target)">此分组由系统维护，新增规则请选择可编辑目标。</p><p v-else>选择类型和目标后添加。</p></div>
       <label>规则类型<select v-model="lineForm.kind" :disabled="busy"><option v-for="kind in ruleKinds" :key="kind">{{ kind }}</option></select></label>
       <label>匹配内容<input ref="ruleInput" v-model="lineForm.value" placeholder="域名、网段或端口" :disabled="busy"></label>
       <label>目标分组<select v-model="lineForm.target" :disabled="busy">

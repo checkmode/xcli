@@ -1933,7 +1933,14 @@ async fn list_rule_templates(State(app): State<App>, headers: HeaderMap) -> Resp
         let mut store = store
             .lock()
             .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
-        store.catalog().map_err(RuleCatalogError::Store)
+        let mut catalog = store.catalog().map_err(RuleCatalogError::Store)?;
+        let domain = app.security_domain.as_deref().unwrap_or("panel.invalid");
+        let standard = xcli_panel_clash::system_rules_preview(domain, "standard")
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
+        let independent = xcli_panel_clash::system_rules_preview(domain, "independent")
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
+        catalog["system_rules"] = json!({"standard":standard,"independent":independent});
+        Ok(catalog)
     })
     .await;
     match result {
