@@ -38,6 +38,18 @@ export function filterSystemRules(lines: SystemRule[], filters: RuleFilters): Sy
   });
 }
 
+/** Group counts reflect the global filters, irrespective of the selected group. */
+export function countRulesByTarget(lines: RuleLine[], system: SystemRule[], filters: RuleFilters, selected: ReadonlySet<number>): { counts: Map<string, number>; total: number } {
+  const global = { ...filters, target: '' };
+  const counts = new Map<string, number>();
+  for (const line of filterRuleLines(lines, global, selected)) {
+    const target = line.fields?.[2];
+    if (target) counts.set(target, (counts.get(target) ?? 0) + 1);
+  }
+  for (const line of filterSystemRules(system, global)) counts.set(line.target, (counts.get(line.target) ?? 0) + 1);
+  return { counts, total: [...counts.values()].reduce((sum, value) => sum + value, 0) };
+}
+
 export function selectVisibleRules(selected: number[], visible: RuleLine[], checked: boolean): number[] {
   const result = new Set(selected);
   for (const line of visible) {

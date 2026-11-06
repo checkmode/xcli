@@ -242,8 +242,8 @@ onMounted(() => { void refresh(); });
           <label>AI 默认出口<select v-model="form.ai" :disabled="busy"><option value="proxy">自动选择</option><option value="reality">REALITY</option><option value="websocket">HTTPS</option><option value="hysteria2">Hysteria 2</option><option value="vmess">VMess</option><option v-for="n in 40" :key="n" :value="`residential-${String(n).padStart(2, '0')}`">住宅 {{ String(n).padStart(2, '0') }}</option></select></label>
         </div>
         <details class="group-management">
-          <summary><strong>自定义分组</strong><span>{{ form.groups.length }} / 16</span></summary>
-          <p>可将自定义分组用作规则目标；内置分组可直接在目标列表中选择。</p>
+          <summary><strong>添加分组</strong><span>{{ form.groups.length }} / 16</span></summary>
+          <p>添加或管理自定义分组，将其用作规则目标；内置分组可直接选择。</p>
           <div v-for="(group, index) in form.groups" :key="index" class="group-line">
             <span>{{ group.name }}</span><span>默认：{{ group.default }}</span>
             <div><button type="button" :disabled="busy" @click="editGroup(index)">编辑</button><button type="button" :disabled="busy" @click="removeGroup(index)">移除</button></div>

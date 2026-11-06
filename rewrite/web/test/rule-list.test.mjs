@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeSelectedRules, filterRuleLines, filterSystemRules, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
+import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
 
 const fixture = [
   '# AI rules',
@@ -56,4 +56,27 @@ test('system rules follow the group and other filters but are never selected for
   assert.deepEqual(filterSystemRules(system, { ...defaults, resolution: 'no-resolve' }), [system[2]]);
   assert.deepEqual(filterSystemRules(system, { ...defaults, selectedOnly: true }), []);
   assert.deepEqual(selectVisibleRules([], parseRuleLines(fixture), true), [1, 2, 4, 5, 6]);
+});
+
+test('global filter counts cover every group while the selected group narrows the results', () => {
+  const lines = parseRuleLines(fixture);
+  const system = [
+    { kind: 'DOMAIN-SUFFIX', value: 'googleapis.com', target: '独立 · Google', option: '', provider: 'category-Google' },
+    { kind: 'DOMAIN-SUFFIX', value: 'oraclecloud.com', target: 'oracle-cloud', option: '', provider: 'xcli-oracle-cloud' },
+  ];
+  const google = { ...defaults, target: '独立 · Google', query: 'google', kind: 'DOMAIN-SUFFIX' };
+  const summary = countRulesByTarget(lines, system, google, new Set());
+  assert.equal(summary.total, 2);
+  assert.equal(summary.counts.get('独立 · Google'), 2);
+  assert.equal(summary.counts.get('独立 · AI') ?? 0, 0);
+  assert.deepEqual(contents(filterRuleLines(lines, google, new Set())), ['DOMAIN-SUFFIX,google.com,独立 · Google']);
+  assert.deepEqual(filterSystemRules(system, google), [system[0]]);
+  const ai = { ...google, target: '独立 · AI', kind: '' };
+  assert.equal(countRulesByTarget(lines, system, ai, new Set()).total, 3);
+  assert.deepEqual(contents(filterRuleLines(lines, ai, new Set())), ['DOMAIN,ai.google.dev,独立 · AI']);
+  assert.deepEqual(filterSystemRules(system, ai), []);
+  const selectedOnly = countRulesByTarget(lines, system, { ...defaults, selectedOnly: true, target: 'DIRECT' }, new Set([1, 4]));
+  assert.equal(selectedOnly.total, 2);
+  assert.equal(selectedOnly.counts.get('独立 · AI'), 1);
+  assert.equal(selectedOnly.counts.get('独立 · Google'), 1);
 });
