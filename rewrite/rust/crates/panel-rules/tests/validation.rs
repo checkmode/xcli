@@ -57,3 +57,33 @@ fn group_defaults_extend_old_specs_without_accepting_unknown_groups_or_selectors
     standard["group_defaults"] = json!({"独立 · AI":"node:reality"});
     assert!(validate(&standard).is_err());
 }
+
+#[test]
+fn group_order_allows_known_actions_and_groups_without_duplicates() {
+    let spec = json!({"base":"independent","ai_outbound":"proxy","rules":"",
+        "groups":[{"name":"工作","default":"PROXY"}],
+        "group_order":["独立 · Google","PROXY","DIRECT","工作","oracle-cloud"]});
+    assert_eq!(validate(&spec).unwrap(), spec);
+    let mut duplicate = spec.clone();
+    duplicate["group_order"] = json!(["PROXY", "PROXY"]);
+    assert!(validate(&duplicate).is_err());
+    let mut unknown = spec.clone();
+    unknown["group_order"] = json!(["未知"]);
+    assert!(validate(&unknown).is_err());
+}
+
+#[test]
+fn system_rule_edits_validate_fields_and_keep_legacy_specs_unchanged() {
+    let id = "a".repeat(64);
+    let old = json!({"base":"independent","ai_outbound":"proxy","rules":""});
+    assert_eq!(validate(&old).unwrap(), old);
+    let mut spec = old.clone();
+    spec["system_overrides"] = json!({(id.clone()):{"kind":"DOMAIN-SUFFIX","value":"oraclecloud.com","target":"PROXY","option":""}});
+    assert_eq!(validate(&spec).unwrap(), spec);
+    spec["system_overrides"][&id] = json!({"kind":"GEOSITE","value":"geolocation-!cn","target":"DIRECT","option":""});
+    assert!(validate(&spec).is_ok());
+    spec["system_overrides"][&id] = json!({"kind":"GEOSITE","value":"../private","target":"DIRECT","option":""});
+    assert!(validate(&spec).is_err());
+    spec["system_overrides"][&id] = json!({"kind":"DOMAIN","value":"example.com","target":"未知","option":""});
+    assert!(validate(&spec).is_err());
+}

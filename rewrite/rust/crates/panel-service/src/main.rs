@@ -46,6 +46,7 @@ use xcli_panel_webshare::{
 use xcli_panel_xray::ManagedCore;
 use zeroize::{Zeroize, Zeroizing};
 mod diagnostics;
+mod geosite;
 mod settings;
 
 #[derive(Clone)]
@@ -1752,7 +1753,15 @@ fn validate_template_profile(
         .get("groups")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|v| !v.is_empty());
-    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) {
+    let has_order = policy
+        .get("group_order")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty());
+    let has_system = policy
+        .get("system_overrides")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|values| !values.is_empty());
+    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) || has_order || has_system {
         let user = xcli_panel_shadowrocket::User {
             id: input.user_id,
             name: input.name,
@@ -2560,12 +2569,13 @@ fn app(state: App) -> Router {
         .route("/api/users/{id}/shadowrocket", get(user_client_links))
         .route("/api/users/{id}/qr/{kind}", get(user_qr))
         .route("/shadowrocket-dns.sgmodule", get(shadow_dns))
+        .route("/api/geosite/{file}", get(geosite::rules))
         .route(
             "/api/rule-templates",
-            get(list_rule_templates).post(create_rule_draft),
+            get(list_rule_templates).post(create_rule_draft).layer(DefaultBodyLimit::max(64 * 1024)),
         )
-        .route("/api/rule-templates/validate", post(validate_rule_template))
-        .route("/api/rule-templates/{id}", put(update_rule_draft))
+        .route("/api/rule-templates/validate", post(validate_rule_template).layer(DefaultBodyLimit::max(64 * 1024)))
+        .route("/api/rule-templates/{id}", put(update_rule_draft).layer(DefaultBodyLimit::max(64 * 1024)))
         .route("/api/rule-templates/{id}/publish", post(publish_rule))
         .route("/api/rule-templates/{id}/reset", post(reset_rule))
         .route("/api/rule-templates/{id}/undo-reset", post(undo_reset_rule))

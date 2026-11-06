@@ -2504,8 +2504,10 @@ dependencies = [
 name = "xcli-panel-clash"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "xcli-panel-rules",
 ]
 
@@ -2637,6 +2639,7 @@ dependencies = [
  "libc",
  "png",
  "qrcode",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

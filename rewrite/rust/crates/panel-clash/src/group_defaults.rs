@@ -136,6 +136,45 @@ pub(super) fn apply(
     Ok(())
 }
 
+/// Reorder only named policy groups; generated helper groups keep their slots.
+pub(super) fn order(config: &mut Value, spec: &Value) -> Result<()> {
+    let Some(order) = spec.get("group_order").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let mut ranks = order
+        .iter()
+        .enumerate()
+        .map(|(index, value)| value.as_str().map(|name| (name, index)).ok_or_else(invalid))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut next = order.len();
+    for name in ["PROXY", "STUN", "EaseLian", "独立 · AI", "独立 · Google", "独立 · Telegram",
+                 "独立 · YouTube", "独立 · Netflix", "独立 · 国外媒体", "独立 · STUN", "其他流量", "oracle-cloud"]
+        .into_iter()
+        .chain(spec.get("groups").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(|group| group.get("name").and_then(Value::as_str)))
+    {
+        if !ranks.contains_key(name) {
+            ranks.insert(name, next);
+            next += 1;
+        }
+    }
+    let groups = config["proxy-groups"].as_array_mut().ok_or_else(invalid)?;
+    let mut slots = Vec::new();
+    let mut selected = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        let name = group.get("name").and_then(Value::as_str).ok_or_else(invalid)?;
+        if let Some(rank) = ranks.get(name) {
+            slots.push(index);
+            selected.push((*rank, group.clone()));
+        }
+    }
+    selected.sort_by_key(|(rank, _)| *rank);
+    for (index, (_, group)) in slots.into_iter().zip(selected) {
+        groups[index] = group;
+    }
+    Ok(())
+}
+
 /// Construct an authenticated editor catalog from configured resources using
 /// the same generation path as subscriptions. It contains labels and stable
 /// selectors only, never credentials or generated proxies.

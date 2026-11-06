@@ -1,44 +1,73 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, parseRuleLines, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine, type SystemRule } from './rule-list';
+import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, moveRule, movedRuleIndex, parseRuleLines, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine, type SystemRule, type SystemRuleOverride } from './rule-list';
 import { inheritedGroupDefault, outboundLabel, type CustomGroup, type GroupOutbounds } from './group-defaults';
 
 const props = defineProps<{ rules: string; targets: string[]; systemRules: SystemRule[]; systemRulesAvailable: boolean;
-  groupOutbounds: GroupOutbounds; groupOutboundsAvailable: boolean; groupDefaults: Record<string, string>; customGroups: CustomGroup[]; legacyAi: string; busy: boolean }>();
-const emit = defineEmits<{ 'update:rules': [value: string]; 'update:group-defaults': [value: Record<string, string>] }>();
+  systemOverrides: Record<string, SystemRuleOverride>; groupOutbounds: GroupOutbounds; groupOutboundsAvailable: boolean; groupDefaults: Record<string, string>; groupOrder: string[]; customGroups: CustomGroup[]; legacyAi: string; busy: boolean }>();
+const emit = defineEmits<{ 'update:rules': [value: string]; 'update:system-overrides': [value: Record<string, SystemRuleOverride>]; 'update:group-defaults': [value: Record<string, string>]; 'update:group-order': [value: string[]] }>();
 const filters = reactive({ query: '', kind: '', resolution: '', selectedOnly: false });
 const selectedTarget = ref('');
 const groupPickerOpen = ref(false);
 const selectedLines = ref<number[]>([]);
 const editLine = ref<number | null>(null);
+const editSystem = ref<string | null>(null);
 const ruleEditor = ref<HTMLElement | null>(null);
 const ruleHeading = ref<HTMLElement | null>(null);
 const groupPicker = ref<HTMLElement | null>(null);
 const lineForm = reactive({ kind: 'DOMAIN-SUFFIX', value: '', target: 'PROXY', option: '', position: 'end' });
 type RuleValues = { kind: string; value: string; target: string; option: string };
 const editSnapshot = ref<RuleValues | null>(null);
-const lastChange = ref<{ before: string; after: string } | null>(null);
+type SystemOverrides = Record<string, SystemRuleOverride>;
+type Change = { type: 'rules'; before: string; after: string } | { type: 'system'; before: SystemOverrides; after: SystemOverrides };
+const lastChange = ref<Change | null>(null);
 const notice = ref('');
 const bulkTarget = ref('');
 const error = ref('');
 let expectedRules: string | undefined;
+type Drag = { kind: 'rule' | 'group'; source: string; target: string; after: boolean; pointer: number; startY: number; active: boolean };
+const drag = ref<Drag | null>(null);
 
 const lines = computed(() => parseRuleLines(props.rules));
+const effectiveSystemRules = computed(() => props.systemRules.map(rule => {
+  if (!rule.id || !(rule.id in props.systemOverrides)) return rule;
+  const override = props.systemOverrides[rule.id];
+  return override === null ? { ...rule, disabled: true, modified: true } : { ...rule, ...override, modified: true };
+}));
 const selectedSet = computed(() => new Set(selectedLines.value));
 const effectiveFilters = computed(() => ({ ...filters, target: selectedTarget.value }));
 const visibleLines = computed(() => filterRuleLines(lines.value, effectiveFilters.value, selectedSet.value));
-const visibleSystemRules = computed(() => filterSystemRules(props.systemRules, effectiveFilters.value));
+const visibleSystemRules = computed(() => filterSystemRules(effectiveSystemRules.value, effectiveFilters.value));
 const visibleRules = computed(() => visibleLines.value.filter(line => line.fields));
+type DisplayRow = { type: 'heading'; key: string; label: string } | { type: 'system'; key: string; rule: SystemRule } | { type: 'template'; key: string; line: RuleLine };
+const displayRows = computed<DisplayRow[]>(() => {
+  const before = visibleSystemRules.value.filter(rule => !rule.after_template);
+  const after = visibleSystemRules.value.filter(rule => rule.after_template);
+  const rows: DisplayRow[] = [];
+  if (before.length) rows.push({ type: 'heading', key: 'system-before', label: '系统基础规则' });
+  rows.push(...before.map(rule => ({ type: 'system' as const, key: `system-${rule.id ?? effectiveSystemRules.value.indexOf(rule)}`, rule })));
+  rows.push(...visibleLines.value.map(line => ({ type: 'template' as const, key: `template-${line.index}`, line })));
+  if (after.length) rows.push({ type: 'heading', key: 'system-after', label: before.length ? '系统基础规则（续）' : '系统基础规则' });
+  rows.push(...after.map(rule => ({ type: 'system' as const, key: `system-${rule.id ?? effectiveSystemRules.value.indexOf(rule)}`, rule })));
+  return rows;
+});
 const visibleSelected = computed(() => visibleRules.value.filter(line => selectedSet.value.has(line.index)).length);
 const hiddenSelected = computed(() => selectedLines.value.length - visibleSelected.value);
-const editVisible = computed(() => editLine.value === null || visibleRules.value.some(line => line.index === editLine.value));
+const editVisible = computed(() => editSystem.value ? visibleSystemRules.value.some(rule => rule.id === editSystem.value) : editLine.value === null || visibleRules.value.some(line => line.index === editLine.value));
+const editingExisting = computed(() => editLine.value !== null || editSystem.value !== null);
+const editingSystemOriginal = computed(() => props.systemRules.find(rule => rule.id === editSystem.value));
+const systemTargets = computed(() => [...new Set([...props.targets, 'oracle-cloud'])]);
 const allChecked = computed(() => visibleRules.value.length > 0 && visibleSelected.value === visibleRules.value.length);
 const someChecked = computed(() => visibleSelected.value > 0 && !allChecked.value);
 const globalFiltersActive = computed(() => Boolean(filters.query.trim() || filters.kind || filters.resolution || filters.selectedOnly));
 const filterActive = computed(() => Boolean(globalFiltersActive.value || selectedTarget.value));
-const filterTargets = computed(() => [...new Set([...props.targets, ...Object.keys(props.groupDefaults), ...props.systemRules.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])]);
-const filterKinds = computed(() => [...new Set([...ruleKinds, ...props.systemRules.map(rule => rule.kind)])]);
-const groupCounts = computed(() => countRulesByTarget(lines.value, props.systemRules, effectiveFilters.value, selectedSet.value));
+const filterTargets = computed(() => {
+  const values = [...new Set([...props.targets, ...Object.keys(props.groupDefaults), ...effectiveSystemRules.value.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])];
+  const ordered = props.groupOrder.filter(name => values.includes(name));
+  return [...ordered, ...values.filter(name => !ordered.includes(name))];
+});
+const filterKinds = computed(() => [...new Set([...ruleKinds, ...effectiveSystemRules.value.map(rule => rule.kind)])]);
+const groupCounts = computed(() => countRulesByTarget(lines.value, effectiveSystemRules.value, effectiveFilters.value, selectedSet.value));
 const groupDescriptor = computed(() => props.groupOutbounds[selectedTarget.value] ??
   (props.customGroups.some(group => group.name === selectedTarget.value) ? props.groupOutbounds.__custom__ : undefined));
 const inheritedDefault = computed(() => groupDescriptor.value ? inheritedGroupDefault(selectedTarget.value, props.legacyAi, props.customGroups, groupDescriptor.value) : null);
@@ -46,10 +75,12 @@ const selectedDefault = computed(() => props.groupDefaults[selectedTarget.value]
 const defaultUnavailable = computed(() => Boolean(selectedDefault.value && groupDescriptor.value && !groupDescriptor.value.options.some(option => option.value === selectedDefault.value)));
 const orphanedDefaults = computed(() => props.groupOutboundsAvailable ? Object.keys(props.groupDefaults).filter(group =>
   !props.groupOutbounds[group] && !props.customGroups.some(item => item.name === group)) : []);
+const orphanedSystem = computed(() => props.systemRulesAvailable ? Object.keys(props.systemOverrides).filter(id =>
+  !props.systemRules.some(rule => rule.id === id)) : []);
 function currentValues(): RuleValues {
   return { kind: lineForm.kind, value: lineForm.value, target: lineForm.target, option: lineForm.option };
 }
-const hasPending = computed(() => editLine.value === null ? Boolean(lineForm.value.trim()) :
+const hasPending = computed(() => !editingExisting.value ? Boolean(lineForm.value.trim()) :
   JSON.stringify(currentValues()) !== JSON.stringify(editSnapshot.value));
 defineExpose({ hasPending });
 
@@ -59,11 +90,11 @@ watch(() => props.rules, value => {
 });
 watch(filterTargets, targets => { if (selectedTarget.value && !targets.includes(selectedTarget.value)) selectedTarget.value = ''; });
 watch(() => props.targets, targets => {
-  if (editLine.value === null && !hasPending.value && !targets.includes(lineForm.target)) lineForm.target = targets[0] ?? 'PROXY';
+  if (!editingExisting.value && !hasPending.value && !targets.includes(lineForm.target)) lineForm.target = targets[0] ?? 'PROXY';
   if (!targets.includes(bulkTarget.value)) bulkTarget.value = '';
 });
 watch(selectedTarget, target => {
-  if (editLine.value === null && !hasPending.value && target && props.targets.includes(target)) lineForm.target = target;
+  if (!editingExisting.value && !hasPending.value && target && props.targets.includes(target)) lineForm.target = target;
 });
 
 function clearFilters() {
@@ -80,13 +111,69 @@ function openGroups() {
   groupPickerOpen.value = true;
   void nextTick(() => groupPicker.value?.scrollIntoView({ block: 'start' }));
 }
+function reorderGroup(source: string, target: string, after: boolean) {
+  if (props.busy) return;
+  const values = [...filterTargets.value];
+  const from = values.indexOf(source); const position = values.indexOf(target);
+  if (from < 0 || position < 0 || from === position) return;
+  const boundary = position + (after ? 1 : 0);
+  const to = boundary - (from < boundary ? 1 : 0);
+  if (to === from) return;
+  const [item] = values.splice(from, 1); if (item === undefined) return;
+  values.splice(to, 0, item);
+  const inactive = props.groupOrder.filter(name => !values.includes(name));
+  emit('update:group-order', [...values, ...inactive]);
+}
+function reorderRule(from: number, target: number, after: boolean) {
+  if (hasPending.value || props.busy) return;
+  const move = moveRule(props.rules, from, target, after); if (!move) return;
+  writeRules(move.text, '已调整规则的匹配顺序。');
+  selectedLines.value = selectedLines.value.map(index => movedRuleIndex(index, move));
+  if (editLine.value !== null) editLine.value = movedRuleIndex(editLine.value, move);
+}
+function moveAdjacent(kind: 'rule' | 'group', source: string, direction: -1 | 1) {
+  const values = kind === 'rule' ? visibleRules.value.map(line => String(line.index)) : filterTargets.value;
+  const index = values.indexOf(source); const target = values[index + direction];
+  if (index < 0 || target === undefined) return;
+  if (kind === 'rule') reorderRule(Number(source), Number(target), direction > 0);
+  else reorderGroup(source, target, direction > 0);
+}
+function startDrag(event: PointerEvent, kind: 'rule' | 'group', source: string) {
+  if (props.busy || (kind === 'rule' && hasPending.value) || event.button !== 0) return;
+  event.preventDefault(); event.stopPropagation();
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  drag.value = { kind, source, target: source, after: false, pointer: event.pointerId, startY: event.clientY, active: false };
+}
+function updateDrag(event: PointerEvent) {
+  const current = drag.value; if (!current || current.pointer !== event.pointerId) return;
+  if (!current.active && Math.abs(event.clientY - current.startY) < 5) return;
+  current.active = true;
+  const selector = current.kind === 'rule' ? '[data-rule-index]' : '[data-group-name]';
+  const item = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(selector);
+  const target = current.kind === 'rule' ? item?.dataset.ruleIndex : item?.dataset.groupName;
+  if (!item || target === undefined) return;
+  current.target = target; current.after = event.clientY >= item.getBoundingClientRect().top + item.getBoundingClientRect().height / 2;
+  const list = current.kind === 'rule' ? item.closest<HTMLElement>('.rules-table') : item.closest<HTMLElement>('.group-picker-items');
+  if (list) {
+    const rect = list.getBoundingClientRect();
+    if (event.clientY < rect.top + 30) list.scrollBy(0, -12);
+    else if (event.clientY > rect.bottom - 30) list.scrollBy(0, 12);
+  }
+}
+function endDrag(event: PointerEvent, cancel = false) {
+  const current = drag.value; if (!current || current.pointer !== event.pointerId) return;
+  drag.value = null;
+  if (cancel || !current.active) return;
+  if (current.kind === 'rule') reorderRule(Number(current.source), Number(current.target), current.after);
+  else reorderGroup(current.source, current.target, current.after);
+}
 function setGroupDefault(value: string) {
   const defaults = { ...props.groupDefaults };
   if (value) defaults[selectedTarget.value] = value; else delete defaults[selectedTarget.value];
   emit('update:group-defaults', defaults);
 }
 function cancelLine() {
-  editLine.value = null; editSnapshot.value = null; lineForm.value = ''; lineForm.option = ''; error.value = '';
+  editLine.value = null; editSystem.value = null; editSnapshot.value = null; lineForm.value = ''; lineForm.option = ''; error.value = '';
   lineForm.target = props.targets.includes(selectedTarget.value) ? selectedTarget.value : 'PROXY';
 }
 function showEditorOnCompactScreen() {
@@ -98,21 +185,73 @@ function startLine(line: RuleLine) {
   if (!line.fields) return;
   if (editLine.value === line.index) { showEditorOnCompactScreen(); return; }
   if (hasPending.value && !window.confirm('当前规则尚未添加或更新，切换后会丢失，继续？')) return;
+  editSystem.value = null;
   const [kind, value, target, option] = line.fields;
   lineForm.kind = kind ?? 'DOMAIN-SUFFIX'; lineForm.value = value ?? '';
   lineForm.target = target ?? 'PROXY'; lineForm.option = option ?? '';
   editLine.value = line.index; editSnapshot.value = currentValues(); error.value = '';
   showEditorOnCompactScreen();
 }
+function startSystem(rule: SystemRule) {
+  if (!rule.id) return;
+  if (editSystem.value === rule.id) { showEditorOnCompactScreen(); return; }
+  if (hasPending.value && !window.confirm('当前规则尚未添加或更新，切换后会丢失，继续？')) return;
+  editLine.value = null; editSystem.value = rule.id;
+  lineForm.kind = rule.kind; lineForm.value = rule.value; lineForm.target = rule.target; lineForm.option = rule.option;
+  editSnapshot.value = currentValues(); error.value = ''; showEditorOnCompactScreen();
+}
 function writeRules(value: string, message: string) {
   if (value === props.rules) { lastChange.value = null; notice.value = '规则内容没有变化。'; return; }
-  lastChange.value = { before: props.rules, after: value };
+  lastChange.value = { type: 'rules', before: props.rules, after: value };
   notice.value = message; expectedRules = value; emit('update:rules', value);
+}
+function copySystem(values: SystemOverrides): SystemOverrides {
+  return Object.fromEntries(Object.entries(values).map(([id, value]) => [id, value ? { ...value } : null]));
+}
+function writeSystem(values: SystemOverrides, message: string) {
+  const before = copySystem(props.systemOverrides); const after = copySystem(values);
+  if (JSON.stringify(before) === JSON.stringify(after)) { lastChange.value = null; notice.value = '规则内容没有变化。'; return; }
+  lastChange.value = { type: 'system', before, after };
+  notice.value = message; emit('update:system-overrides', after);
+}
+function setSystemRule(id: string, value: SystemRuleOverride | undefined, message: string) {
+  const original = props.systemRules.find(rule => rule.id === id);
+  if (!original) return;
+  const next = copySystem(props.systemOverrides);
+  if (value === undefined || value !== null && value.kind === original.kind && value.value === original.value && value.target === original.target && value.option === original.option) delete next[id];
+  else next[id] = value;
+  writeSystem(next, message);
+}
+function changeSystemTarget(rule: SystemRule, event: Event) {
+  const input = event.target as HTMLSelectElement;
+  if (!rule.id || input.value === rule.target) return;
+  if (hasPending.value || !systemTargets.value.includes(input.value)) { input.value = rule.target; return; }
+  const value = { kind: rule.kind, value: rule.value, target: input.value, option: rule.option };
+  setSystemRule(rule.id, value, `已更改系统规则 ${rule.value} 的分流去向。`);
+  if (editSystem.value === rule.id && editSnapshot.value) {
+    lineForm.target = input.value; editSnapshot.value = { ...editSnapshot.value, target: input.value };
+  }
+}
+function restoreSystem(id?: string) {
+  if (hasPending.value) { error.value = '请先完成正在编辑的规则。'; return; }
+  if (id) setSystemRule(id, undefined, '已恢复该系统规则的默认内容。');
+  else writeSystem({}, '已恢复全部系统规则的默认内容。');
+  cancelLine();
+}
+function disableSystem(rule: SystemRule) {
+  if (!rule.id || rule.kind === 'MATCH' || hasPending.value) return;
+  setSystemRule(rule.id, null, `已停用系统规则 ${rule.value}。`); cancelLine();
 }
 function undoChange() {
   const change = lastChange.value;
-  if (!change || props.rules !== change.after || hasPending.value) return;
-  expectedRules = change.before; emit('update:rules', change.before);
+  if (!change || hasPending.value) return;
+  if (change.type === 'rules') {
+    if (props.rules !== change.after) return;
+    expectedRules = change.before; emit('update:rules', change.before);
+  } else {
+    if (JSON.stringify(copySystem(props.systemOverrides)) !== JSON.stringify(change.after)) return;
+    emit('update:system-overrides', copySystem(change.before));
+  }
   lastChange.value = null; notice.value = '已撤销上一步修改。'; selectedLines.value = []; bulkTarget.value = ''; cancelLine();
 }
 function changeLineTarget(line: RuleLine, event: Event) {
@@ -129,7 +268,13 @@ function changeLineTarget(line: RuleLine, event: Event) {
 }
 function saveLine() {
   const value = lineForm.value.trim();
-  if (!value || value.includes(',') || /[\r\n]/.test(value)) { error.value = '请填写一条规则内容，不能包含逗号或换行。'; return; }
+  if (!value || /[\r\n]/.test(value) || (value.includes(',') && !(editSystem.value && lineForm.kind === 'AND'))) { error.value = '请填写有效的规则内容，不能包含换行。'; return; }
+  if (editSystem.value) {
+    if (![...ruleKinds, 'GEOSITE', 'MATCH', 'AND'].includes(lineForm.kind) || !systemTargets.value.includes(lineForm.target)) { error.value = '请选择当前模板支持的规则类型和分流去向。'; return; }
+    if (!resolutionKinds.includes(lineForm.kind)) lineForm.option = '';
+    setSystemRule(editSystem.value, { kind: lineForm.kind, value, target: lineForm.target, option: lineForm.option }, `已更新系统规则 ${value}。`);
+    lineForm.value = value; editSnapshot.value = currentValues(); error.value = ''; return;
+  }
   if (!ruleKinds.includes(lineForm.kind) || !props.targets.includes(lineForm.target)) { error.value = '请选择当前模板支持的规则类型和目标分组。'; return; }
   const parts = [lineForm.kind, value, lineForm.target];
   if (lineForm.option && resolutionKinds.includes(lineForm.kind)) parts.push(lineForm.option);
@@ -196,7 +341,10 @@ function openRaw(event: MouseEvent) {
       <button class="mobile-group-picker-toggle" type="button" :aria-expanded="groupPickerOpen" aria-controls="rule-groups" @click="groupPickerOpen = !groupPickerOpen"><span>查看分组</span><strong>{{ selectedTarget || '全部分组' }}</strong><span aria-hidden="true">{{ groupPickerOpen ? '▴' : '▾' }}</span></button>
       <div id="rule-groups" class="group-picker-items" :class="{ 'is-open': groupPickerOpen }">
         <button type="button" :class="{ active: !selectedTarget }" :aria-pressed="!selectedTarget" @click="chooseGroup('')"><span>全部分组</span><span>{{ groupCounts.total }}</span></button>
-        <button v-for="target in filterTargets" :key="target" type="button" :class="{ active: selectedTarget === target }" :aria-pressed="selectedTarget === target" @click="chooseGroup(target)"><span>{{ target }}</span><span>{{ groupCounts.counts.get(target) ?? 0 }}</span></button>
+        <div v-for="target in filterTargets" :key="target" class="group-picker-item" :data-group-name="target" :class="{ 'drag-before': drag?.kind === 'group' && drag.active && drag.target === target && !drag.after, 'drag-after': drag?.kind === 'group' && drag.active && drag.target === target && drag.after }">
+          <button class="drag-handle" type="button" :disabled="busy" :aria-label="'调整分组顺序 ' + target" title="拖动调整顺序；也可使用上下方向键" @pointerdown="startDrag($event, 'group', target)" @pointermove="updateDrag" @pointerup="endDrag($event)" @pointercancel="endDrag($event, true)" @keydown.up.prevent="moveAdjacent('group', target, -1)" @keydown.down.prevent="moveAdjacent('group', target, 1)"><span aria-hidden="true">⋮⋮</span></button>
+          <button type="button" :class="{ active: selectedTarget === target }" :aria-pressed="selectedTarget === target" @click="chooseGroup(target)"><span>{{ target }}</span><span>{{ groupCounts.counts.get(target) ?? 0 }}</span></button>
+        </div>
       </div>
       <p v-if="orphanedDefaults.length" class="group-default-warning">{{ orphanedDefaults.length }} 个分组不属于当前基础模板，请选择后移除其默认出口。</p>
     </nav>
@@ -206,9 +354,12 @@ function openRaw(event: MouseEvent) {
         <button class="mobile-group-return" type="button" @click="openGroups">切换分组</button>
       </div>
       <div class="rule-filter-footer">
-        <span v-if="systemRulesAvailable">系统规则只读，实际匹配顺序和用户设置以客户端配置为准。</span>
+        <span v-if="systemRulesAvailable">模板规则可拖动调整顺序；系统规则保持原顺序，可编辑或恢复默认。</span>
         <span v-else class="system-warning">系统规则暂不可用，请刷新页面或检查面板版本。</span>
+        <span v-if="filterActive">筛选时拖动会跨过隐藏的模板规则。</span>
+        <button v-if="Object.keys(systemOverrides).length" type="button" :disabled="busy || hasPending" @click="restoreSystem()">恢复全部系统规则默认</button>
       </div>
+      <p v-if="orphanedSystem.length" class="group-default-warning">{{ orphanedSystem.length }} 条系统规则修改不属于当前基础模板，请恢复系统规则默认后重新编辑。</p>
       <div class="bulk-actions">
         <label class="checkbox"><input type="checkbox" :checked="allChecked" :indeterminate.prop="someChecked" :disabled="busy || !visibleRules.length" @change="toggleVisible">全选当前结果</label>
         <template v-if="selectedLines.length">
@@ -222,8 +373,16 @@ function openRaw(event: MouseEvent) {
       <div v-if="notice" class="rule-change-notice" role="status"><span>{{ notice }}</span><button v-if="lastChange" type="button" :disabled="busy || hasPending" @click="undoChange">撤销</button></div>
       <div class="rules-table" tabindex="0" role="region" aria-label="规则列表">
         <table><thead><tr><th></th><th>类型</th><th>内容</th><th>分流去向</th><th>解析</th></tr></thead><tbody>
-          <tr v-for="line in visibleLines" :key="line.index" :class="{ 'editing-rule': editLine === line.index, 'editable-rule': line.fields }" @click="line.fields && !busy && startLine(line)">
-            <td class="rule-select"><input v-if="line.fields" v-model="selectedLines" type="checkbox" :value="line.index" :disabled="busy" :aria-label="'批量选择 ' + line.fields[1]" @click.stop></td>
+          <template v-for="row in displayRows" :key="row.key">
+          <tr v-if="row.type === 'heading'" class="system-rules-heading"><td colspan="5">{{ row.label }} · 顺序固定</td></tr>
+          <tr v-else-if="row.type === 'system'" class="system-rule" :class="{ 'editing-rule': editSystem === row.rule.id, 'system-disabled': row.rule.disabled, 'editable-rule': row.rule.id }" @click="!busy && startSystem(row.rule)">
+            <td aria-hidden="true">—</td><td class="rule-type">{{ row.rule.kind }}</td>
+            <td class="rule-content"><button v-if="row.rule.id" class="rule-open" type="button" :disabled="busy" :aria-label="'编辑系统规则 ' + row.rule.value" :aria-current="editSystem === row.rule.id ? 'true' : undefined" @click.stop="startSystem(row.rule)">{{ row.rule.value }}<span class="mobile-rule-details">{{ row.rule.kind }}<template v-if="row.rule.option"> · {{ row.rule.option }}</template></span></button><template v-else>{{ row.rule.value }}</template></td>
+            <td class="rule-target"><select v-if="row.rule.id && !row.rule.disabled" :value="row.rule.target" :disabled="busy || hasPending" :aria-label="'更改系统规则 ' + row.rule.value + ' 的分流去向'" @click.stop @change="changeSystemTarget(row.rule, $event)"><option v-if="!systemTargets.includes(row.rule.target)" :value="row.rule.target" disabled>{{ row.rule.target }}（不可用）</option><option v-for="target in systemTargets" :key="target" :value="target">{{ target === 'DIRECT' ? 'DIRECT · 直连' : target === 'REJECT' ? 'REJECT · 拒绝' : target }}</option></select><span v-else>{{ row.rule.target }}</span> <span class="system-rule-tag">{{ row.rule.disabled ? '已停用' : row.rule.modified ? '已修改' : '系统' }}</span></td><td class="rule-resolution">{{ row.rule.option || '默认' }}</td>
+          </tr>
+          <template v-else>
+          <tr v-for="line in [row.line]" :key="line.index" :data-rule-index="line.fields ? String(line.index) : undefined" :class="{ 'editing-rule': editLine === line.index, 'editable-rule': line.fields, 'drag-before': drag?.kind === 'rule' && drag.active && drag.target === String(line.index) && !drag.after, 'drag-after': drag?.kind === 'rule' && drag.active && drag.target === String(line.index) && drag.after }" @click="line.fields && !busy && startLine(line)">
+            <td class="rule-select"><div v-if="line.fields" class="rule-select-controls"><button class="drag-handle" type="button" :disabled="busy || hasPending" :aria-label="'调整规则顺序 ' + line.fields[1]" title="拖动调整匹配顺序；也可使用上下方向键" @click.stop @pointerdown="startDrag($event, 'rule', String(line.index))" @pointermove="updateDrag" @pointerup="endDrag($event)" @pointercancel="endDrag($event, true)" @keydown.up.prevent="moveAdjacent('rule', String(line.index), -1)" @keydown.down.prevent="moveAdjacent('rule', String(line.index), 1)"><span aria-hidden="true">⋮⋮</span></button><input v-model="selectedLines" type="checkbox" :value="line.index" :disabled="busy" :aria-label="'批量选择 ' + line.fields[1]" @click.stop></div></td>
             <template v-if="line.fields">
               <td class="rule-type">{{ line.fields[0] }}</td>
               <td class="rule-content"><button class="rule-open" type="button" :disabled="busy" :aria-label="'编辑规则 ' + line.fields[1]" :aria-current="editLine === line.index ? 'true' : undefined" @click.stop="startLine(line)">{{ line.fields[1] }}<span class="mobile-rule-details">{{ line.fields[0] }}<template v-if="line.fields[3]"> · {{ line.fields[3] }}</template></span></button></td>
@@ -232,12 +391,8 @@ function openRaw(event: MouseEvent) {
             </template>
             <td v-else colspan="4" class="rule-comment">{{ line.text }}</td>
           </tr>
-          <tr v-if="visibleSystemRules.length" class="system-rules-heading"><td colspan="5">系统基础规则 · 只读</td></tr>
-          <tr v-for="(line, index) in visibleSystemRules" :key="`system-${index}`" class="system-rule">
-            <td aria-hidden="true">—</td><td class="rule-type">{{ line.kind }}</td>
-            <td class="rule-content">{{ line.value }}<span class="mobile-rule-details">{{ line.kind }}<template v-if="line.option"> · {{ line.option }}</template></span></td>
-            <td class="rule-target">{{ line.target }} <span class="system-rule-tag">系统</span></td><td class="rule-resolution">{{ line.option || '默认' }}</td>
-          </tr>
+          </template>
+          </template>
           <tr v-if="!visibleLines.length && !visibleSystemRules.length"><td colspan="5" class="rule-empty">{{ filterActive ? '没有匹配的规则，请调整全局筛选或切换分组。' : '暂无规则，可在编辑区添加。' }}</td></tr>
         </tbody></table>
       </div>
@@ -260,17 +415,18 @@ function openRaw(event: MouseEvent) {
       <p v-else>这是规则动作，没有默认出口。</p>
     </div>
     <div ref="ruleEditor" class="rule-editor-pane" aria-label="规则编辑">
-      <div><h4>{{ editLine === null ? '添加规则' : '编辑规则' }}</h4><p v-if="editLine !== null">{{ editSnapshot?.value }}<template v-if="!editVisible"> · 不在当前筛选结果中</template></p><p v-else-if="selectedTarget && !targets.includes(selectedTarget)">此分组由系统维护，新增规则请选择可编辑目标。</p><p v-else>选择类型和去向后添加，或点击列表中的规则编辑。</p></div>
-      <label>规则类型<select v-model="lineForm.kind" :disabled="busy"><option v-for="kind in ruleKinds" :key="kind">{{ kind }}</option></select></label>
-      <label>匹配内容<input v-model="lineForm.value" placeholder="域名、网段或端口" :disabled="busy"></label>
+      <div><h4>{{ editSystem ? '编辑系统规则' : editLine === null ? '添加规则' : '编辑规则' }}</h4><p v-if="editingExisting">{{ editSnapshot?.value }}<template v-if="!editVisible"> · 不在当前筛选结果中</template></p><p v-else-if="selectedTarget && !targets.includes(selectedTarget)">此分组由系统维护，新增规则请选择可编辑目标。</p><p v-else>选择类型和去向后添加，或点击列表中的规则编辑。</p></div>
+      <label>规则类型<select v-model="lineForm.kind" :disabled="busy || Boolean(editSystem && ['AND', 'MATCH'].includes(editingSystemOriginal?.kind ?? ''))"><option v-for="kind in editSystem ? [...ruleKinds, 'GEOSITE', 'MATCH', 'AND'] : ruleKinds" :key="kind">{{ kind }}</option></select></label>
+      <label>匹配内容<input v-model="lineForm.value" placeholder="域名、网段或端口" :disabled="busy || Boolean(editSystem && ['AND', 'MATCH'].includes(lineForm.kind))"></label>
+      <p v-if="editSystem && lineForm.kind === 'GEOSITE'" class="system-rule-hint">小火箭通过地域规则集转换，规则数据可能与 Clash 略有差异。</p>
       <label>分流去向<select v-model="lineForm.target" :disabled="busy">
-        <option v-if="!targets.includes(lineForm.target)" :value="lineForm.target" disabled>{{ lineForm.target }}（当前模板不可用）</option>
-        <option v-for="target in targets" :key="target">{{ target }}</option>
+        <option v-if="!(editSystem ? systemTargets : targets).includes(lineForm.target)" :value="lineForm.target" disabled>{{ lineForm.target }}（当前模板不可用）</option>
+        <option v-for="target in editSystem ? systemTargets : targets" :key="target">{{ target }}</option>
       </select></label>
       <label v-if="resolutionKinds.includes(lineForm.kind)">IP 解析<select v-model="lineForm.option" :disabled="busy"><option value="">默认</option><option value="resolve">resolve</option><option value="no-resolve">no-resolve</option></select></label>
-      <label v-if="editLine === null">添加位置<select v-model="lineForm.position" :disabled="busy"><option value="end">模板末尾</option><option value="start">模板最前（优先匹配）</option></select></label>
+      <label v-if="!editingExisting">添加位置<select v-model="lineForm.position" :disabled="busy"><option value="end">模板末尾</option><option value="start">模板最前（优先匹配）</option></select></label>
       <p v-if="error" class="message" role="alert">{{ error }}</p>
-      <div class="rule-editor-actions"><button class="primary" type="button" :disabled="busy || (editLine !== null && !hasPending)" @click="saveLine">{{ editLine === null ? '添加规则' : '更新规则' }}</button><button v-if="editLine !== null || hasPending" type="button" :disabled="busy" @click="cancelLine">{{ hasPending ? '取消修改' : '添加新规则' }}</button></div>
+      <div class="rule-editor-actions"><button class="primary" type="button" :disabled="busy || (editingExisting && !hasPending)" @click="saveLine">{{ editingExisting ? '更新规则' : '添加规则' }}</button><button v-if="editingExisting || hasPending" type="button" :disabled="busy" @click="cancelLine">{{ hasPending ? '取消修改' : '添加新规则' }}</button><button v-if="editSystem && editSystem in systemOverrides" type="button" :disabled="busy || hasPending" @click="restoreSystem(editSystem)">恢复此规则默认</button><button v-if="editSystem && editingSystemOriginal?.kind !== 'MATCH' && systemOverrides[editSystem] !== null" type="button" :disabled="busy || hasPending" @click="disableSystem(editingSystemOriginal!)">停用规则</button></div>
     </div>
     </aside>
   </div>

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 mod group_defaults;
+mod system_overrides;
 use xcli_panel_rules::{
     apply_client_policy, apply_google_policy, apply_template_rules, factory_independent_rules,
     ApplyError,
@@ -490,6 +491,10 @@ fn build_with_outbound(
         apply_google_policy(&mut result)?;
     }
     apply_oracle(&mut result)?;
+    if managed {
+        system_overrides::apply(&mut result, policy, domain)?;
+        group_defaults::order(&mut result, policy)?;
+    }
     Ok((result, outbound))
 }
 
@@ -521,8 +526,14 @@ pub fn system_rules_preview(domain: &str, base: &str) -> Result<Vec<Value>> {
     let config = build(&settings, &user, &[], false, &policy)?;
     let providers = config["rule-providers"].as_object().ok_or_else(invalid)?;
     let mut output = Vec::new();
+    let mut after_template = false;
     for rule in config["rules"].as_array().ok_or_else(invalid)? {
         let rule = rule.as_str().ok_or_else(invalid)?;
+        if rule == "GEOSITE,private,DIRECT"
+            || (base == "independent" && rule == "RULE-SET,category-Google,独立 · Google")
+        {
+            after_template = true;
+        }
         let parts: Vec<_> = rule.split(',').collect();
         if let ["RULE-SET", provider, target] = parts.as_slice() {
             let payload = providers
@@ -531,11 +542,11 @@ pub fn system_rules_preview(domain: &str, base: &str) -> Result<Vec<Value>> {
                 .and_then(Value::as_array)
                 .ok_or_else(invalid)?;
             for entry in payload {
-                let (kind, value) = entry
-                    .as_str()
-                    .and_then(|v| v.split_once(','))
-                    .ok_or_else(invalid)?;
-                output.push(json!({"kind":kind,"value":value,"target":target,"option":"","provider":provider}));
+                let raw = entry.as_str().ok_or_else(invalid)?;
+                let (text, option) = raw.strip_suffix(",no-resolve").map_or((raw, ""), |value| (value, "no-resolve"));
+                let (kind, value) = text.split_once(',').ok_or_else(invalid)?;
+                let id = system_overrides::identity(provider, kind, value, target, option, domain);
+                output.push(json!({"id":id,"kind":kind,"value":value,"target":target,"option":option,"provider":provider,"after_template":after_template}));
             }
             continue;
         }
@@ -551,8 +562,8 @@ pub fn system_rules_preview(domain: &str, base: &str) -> Result<Vec<Value>> {
                 (kind, value, target, "")
             }
         };
-        output
-            .push(json!({"kind":kind,"value":value,"target":target,"option":option,"provider":""}));
+        let id = system_overrides::identity("", kind, value, target, option, domain);
+        output.push(json!({"id":id,"kind":kind,"value":value,"target":target,"option":option,"provider":"","after_template":after_template}));
     }
     Ok(output)
 }

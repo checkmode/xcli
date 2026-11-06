@@ -1,6 +1,7 @@
 export type RuleLine = { index: number; text: string; fields: string[] | null };
 export type RuleFilters = { query: string; target: string; kind: string; resolution: string; selectedOnly: boolean };
-export type SystemRule = { kind: string; value: string; target: string; option: string; provider: string };
+export type SystemRule = { id?: string; kind: string; value: string; target: string; option: string; provider: string; after_template?: boolean; disabled?: boolean; modified?: boolean };
+export type SystemRuleOverride = { kind: string; value: string; target: string; option: string } | null;
 
 export const ruleKinds = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'DST-PORT'];
 export const resolutionKinds = ['IP-CIDR', 'IP-CIDR6', 'GEOIP'];
@@ -46,7 +47,7 @@ export function countRulesByTarget(lines: RuleLine[], system: SystemRule[], filt
     const target = line.fields?.[2];
     if (target) counts.set(target, (counts.get(target) ?? 0) + 1);
   }
-  for (const line of filterSystemRules(system, global)) counts.set(line.target, (counts.get(line.target) ?? 0) + 1);
+  for (const line of filterSystemRules(system, global)) if (!line.disabled) counts.set(line.target, (counts.get(line.target) ?? 0) + 1);
   return { counts, total: [...counts.values()].reduce((sum, value) => sum + value, 0) };
 }
 
@@ -57,6 +58,31 @@ export function selectVisibleRules(selected: number[], visible: RuleLine[], chec
     if (checked) result.add(line.index); else result.delete(line.index);
   }
   return [...result].sort((a, b) => a - b);
+}
+
+export type RuleMove = { text: string; from: number; to: number };
+
+/** Move one template rule while keeping comments, other rows and line endings. */
+export function moveRule(text: string, from: number, target: number, after: boolean): RuleMove | null {
+  const valid = new Set(parseRuleLines(text).filter(line => line.fields).map(line => line.index));
+  if (!valid.has(from) || !valid.has(target) || from === target) return null;
+  const boundary = target + (after ? 1 : 0);
+  const to = boundary - (from < boundary ? 1 : 0);
+  if (to === from) return null;
+  const rows = text.split('\n');
+  const endings = rows.map((row, index) => index === rows.length - 1 ? '' : (row.endsWith('\r') ? '\r\n' : '\n'));
+  const content = rows.map((row, index) => endings[index] === '\r\n' ? row.slice(0, -1) : row);
+  const [moved] = content.splice(from, 1);
+  if (moved === undefined) return null;
+  content.splice(to, 0, moved);
+  return { text: content.map((row, index) => row + endings[index]).join(''), from, to };
+}
+
+export function movedRuleIndex(index: number, move: RuleMove): number {
+  if (index === move.from) return move.to;
+  if (move.from < move.to && index > move.from && index <= move.to) return index - 1;
+  if (move.to < move.from && index >= move.to && index < move.from) return index + 1;
+  return index;
 }
 
 export function changeSelectedRules(text: string, selected: ReadonlySet<number>, action: { type: 'delete' } | { type: 'target'; target: string }): string {

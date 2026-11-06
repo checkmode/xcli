@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
+import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, moveRule, movedRuleIndex, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
 
 const fixture = [
   '# AI rules',
@@ -15,6 +15,17 @@ const fixture = [
 ].join('\n');
 const defaults = { query: '', target: '', kind: '', resolution: '', selectedOnly: false };
 const contents = lines => lines.map(line => line.text);
+
+test('moving a template rule changes precedence and preserves comments, selections and line endings', () => {
+  const source = '# first\r\nDOMAIN,a.example,PROXY\r\n# other\r\nDOMAIN,b.example,DIRECT';
+  const result = moveRule(source, 3, 1, false);
+  assert.equal(result.text, '# first\r\nDOMAIN,b.example,DIRECT\r\nDOMAIN,a.example,PROXY\r\n# other');
+  assert.equal(movedRuleIndex(3, result), 1);
+  assert.equal(movedRuleIndex(1, result), 2);
+  assert.equal(movedRuleIndex(2, result), 3);
+  assert.equal(moveRule(source, 0, 1, false), null);
+  assert.equal(moveRule(source, 1, 3, false)?.text, '# first\r\n# other\r\nDOMAIN,a.example,PROXY\r\nDOMAIN,b.example,DIRECT');
+});
 
 test('filters combine group, type, search, IP resolution and selection without changing order', () => {
   const lines = parseRuleLines(fixture);

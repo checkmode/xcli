@@ -105,11 +105,19 @@ fn categorized(policy: &Value) -> Result<bool> {
         Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
         None => false,
     };
+    let order = match policy.get("group_order") {
+        Some(value) => !value.as_array().ok_or_else(invalid)?.is_empty(),
+        None => false,
+    };
+    let system = match policy.get("system_overrides") {
+        Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
+        None => false,
+    };
     Ok(field(policy, "base")? == "independent"
         || (flag(policy, "managed", false)?
             && (!field(policy, "rules")?.is_empty()
                 || !list(policy, "groups")?.is_empty()
-                || defaults)))
+                || defaults || order || system)))
 }
 pub fn setup(settings: &Value, user: &User, policy: &Value) -> Result<Value> {
     let categorized = categorized(policy)?;
@@ -264,6 +272,8 @@ struct BaseOptions<'a> {
     has_other: bool,
     removed: &'a BTreeSet<String>,
     legacy_google: bool,
+    geo_tail: &'a str,
+    final_target: Option<&'a str>,
 }
 fn extend_base(
     base: &str,
@@ -311,6 +321,8 @@ fn extend_base(
     let mut out = String::new();
     section.clear();
     let convert = |value: &str| value.replace('\n', end);
+    let mut tail_written = options.geo_tail.is_empty();
+    let mut final_written = options.final_target.is_none();
     for (index, original) in line_parts(base).enumerate() {
         let line = trim(original);
         let line = if index == 0 {
@@ -319,6 +331,10 @@ fn extend_base(
             line
         };
         if let Some(capture) = header().captures(line) {
+            if section == "Rule" && &capture[1] != "Rule" {
+                if !tail_written { out.push_str(&convert(options.geo_tail)); tail_written = true; }
+                if !final_written { out.push_str(&format!("FINAL,{}{end}", options.final_target.ok_or_else(invalid)?)); final_written = true; }
+            }
             section = capture[1].into();
             if section == "Rule" && !sections.contains_key("Proxy Group") {
                 out.push_str("[Proxy Group]");
@@ -345,6 +361,17 @@ fn extend_base(
         {
             out.push_str(&format!("update-url = {update}{end}"));
         } else if options.categorized && section == "Rule" {
+            if (line.starts_with("GEOIP,") || line.starts_with("FINAL,")) && !tail_written {
+                out.push_str(&convert(options.geo_tail));
+                tail_written = true;
+            }
+            if line.starts_with("FINAL,") && !final_written {
+                if let Some(target) = options.final_target {
+                    out.push_str(&format!("FINAL,{target}{end}"));
+                    final_written = true;
+                    continue;
+                }
+            }
             if let Some(capture) = generic().captures(original) {
                 let condition = trim(&capture[1]);
                 if options.removed.contains(condition) {
@@ -383,6 +410,8 @@ fn extend_base(
             out.push_str(original);
         }
     }
+    if !tail_written { out.push_str(&convert(options.geo_tail)); }
+    if !final_written { out.push_str(&format!("FINAL,{}{end}", options.final_target.ok_or_else(invalid)?)); }
     Ok(out)
 }
 
@@ -409,10 +438,21 @@ fn categorized_profile(
     base: &str,
     update: &str,
     replace: bool,
+    policy: &Value,
+    domain: &str,
+    origin: &str,
 ) -> Result<String> {
     let mut groups = String::new();
     let mut rules = String::new();
     let mut managed = BTreeMap::new();
+    let overrides = policy.get("system_overrides").and_then(Value::as_object);
+    let system_rows = if overrides.is_some_and(|values| !values.is_empty()) {
+        xcli_panel_clash::system_rules_preview(domain, field(policy, "base")?)?
+    } else { Vec::new() };
+    let tail_mode = system_rows.iter().any(|row| {
+        row.get("id").and_then(Value::as_str).is_some_and(|id| overrides.is_some_and(|values| values.contains_key(id)))
+            && matches!(row.get("kind").and_then(Value::as_str), Some("GEOSITE" | "GEOIP" | "MATCH"))
+    });
     let mut has_other = false;
     let mut has_google = false;
     for item in list(config, "proxy-groups")? {
@@ -474,10 +514,28 @@ fn categorized_profile(
         }
         rules.push_str(&format!("{value},{destination}{suffix}\n"));
     };
+    let mut geo_tail = String::new();
+    let mut final_target = None;
+    let mut in_tail = false;
     for item in list(config, "rules")? {
         let rule = item.as_str().ok_or_else(invalid)?;
-        if rule.starts_with("GEOSITE,") {
-            break;
+        if !in_tail && (rule.starts_with("GEOSITE,") || (tail_mode && (rule.starts_with("GEOIP,private,") || rule.starts_with("GEOIP,CN,") || rule.starts_with("MATCH,")))) {
+            if !tail_mode { break; }
+            in_tail = true;
+        }
+        if in_tail {
+            let (stripped, suffix) = rule.strip_suffix(",no-resolve").map_or((rule, ""), |value| (value, ",no-resolve"));
+            let (condition, target) = stripped.rsplit_once(',').ok_or_else(invalid)?;
+            let target = policy_name(target, nodes);
+            if condition == "MATCH" {
+                final_target = Some(target);
+            } else if let Some(category) = condition.strip_prefix("GEOSITE,") {
+                geo_tail.push_str(&format!("RULE-SET,{origin}/api/geosite/{}.list,{}{suffix}\n", quote(category), safe(&target)?));
+            } else {
+                let condition = condition.replacen("GEOIP,private", "GEOIP,LAN", 1).replace("IP-CIDR6,", "IP-CIDR,");
+                geo_tail.push_str(&format!("{condition},{}{suffix}\n", safe(&target)?));
+            }
+            continue;
         }
         if let Some(capture) = provider_udp().captures(rule) {
             for payload in payloads(&capture[1])? {
@@ -507,6 +565,17 @@ fn categorized_profile(
             }
         }
     }
+    if let Some(overrides) = overrides {
+        for row in &system_rows {
+            let id = field(row, "id")?;
+            let Some(value) = overrides.get(id) else { continue; };
+            let kind = field(row, "kind")?;
+            if !matches!(kind, "DOMAIN" | "DOMAIN-SUFFIX" | "DOMAIN-KEYWORD" | "IP-CIDR" | "IP-CIDR6" | "GEOIP") { continue; }
+            let changed = value.is_null() || value.get("kind") != row.get("kind") || value.get("value") != row.get("value");
+            let condition = format!("{kind},{}", field(row, "value")?).replacen("IP-CIDR6,", "IP-CIDR,", 1);
+            if changed && !managed.contains_key(&condition) { removed.insert(condition); }
+        }
+    }
     let legacy_google = has_google && !managed.contains_key("DOMAIN-KEYWORD,google");
     extend_base(
         base,
@@ -519,6 +588,8 @@ fn categorized_profile(
             has_other,
             removed: &removed,
             legacy_google,
+            geo_tail: &geo_tail,
+            final_target: final_target.as_deref(),
         },
     )
 }
@@ -608,7 +679,7 @@ pub fn profile(
             && field(policy, "base")? == "independent"
             && field(policy, "rules")? != factory_independent_rules();
         let base = base.unwrap_or("[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n");
-        let result = categorized_profile(&config, &nodes, base, &update, replace)?;
+        let result = categorized_profile(&config, &nodes, base, &update, replace, policy, domain, origin)?;
         return integrated_dns(
             &result,
             domain,
@@ -708,6 +779,8 @@ pub fn profile(
                 has_other: true,
                 removed: &empty_set,
                 legacy_google: false,
+                geo_tail: "",
+                final_target: None,
             },
         );
     }

@@ -235,7 +235,7 @@ pub fn validate(input: &Value) -> Result<Value> {
         || object.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "base" | "ai_outbound" | "rules" | "groups" | "group_defaults"
+                "base" | "ai_outbound" | "rules" | "groups" | "group_defaults" | "group_order" | "system_overrides"
             )
         })
     {
@@ -341,6 +341,58 @@ pub fn validate(input: &Value) -> Result<Value> {
         if !defaults.is_empty() {
             output["group_defaults"] = json!(defaults);
         }
+    }
+    if let Some(value) = input.get("group_order") {
+        let items = value
+            .as_array()
+            .filter(|items| items.len() <= 32)
+            .ok_or_else(|| invalid("分组顺序格式不正确"))?;
+        let mut seen = BTreeSet::new();
+        for item in items {
+            let name = item.as_str().ok_or_else(|| invalid("分组顺序格式不正确"))?;
+            let builtin = matches!(name, "PROXY" | "DIRECT" | "REJECT" | "STUN" | "EaseLian" |
+                "独立 · AI" | "独立 · Google" | "独立 · Telegram" | "独立 · YouTube" |
+                "独立 · Netflix" | "独立 · 国外媒体" | "独立 · STUN" | "其他流量" | "oracle-cloud");
+            if !(builtin || names.contains(name)) || !seen.insert(name) {
+                return Err(invalid("分组顺序包含重复或未知分组"));
+            }
+        }
+        if !items.is_empty() {
+            output["group_order"] = json!(items);
+        }
+    }
+    if let Some(value) = input.get("system_overrides") {
+        let items = value.as_object().filter(|items| items.len() <= 128)
+            .ok_or_else(|| invalid("系统规则修改格式不正确"))?;
+        for (id, item) in items {
+            if id.len() != 64 || !id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+                return Err(invalid("系统规则标识不正确"));
+            }
+            if item.is_null() { continue; }
+            let object = item.as_object().filter(|object| object.len() == 4
+                && ["kind", "value", "target", "option"].iter().all(|key| object.contains_key(*key)))
+                .ok_or_else(|| invalid("系统规则修改格式不正确"))?;
+            let kind = object["kind"].as_str().ok_or_else(|| invalid("系统规则类型不正确"))?;
+            let value = object["value"].as_str().ok_or_else(|| invalid("系统规则内容不正确"))?;
+            let target = object["target"].as_str().ok_or_else(|| invalid("系统规则去向不正确"))?;
+            let option = object["option"].as_str().ok_or_else(|| invalid("系统规则解析选项不正确"))?;
+            if !(matches!(target, "DIRECT" | "REJECT" | "oracle-cloud") || configurable_group(base, target, &names)) {
+                return Err(invalid("系统规则去向不属于当前模板"));
+            }
+            match kind {
+                "GEOSITE" if option.is_empty() && !value.is_empty() && value.len() <= 80 && value.bytes().all(|c|
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_' | b'!' | b'@')) => (),
+                "MATCH" if value == "全部剩余流量" && option.is_empty() => (),
+                "AND" if option.is_empty() && value.len() <= 400 && value.starts_with("((") && value.ends_with("))")
+                    && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"(),._-:/!+".contains(&c)) => (),
+                "GEOIP" if value == "private" && matches!(option, "" | "resolve" | "no-resolve") => (),
+                _ => {
+                    let line = format!("{kind},{value},DIRECT{}", if option.is_empty() { String::new() } else { format!(",{option}") });
+                    parse_rules(&line, base, &names)?;
+                }
+            }
+        }
+        if !items.is_empty() { output["system_overrides"] = json!(items); }
     }
     Ok(output)
 }

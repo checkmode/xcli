@@ -123,3 +123,22 @@ fn remote_node_choice_is_stable_and_missing_user_grants_are_rejected() {
     let not_granted = build(&settings(), &user(), &[], false, &policy).unwrap();
     assert_eq!(first(&not_granted, "独立 · Google"), "REJECT");
 }
+
+#[test]
+fn group_order_changes_display_only_and_preserves_other_configuration() {
+    let base = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true});
+    let old = build(&settings(), &user(), &[], false, &base).unwrap();
+    let mut reordered = base.clone();
+    reordered["group_order"] = json!(["独立 · Google", "DIRECT", "独立 · AI", "PROXY", "oracle-cloud"]);
+    let new = build(&settings(), &user(), &[], false, &reordered).unwrap();
+    for key in ["rules", "dns", "proxies", "rule-providers"] {
+        assert_eq!(new[key], old[key], "{key}");
+    }
+    let names: Vec<&str> = new["proxy-groups"].as_array().unwrap().iter()
+        .map(|group| group["name"].as_str().unwrap()).collect();
+    let position = |name| names.iter().position(|item| *item == name).unwrap();
+    assert!(position("独立 · Google") < position("独立 · AI"));
+    assert!(position("独立 · AI") < position("PROXY"));
+    assert!(position("PROXY") < position("oracle-cloud"));
+    assert_eq!(first(&new, "oracle-cloud"), "DIRECT");
+}

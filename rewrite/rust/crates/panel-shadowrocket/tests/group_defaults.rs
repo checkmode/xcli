@@ -39,3 +39,113 @@ fn standard_template_with_only_group_defaults_generates_a_shadowrocket_profile()
     let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
     assert!(config.contains("XCLI-PROXY = select,test · REALITY,"));
 }
+
+#[test]
+fn group_display_order_is_shared_with_shadowrocket() {
+    let policy = json!({"base":"independent","ai_outbound":"proxy","rules":factory_independent_rules(),"managed":true,
+        "group_order":["独立 · Google","独立 · AI","PROXY"]});
+    let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
+    let google = config.find("XCLI-独立 · Google = select,").unwrap();
+    let ai = config.find("XCLI-独立 · AI = select,").unwrap();
+    let proxy = config.find("XCLI-PROXY = select,").unwrap();
+    assert!(google < ai && ai < proxy);
+}
+
+#[test]
+fn system_domain_edits_are_included_in_shadowrocket() {
+    let rows = xcli_panel_clash::system_rules_preview("panel.example.com", "independent").unwrap();
+    let row = rows
+        .iter()
+        .find(|row| {
+            row["kind"] == "DOMAIN-SUFFIX"
+                && row["value"] == "google.com"
+                && row["target"] == "独立 · Google"
+        })
+        .unwrap();
+    let mut policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,"system_overrides":{}});
+    policy["system_overrides"][row["id"].as_str().unwrap()] =
+        json!({"kind":"DOMAIN-SUFFIX","value":"google.com","target":"DIRECT","option":""});
+    let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("DOMAIN-SUFFIX,google.com,DIRECT\n"));
+}
+
+#[test]
+fn changed_geo_rules_are_converted_for_shadowrocket_and_keep_custom_base_rules() {
+    let rows = xcli_panel_clash::system_rules_preview("panel.example.com", "standard").unwrap();
+    let cn = rows
+        .iter()
+        .find(|row| row["kind"] == "GEOSITE" && row["value"] == "cn")
+        .unwrap();
+    let fallback = rows.iter().find(|row| row["kind"] == "MATCH").unwrap();
+    let mut policy = json!({"base":"standard","ai_outbound":"proxy","rules":"","managed":true,"system_overrides":{}});
+    policy["system_overrides"][cn["id"].as_str().unwrap()] =
+        json!({"kind":"GEOSITE","value":"cn","target":"PROXY","option":""});
+    policy["system_overrides"][fallback["id"].as_str().unwrap()] =
+        json!({"kind":"MATCH","value":"全部剩余流量","target":"DIRECT","option":""});
+    let mut values = settings();
+    values["shadowrocket_base_profiles"] = json!({(user().id):"[General]\ninclude = default.conf\n[Rule]\nDOMAIN,custom.example,DIRECT\nGEOIP,CN,DIRECT\nFINAL,PROXY\n"});
+    let config = profile(&values, &user(), &[], false, &policy).unwrap();
+    let custom = config.find("DOMAIN,custom.example,DIRECT").unwrap();
+    let converted = config
+        .find("RULE-SET,https://panel.example.com/api/geosite/cn.list,XCLI-PROXY")
+        .unwrap();
+    let geoip = config.find("GEOIP,CN,DIRECT").unwrap();
+    assert!(custom < converted && converted < geoip);
+    assert!(config.contains(
+        "RULE-SET,https://panel.example.com/api/geosite/geolocation-%21cn.list,XCLI-PROXY"
+    ));
+    assert!(config.contains("FINAL,DIRECT\n"));
+}
+
+#[test]
+fn template_rule_priority_is_preserved_in_clash_and_shadowrocket() {
+    let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"DOMAIN-SUFFIX,example.com,独立 · Google\nDOMAIN,api.example.com,独立 · AI\n","managed":true});
+    let clash_user = xcli_panel_clash::User {
+        id: user().id,
+        uuid: user().uuid,
+    };
+    let clash = xcli_panel_clash::build(&settings(), &clash_user, &[], false, &policy).unwrap();
+    let rules = clash["rules"].as_array().unwrap();
+    let broad = rules
+        .iter()
+        .position(|r| r == "DOMAIN-SUFFIX,example.com,独立 · Google")
+        .unwrap();
+    let specific = rules
+        .iter()
+        .position(|r| r == "DOMAIN,api.example.com,独立 · AI")
+        .unwrap();
+    assert!(broad < specific);
+    let shadow = profile(&settings(), &user(), &[], false, &policy).unwrap();
+    assert!(
+        shadow
+            .find("DOMAIN-SUFFIX,example.com,XCLI-独立 · Google")
+            .unwrap()
+            < shadow
+                .find("DOMAIN,api.example.com,XCLI-独立 · AI")
+                .unwrap()
+    );
+    let mut reversed = policy.clone();
+    reversed["rules"] =
+        json!("DOMAIN,api.example.com,独立 · AI\nDOMAIN-SUFFIX,example.com,独立 · Google\n");
+    let clash = xcli_panel_clash::build(&settings(), &clash_user, &[], false, &reversed).unwrap();
+    let rules = clash["rules"].as_array().unwrap();
+    assert!(
+        rules
+            .iter()
+            .position(|r| r == "DOMAIN,api.example.com,独立 · AI")
+            .unwrap()
+            < rules
+                .iter()
+                .position(|r| r == "DOMAIN-SUFFIX,example.com,独立 · Google")
+                .unwrap()
+    );
+    let shadow = profile(&settings(), &user(), &[], false, &reversed).unwrap();
+    assert!(
+        shadow
+            .find("DOMAIN,api.example.com,XCLI-独立 · AI")
+            .unwrap()
+            < shadow
+                .find("DOMAIN-SUFFIX,example.com,XCLI-独立 · Google")
+                .unwrap()
+    );
+}
