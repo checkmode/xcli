@@ -211,14 +211,22 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .rule-filter-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 9px; color: var(--muted); font-size: 11px; }
 .rule-filter-footer .system-warning { color: #a75c20; }
 .bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 12px; color: var(--muted); font-size: 11px; }
-.bulk-actions select { flex: 1 1 120px; max-width: 190px; }
+.bulk-actions .bulk-target { display: flex; flex: 1 1 175px; align-items: center; gap: 6px; min-width: 0; }
+.bulk-actions select { flex: 1 1 120px; width: auto; min-width: 0; max-width: 190px; }
+.rule-change-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 9px; color: #315f9f; font-size: 11px; }
+.rule-change-notice button { min-height: 26px; padding: 3px 8px; font-size: 11px; }
 .rules-table { max-height: 360px; overflow: auto; margin-top: 8px; border: 1px solid #e9eef5; border-radius: 9px; }
 .rules-table table { font-size: 12px; }
 .rules-table th { position: sticky; top: 0; z-index: 1; background: #f7f9fc; }
 .rules-table td, .rules-table th { padding: 5px 8px; }
 .rules-table td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; }
+.rules-table tr.editable-rule { cursor: pointer; }
+.rules-table tr.editable-rule:hover { background: #f6f9fd; }
+.rules-table .rule-open { display: block; width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 3px; color: inherit; background: transparent; text-align: left; font-size: 12px; font-weight: inherit; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+.rules-table .rule-open:hover { color: #245b9f; background: transparent; }
+.rules-table .rule-target select { width: 155px; max-width: 100%; min-height: 30px; padding: 4px 22px 4px 7px; font-size: 11px; }
 .mobile-rule-details { display: none; }
-.rules-table tr.editing-rule { background: #f0f6ff; }
+.rules-table tr.editing-rule, .rules-table tr.editing-rule:hover { background: #eaf3ff; }
 .rules-table tr.system-rules-heading td { padding: 8px; color: #5d6d82; background: #f7f9fc; font-size: 11px; font-weight: 600; white-space: normal; }
 .system-rule-tag { color: #65758b; font-size: 11px; white-space: nowrap; }
 .rules-table .rule-empty { padding: 16px; color: var(--muted); text-align: center; white-space: normal; }
@@ -227,7 +235,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .raw-rules summary { cursor: pointer; }
 .raw-rules textarea { margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
 .rule-side { display: grid; gap: 12px; min-width: 0; }
-.group-settings-pane, .rule-editor-pane { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid #e4ebf4; border-radius: 10px; background: #f8fafc; }
+.group-settings-pane, .rule-editor-pane { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid #e4ebf4; border-radius: 10px; background: #f8fafc; scroll-margin-top: 125px; }
 .group-settings-pane h4 { margin: 0; font-size: 13px; }
 .group-settings-pane .group-settings-name { margin: -5px 0 0; color: #315f9f; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .group-settings-pane p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -341,9 +349,11 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 @container rule-list (max-width: 520px) {
   .rules-table table, .rules-table tbody { display: block; }
   .rules-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .rules-table tbody tr { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 6px 8px; border-bottom: 1px solid var(--soft-line); }
+  .rules-table tbody tr { display: grid; grid-template-columns: 16px minmax(0, 1fr) minmax(120px, 43%); align-items: center; gap: 7px; padding: 6px 8px; border-bottom: 1px solid var(--soft-line); }
   .rules-table td, .rules-table td:first-child, .rules-table td:last-child { display: block; min-width: 0; padding: 0; border: 0; white-space: normal; }
-  .rules-table td.rule-type, .rules-table td.rule-target, .rules-table td.rule-resolution { display: none; }
+  .rules-table td.rule-type, .rules-table td.rule-resolution { display: none; }
+  .rules-table td.rule-target { min-width: 0; font-size: 11px; overflow-wrap: anywhere; }
+  .rules-table .rule-target select { width: 100%; }
   .rules-table td.rule-content { overflow-wrap: anywhere; }
   .rules-table td.rule-comment { grid-column: 2 / -1; }
   .rules-table td.rule-empty { grid-column: 1 / -1; padding: 10px; }
