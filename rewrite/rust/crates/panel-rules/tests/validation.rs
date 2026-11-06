@@ -33,3 +33,27 @@ fn validation_reports_the_original_line_number() {
         "第 3 行：域名规则需要小写英文域名"
     );
 }
+
+#[test]
+fn group_defaults_extend_old_specs_without_accepting_unknown_groups_or_selectors() {
+    let old = json!({"base":"independent","ai_outbound":"residential-41","rules":""});
+    assert_eq!(validate(&old).unwrap(), old);
+    let spec = json!({"base":"independent","ai_outbound":"residential-41","rules":"DOMAIN,example.com,工作",
+        "groups":[{"name":"工作","default":"PROXY"}],
+        "group_defaults":{"独立 · AI":"node:residential-41","独立 · Google":"selector:自动选择","工作":"country:US"}});
+    assert_eq!(validate(&spec).unwrap(), spec);
+    for (group, choice) in [
+        ("DIRECT", "node:reality"),
+        ("oracle-cloud", "node:reality"),
+        ("独立 · AI", "node:../bad"),
+        ("独立 · AI", "selector:other"),
+    ] {
+        let mut bad = old.clone();
+        bad["group_defaults"] = json!({group:choice});
+        assert!(validate(&bad).is_err(), "{group} {choice}");
+    }
+    let mut standard = old.clone();
+    standard["base"] = json!("standard");
+    standard["group_defaults"] = json!({"独立 · AI":"node:reality"});
+    assert!(validate(&standard).is_err());
+}

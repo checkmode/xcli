@@ -238,6 +238,12 @@ impl SubscriptionStore {
     pub fn template_input(&mut self, user_id: &str) -> Result<ClashInput> {
         self.profile_input(user_id, false, None)
     }
+    /// Internal configuration for constructing an administrator's option
+    /// catalog. The settings may contain secrets and must never be returned or
+    /// logged directly.
+    pub fn template_context(&self) -> (Value, bool) {
+        (self.settings.clone(), self.dynamic_enabled())
+    }
     fn profile_input(
         &mut self,
         value: &str,

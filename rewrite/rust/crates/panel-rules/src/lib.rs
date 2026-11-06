@@ -70,6 +70,64 @@ fn network(value: &str, ipv6: bool) -> bool {
     }
 }
 
+/// Only selectable policy groups may carry a template default. DIRECT and
+/// REJECT are actions; oracle-cloud is a system-maintained direct route.
+pub fn configurable_group(base: &str, group: &str, custom: &BTreeSet<String>) -> bool {
+    group == "PROXY"
+        || (base == "standard" && group == "STUN")
+        || (base == "independent"
+            && matches!(
+                group,
+                "EaseLian"
+                    | "独立 · AI"
+                    | "独立 · Google"
+                    | "独立 · Telegram"
+                    | "独立 · YouTube"
+                    | "独立 · Netflix"
+                    | "独立 · 国外媒体"
+                    | "独立 · STUN"
+                    | "其他流量"
+            ))
+        || custom.contains(group)
+}
+
+fn default_choice(value: &str) -> bool {
+    if let Some(name) = value.strip_prefix("selector:") {
+        return matches!(name, "PROXY" | "DIRECT" | "直连" | "故障转移" | "自动选择");
+    }
+    if let Some(country) = value.strip_prefix("country:") {
+        return country.len() == 2 && country.bytes().all(|v| v.is_ascii_uppercase());
+    }
+    let Some(node) = value.strip_prefix("node:") else {
+        return false;
+    };
+    if matches!(
+        node,
+        "reality"
+            | "websocket"
+            | "vmess"
+            | "hysteria2"
+            | "hysteria2-brutal"
+            | "hysteria2-brutal-current"
+    ) {
+        return true;
+    }
+    if let Some(number) = node.strip_prefix("residential-") {
+        return number.len() == 2 && number.bytes().all(|v| v.is_ascii_digit());
+    }
+    let Some(remote) = node.strip_prefix("remote-") else {
+        return false;
+    };
+    let Some((id, transport)) = remote.split_once('-') else {
+        return false;
+    };
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+        && matches!(transport, "reality" | "websocket" | "hysteria2")
+}
+
 /// Interpret rules without changing their text or precedence.
 pub fn parse_rules(text: &str, base: &str, groups: &BTreeSet<String>) -> Result<Vec<Rule>> {
     if text.len() > 14000 {
@@ -171,11 +229,15 @@ pub fn parse_rules(text: &str, base: &str, groups: &BTreeSet<String>) -> Result<
 /// Validate and normalize a template exactly as the existing editor expects.
 pub fn validate(input: &Value) -> Result<Value> {
     let object = input.as_object().ok_or_else(|| invalid("模板格式不正确"))?;
-    if !(object.len() == 3 || object.len() == 4)
-        || !object.contains_key("base")
+    if !object.contains_key("base")
         || !object.contains_key("ai_outbound")
         || !object.contains_key("rules")
-        || (object.len() == 4 && !object.contains_key("groups"))
+        || object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "base" | "ai_outbound" | "rules" | "groups" | "group_defaults"
+            )
+        })
     {
         return Err(invalid("模板格式不正确"));
     }
@@ -263,6 +325,22 @@ pub fn validate(input: &Value) -> Result<Value> {
     let mut output = json!({"base":base,"ai_outbound":ai,"rules":rules});
     if !groups.is_empty() {
         output["groups"] = json!(groups);
+    }
+    if let Some(value) = input.get("group_defaults") {
+        let defaults = value
+            .as_object()
+            .filter(|items| items.len() <= 32)
+            .ok_or_else(|| invalid("分组默认出口格式不正确"))?;
+        for (group, choice) in defaults {
+            if !configurable_group(base, group, &names)
+                || !choice.as_str().is_some_and(default_choice)
+            {
+                return Err(invalid("分组或默认出口不属于当前模板"));
+            }
+        }
+        if !defaults.is_empty() {
+            output["group_defaults"] = json!(defaults);
+        }
     }
     Ok(output)
 }

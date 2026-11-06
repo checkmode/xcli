@@ -203,3 +203,88 @@ fn publish_and_assignment_validate_before_commit_and_reset_is_reversible() {
     assert_eq!(restored["templates"][0]["published_spec"]["rules"], "");
     assert_eq!(restored["templates"][0]["published_revision"], 3);
 }
+
+#[test]
+fn group_defaults_stay_in_draft_until_publish_and_survive_reset_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.sqlite");
+    fixture(&path);
+    let db = Connection::open(&path).unwrap();
+    db.execute("INSERT INTO users VALUES('u','测试用户',0,1)", [])
+        .unwrap();
+    let mut editor = RuleEditor::open(&path).unwrap();
+    let mut reader = RuleStore::open(&path, json!({})).unwrap();
+    editor
+        .assign("u", &json!({"template_id":"independent"}), 100, |_, _| {
+            Ok(())
+        })
+        .unwrap();
+    let mut draft = reader.catalog().unwrap()["templates"][1]["spec"].clone();
+    draft["group_defaults"] =
+        json!({"独立 · AI":"node:residential-41","独立 · Google":"selector:自动选择"});
+    editor
+        .update(
+            "independent",
+            &json!({"name":"独立服务分组","spec":draft,"expected_revision":1}),
+            101,
+        )
+        .unwrap();
+    assert!(reader
+        .effective("u")
+        .unwrap()
+        .get("group_defaults")
+        .is_none());
+    assert!(editor
+        .publish(
+            "independent",
+            &json!({"expected_revision":2}),
+            102,
+            |_, policy| {
+                assert_eq!(policy["group_defaults"]["独立 · AI"], "node:residential-41");
+                Err(RuleStoreError::Invalid("不可用".into()))
+            }
+        )
+        .is_err());
+    assert!(reader
+        .effective("u")
+        .unwrap()
+        .get("group_defaults")
+        .is_none());
+    editor
+        .publish(
+            "independent",
+            &json!({"expected_revision":2}),
+            103,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        reader.effective("u").unwrap()["group_defaults"]["独立 · Google"],
+        "selector:自动选择"
+    );
+    editor
+        .reset(
+            "independent",
+            &json!({"expected_revision":2}),
+            104,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert!(reader
+        .effective("u")
+        .unwrap()
+        .get("group_defaults")
+        .is_none());
+    editor
+        .undo_reset(
+            "independent",
+            &json!({"expected_revision":3}),
+            105,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        reader.effective("u").unwrap()["group_defaults"]["独立 · AI"],
+        "node:residential-41"
+    );
+}

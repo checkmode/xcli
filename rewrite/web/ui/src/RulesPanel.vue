@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import RuleWorkspace from './RuleWorkspace.vue';
 import { changeSelectedRules, parseRuleLines, type SystemRule } from './rule-list';
+import { validGroupOutbounds, type GroupOutbounds } from './group-defaults';
 
 type Group = { name: string; default: string };
-type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[] };
+type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[]; group_defaults?: Record<string, string> };
 type Template = { id: string; name: string; builtin: boolean; spec: Spec; revision: number; published: boolean;
   published_spec: Spec | null; published_revision: number; can_undo_reset?: boolean; factory_spec?: Spec };
 type User = { id: string; name: string; template_id: string; legacy_independent: boolean };
@@ -13,38 +14,41 @@ const emit = defineEmits<{ expired: []; policyChanged: [] }>();
 const templates = ref<Template[]>([]); const users = ref<User[]>([]); const selectedId = ref('');
 const systemRules = ref<Record<Spec['base'], SystemRule[]>>({ standard: [], independent: [] });
 const systemRulesAvailable = ref(false);
+const groupOutbounds = ref<Record<Spec['base'], GroupOutbounds>>({ standard: {}, independent: {} });
+const groupOutboundsAvailable = ref(false);
 const loading = ref(true); const busy = ref(false); const message = ref(''); const notice = ref('');
 const groupMessage = ref('');
 const creating = ref(false); const editingGroup = ref<number | null>(null);
 const importInput = ref<HTMLInputElement | null>(null);
 const ruleWorkspace = ref<InstanceType<typeof RuleWorkspace> | null>(null);
-const form = reactive({ name: '', base: 'standard' as Spec['base'], ai: 'proxy', rules: '', groups: [] as Group[] });
-const groupForm = reactive({ name: '', default: 'PROXY' });
+const form = reactive({ name: '', base: 'standard' as Spec['base'], ai: 'proxy', rules: '', groups: [] as Group[], groupDefaults: {} as Record<string, string> });
+const groupForm = reactive({ name: '' });
 const selected = computed(() => templates.value.find(item => item.id === selectedId.value) ?? null);
 const targets = computed(() => ['PROXY', 'DIRECT', 'REJECT', ...(form.base === 'standard' ? ['STUN'] :
   ['EaseLian', '独立 · AI', '独立 · Google', '独立 · Telegram', '独立 · YouTube', '独立 · Netflix', '独立 · 国外媒体', '独立 · STUN', '其他流量']),
   ...form.groups.map(group => group.name)]);
-const groupChoices = computed(() => ['PROXY', 'DIRECT', ...(form.base === 'independent' ? ['故障转移', '自动选择'] : [])]);
 const dirty = computed(() => !selected.value || creating.value || JSON.stringify({ name: form.name, spec: currentSpec() }) !==
   JSON.stringify({ name: selected.value.name, spec: selected.value.spec }));
 const pendingEditors = computed(() => Boolean(editingGroup.value !== null || groupForm.name.trim() || ruleWorkspace.value?.hasPending));
-const hasUnsaved = computed(() => pendingEditors.value || (creating.value ? Boolean(form.name || form.rules || form.groups.length) : Boolean(selected.value && dirty.value)));
+const hasUnsaved = computed(() => pendingEditors.value || (creating.value ? Boolean(form.name || form.rules || form.groups.length || Object.keys(form.groupDefaults).length) : Boolean(selected.value && dirty.value)));
 const assignedCount = computed(() => users.value.filter(user => user.template_id === selectedId.value).length);
-watch(groupChoices, choices => { if (!choices.includes(groupForm.default)) groupForm.default = 'PROXY'; });
 
 function currentSpec(): Spec {
   const result: Spec = { base: form.base, ai_outbound: form.ai, rules: form.rules };
   if (form.groups.length) result.groups = form.groups.map(group => ({ name: group.name, default: group.default }));
+  if (Object.keys(form.groupDefaults).length) result.group_defaults = { ...form.groupDefaults };
   return result;
 }
 function updateRules(value: string) { form.rules = value; message.value = ''; notice.value = ''; }
+function updateGroupDefaults(value: Record<string, string>) { form.groupDefaults = value; message.value = ''; notice.value = ''; }
 function validSpec(value: unknown): value is Spec {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<Spec>;
-  const keys = Object.keys(value).sort().join(',');
-  return (keys === 'ai_outbound,base,rules' || keys === 'ai_outbound,base,groups,rules') &&
+  const keys = Object.keys(value);
+  return keys.every(key => ['ai_outbound', 'base', 'rules', 'groups', 'group_defaults'].includes(key)) &&
     (item.base === 'standard' || item.base === 'independent') && typeof item.ai_outbound === 'string' && typeof item.rules === 'string' &&
-    (item.groups === undefined || Array.isArray(item.groups) && item.groups.every(group => group && typeof group.name === 'string' && typeof group.default === 'string'));
+    (item.groups === undefined || Array.isArray(item.groups) && item.groups.every(group => group && typeof group.name === 'string' && typeof group.default === 'string')) &&
+    (item.group_defaults === undefined || Boolean(item.group_defaults && typeof item.group_defaults === 'object' && !Array.isArray(item.group_defaults) && Object.values(item.group_defaults).every(value => typeof value === 'string')));
 }
 function validSystemRule(value: unknown): value is SystemRule {
   return Boolean(value && typeof value === 'object' &&
@@ -53,12 +57,12 @@ function validSystemRule(value: unknown): value is SystemRule {
 function open(item: Template) {
   selectedId.value = item.id; creating.value = false;
   form.name = item.name; form.base = item.spec.base; form.ai = item.spec.ai_outbound; form.rules = item.spec.rules;
-  form.groups = (item.spec.groups ?? []).map(group => ({ ...group })); cancelGroup(); message.value = ''; notice.value = '';
+  form.groups = (item.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...item.spec.group_defaults }; cancelGroup(); message.value = ''; notice.value = '';
 }
 function startNew() {
   if (hasUnsaved.value && !window.confirm('当前修改尚未保存，继续新建？')) return;
   selectedId.value = ''; creating.value = true; form.name = ''; form.base = 'standard'; form.ai = 'proxy'; form.rules = '';
-  form.groups = []; cancelGroup(); message.value = ''; notice.value = '';
+  form.groups = []; form.groupDefaults = {}; cancelGroup(); message.value = ''; notice.value = '';
 }
 function selectItem(item: Template) {
   if (selectedId.value === item.id && !creating.value) return;
@@ -87,6 +91,9 @@ async function refresh(id?: string): Promise<boolean> {
     systemRulesAvailable.value = Boolean(generated && Array.isArray(generated.standard) && Array.isArray(generated.independent) &&
       generated.standard.every(validSystemRule) && generated.independent.every(validSystemRule));
     systemRules.value = systemRulesAvailable.value ? { standard: generated!.standard as SystemRule[], independent: generated!.independent as SystemRule[] } : { standard: [], independent: [] };
+    const outbounds = 'group_outbounds' in body && body.group_outbounds && typeof body.group_outbounds === 'object' ? body.group_outbounds as Record<string, unknown> : null;
+    groupOutboundsAvailable.value = Boolean(outbounds && validGroupOutbounds(outbounds.standard) && validGroupOutbounds(outbounds.independent));
+    groupOutbounds.value = groupOutboundsAvailable.value ? { standard: outbounds!.standard as GroupOutbounds, independent: outbounds!.independent as GroupOutbounds } : { standard: {}, independent: {} };
     templates.value = next; users.value = nextUsers;
     const item = next.find(template => template.id === (id ?? selectedId.value)) ?? next[0];
     if (item) open(item);
@@ -146,11 +153,11 @@ async function assign(user: User, event: Event) {
 const reservedGroups = new Set(['DIRECT', 'REJECT', 'PROXY', 'STUN', '直连', '故障转移', '自动选择', '住宅节点',
   'EaseLian', '独立 · AI', '独立 · Google', '独立 · Telegram', '独立 · YouTube', '独立 · Netflix',
   '独立 · 国外媒体', '独立 · STUN', '其他流量', 'oracle-cloud']);
-function cancelGroup() { editingGroup.value = null; groupForm.name = ''; groupForm.default = 'PROXY'; groupMessage.value = ''; }
+function cancelGroup() { editingGroup.value = null; groupForm.name = ''; groupMessage.value = ''; }
 function editGroup(index: number) {
   const group = form.groups[index]; if (!group) return;
   if ((editingGroup.value !== null || groupForm.name.trim()) && !window.confirm('当前分组尚未添加或更新，切换后会丢失，继续？')) return;
-  editingGroup.value = index; groupForm.name = group.name; groupForm.default = group.default; groupMessage.value = '';
+  editingGroup.value = index; groupForm.name = group.name; groupMessage.value = '';
 }
 function addGroup() {
   const name = groupForm.name.trim();
@@ -158,18 +165,21 @@ function addGroup() {
       reservedGroups.has(name) || form.groups.some((group, index) => group.name === name && index !== editingGroup.value)) {
     groupMessage.value = '分组名称为空、过长、重复或与内置名称冲突。'; return;
   }
-  if (!groupChoices.value.includes(groupForm.default)) { groupMessage.value = '请选择当前模板支持的默认出口。'; return; }
   if (editingGroup.value !== null) {
     const group = form.groups[editingGroup.value]; if (!group) { groupMessage.value = '分组已变化，请重新选择。'; return; }
     if (group.name !== name) {
       if (ruleWorkspace.value?.hasPending) { groupMessage.value = '请先完成正在编辑的规则，再修改分组名称。'; return; }
       const references = parseRuleLines(form.rules).filter(line => line.fields?.[2] === group.name).map(line => line.index);
       form.rules = changeSelectedRules(form.rules, new Set(references), { type: 'target', target: name });
+      if (group.name in form.groupDefaults) {
+        const defaults = { ...form.groupDefaults, [name]: form.groupDefaults[group.name]! };
+        delete defaults[group.name]; form.groupDefaults = defaults;
+      }
     }
-    form.groups[editingGroup.value] = { name, default: groupForm.default };
+    form.groups[editingGroup.value] = { ...group, name };
   } else {
     if (form.groups.length >= 16) { groupMessage.value = '最多添加 16 个分组。'; return; }
-    form.groups.push({ name, default: groupForm.default });
+    form.groups.push({ name, default: 'PROXY' });
   }
   cancelGroup(); message.value = ''; notice.value = '';
 }
@@ -180,7 +190,9 @@ function removeGroup(index: number) {
   }
   if (editingGroup.value === index) cancelGroup();
   else if (editingGroup.value !== null && editingGroup.value > index) editingGroup.value--;
-  form.groups.splice(index, 1); groupMessage.value = '';
+  form.groups.splice(index, 1);
+  const defaults = { ...form.groupDefaults }; delete defaults[group.name]; form.groupDefaults = defaults;
+  groupMessage.value = '';
 }
 async function validateTransfer(name: string, spec: Spec): Promise<{ name: string; spec: Spec }> {
   const input = { name, spec };
@@ -214,7 +226,7 @@ async function importTemplate(event: Event) {
     const validated = await validateTransfer(value.template.name, value.template.spec);
     if (hasUnsaved.value && !window.confirm('导入会替换当前未保存的内容，继续？')) return;
     form.name = validated.name; form.base = validated.spec.base; form.ai = validated.spec.ai_outbound; form.rules = validated.spec.rules;
-    form.groups = (validated.spec.groups ?? []).map(group => ({ ...group })); cancelGroup(); notice.value = '模板已导入，请检查后保存。';
+    form.groups = (validated.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...validated.spec.group_defaults }; cancelGroup(); notice.value = '模板已导入，请检查后保存。';
   } catch (error) { message.value = error instanceof Error ? error.message : '导入失败。'; }
 }
 onMounted(() => { void refresh(); });
@@ -239,23 +251,21 @@ onMounted(() => { void refresh(); });
         <div class="template-meta">
           <label>模板名称<input v-model="form.name" maxlength="60" required :disabled="busy"></label>
           <label>基础模板<select v-model="form.base" :disabled="busy"><option value="standard">标准分流</option><option value="independent">独立服务分组</option></select></label>
-          <label>AI 默认出口<select v-model="form.ai" :disabled="busy"><option value="proxy">自动选择</option><option value="reality">REALITY</option><option value="websocket">HTTPS</option><option value="hysteria2">Hysteria 2</option><option value="vmess">VMess</option><option v-for="n in 40" :key="n" :value="`residential-${String(n).padStart(2, '0')}`">住宅 {{ String(n).padStart(2, '0') }}</option></select></label>
         </div>
         <details class="group-management">
           <summary><strong>添加分组</strong><span>{{ form.groups.length }} / 16</span></summary>
-          <p>添加或管理自定义分组，将其用作规则目标；内置分组可直接选择。</p>
+          <p>添加或管理自定义分组；选择分组后可设置默认出口。</p>
           <div v-for="(group, index) in form.groups" :key="index" class="group-line">
-            <span>{{ group.name }}</span><span>默认：{{ group.default }}</span>
+            <span>{{ group.name }}</span>
             <div><button type="button" :disabled="busy" @click="editGroup(index)">编辑</button><button type="button" :disabled="busy" @click="removeGroup(index)">移除</button></div>
           </div>
           <div class="group-editor"><input v-model="groupForm.name" aria-label="分组名称" placeholder="分组名称" maxlength="64" :disabled="busy">
-            <select v-model="groupForm.default" aria-label="分组默认出口" :disabled="busy"><option v-for="choice in groupChoices" :key="choice">{{ choice }}</option></select>
             <button type="button" :disabled="busy || (editingGroup === null && form.groups.length >= 16)" @click="addGroup">{{ editingGroup === null ? '添加分组' : '更新分组' }}</button>
             <button v-if="editingGroup !== null || groupForm.name.trim()" type="button" :disabled="busy" @click="cancelGroup">取消</button>
           </div>
           <p v-if="groupMessage" class="message" role="alert">{{ groupMessage }}</p>
         </details>
-        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :busy="busy" @update:rules="updateRules" />
+        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :group-outbounds="groupOutbounds[form.base]" :group-outbounds-available="groupOutboundsAvailable" :group-defaults="form.groupDefaults" :custom-groups="form.groups" :legacy-ai="form.ai" :busy="busy" @update:rules="updateRules" @update:group-defaults="updateGroupDefaults" />
         <div class="editor-actions"><button v-if="selected?.builtin && !creating" type="button" :disabled="busy" @click="templateAction('reset')">恢复默认</button><button v-if="selected?.can_undo_reset && !creating" type="button" :disabled="busy" @click="templateAction('undo-reset')">撤销恢复</button><button type="button" :disabled="busy || !form.name.trim()" @click="save">保存草稿</button><button class="primary" type="button" :disabled="busy || creating || dirty" @click="templateAction('publish')">发布</button></div>
       </div>
     </div>

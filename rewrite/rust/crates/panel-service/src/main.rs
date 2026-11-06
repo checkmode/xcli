@@ -1699,11 +1699,15 @@ fn validate_template_profile(
     )
     .map_err(map_error)?;
     let independent = policy.get("base").and_then(serde_json::Value::as_str) == Some("independent");
+    let defaults = policy
+        .get("group_defaults")
+        .and_then(serde_json::Value::as_object);
     if independent
         && policy
             .get("ai_outbound")
             .and_then(serde_json::Value::as_str)
             != Some("proxy")
+        && !defaults.is_some_and(|values| values.contains_key("独立 · AI"))
     {
         let unavailable = config
             .get("proxy-groups")
@@ -1723,6 +1727,23 @@ fn validate_template_profile(
             return Err(RuleStoreError::Invalid("AI 默认出口当前不可用".into()));
         }
     }
+    for group in defaults.into_iter().flat_map(|values| values.keys()) {
+        let first = config
+            .get("proxy-groups")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|item| item.get("name").and_then(serde_json::Value::as_str) == Some(group))
+            .and_then(|item| item.get("proxies"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(serde_json::Value::as_str);
+        if first.is_none() || first == Some("REJECT") {
+            return Err(RuleStoreError::Invalid(format!(
+                "分组 {group} 的默认出口对该用户不可用"
+            )));
+        }
+    }
     let has_rules = policy
         .get("rules")
         .and_then(serde_json::Value::as_str)
@@ -1731,7 +1752,7 @@ fn validate_template_profile(
         .get("groups")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|v| !v.is_empty());
-    if independent || has_rules || has_groups {
+    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) {
         let user = xcli_panel_shadowrocket::User {
             id: input.user_id,
             name: input.name,
@@ -1940,6 +1961,40 @@ async fn list_rule_templates(State(app): State<App>, headers: HeaderMap) -> Resp
         let independent = xcli_panel_clash::system_rules_preview(domain, "independent")
             .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
         catalog["system_rules"] = json!({"standard":standard,"independent":independent});
+        let (settings, dynamic_enabled) = app
+            .subscription
+            .as_ref()
+            .ok_or(RuleCatalogError::Store(RuleStoreError::Unavailable))?
+            .lock()
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?
+            .template_context();
+        let listed = app
+            .nodes
+            .lock()
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?
+            .list()
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
+        let remote = listed
+            .get("nodes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(RuleCatalogError::Store(RuleStoreError::Unavailable))?
+            .iter()
+            .filter(|node| {
+                node.get("enabled").and_then(serde_json::Value::as_bool) == Some(true)
+                    && node
+                        .get("applied_revision")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                    && node
+                        .get("users")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|users| !users.is_empty())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        catalog["group_outbounds"] =
+            xcli_panel_clash::template_group_catalog(&settings, &remote, dynamic_enabled)
+                .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
         Ok(catalog)
     })
     .await;

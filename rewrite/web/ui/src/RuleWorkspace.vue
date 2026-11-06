@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, parseRuleLines, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine, type SystemRule } from './rule-list';
+import { inheritedGroupDefault, outboundLabel, type CustomGroup, type GroupOutbounds } from './group-defaults';
 
-const props = defineProps<{ rules: string; targets: string[]; systemRules: SystemRule[]; systemRulesAvailable: boolean; busy: boolean }>();
-const emit = defineEmits<{ 'update:rules': [value: string] }>();
+const props = defineProps<{ rules: string; targets: string[]; systemRules: SystemRule[]; systemRulesAvailable: boolean;
+  groupOutbounds: GroupOutbounds; groupOutboundsAvailable: boolean; groupDefaults: Record<string, string>; customGroups: CustomGroup[]; legacyAi: string; busy: boolean }>();
+const emit = defineEmits<{ 'update:rules': [value: string]; 'update:group-defaults': [value: Record<string, string>] }>();
 const filters = reactive({ query: '', kind: '', resolution: '', selectedOnly: false });
 const selectedTarget = ref('');
 const groupPickerOpen = ref(false);
@@ -28,9 +30,16 @@ const allChecked = computed(() => visibleRules.value.length > 0 && visibleSelect
 const someChecked = computed(() => visibleSelected.value > 0 && !allChecked.value);
 const globalFiltersActive = computed(() => Boolean(filters.query.trim() || filters.kind || filters.resolution || filters.selectedOnly));
 const filterActive = computed(() => Boolean(globalFiltersActive.value || selectedTarget.value));
-const filterTargets = computed(() => [...new Set([...props.targets, ...props.systemRules.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])]);
+const filterTargets = computed(() => [...new Set([...props.targets, ...Object.keys(props.groupDefaults), ...props.systemRules.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])]);
 const filterKinds = computed(() => [...new Set([...ruleKinds, ...props.systemRules.map(rule => rule.kind)])]);
 const groupCounts = computed(() => countRulesByTarget(lines.value, props.systemRules, effectiveFilters.value, selectedSet.value));
+const groupDescriptor = computed(() => props.groupOutbounds[selectedTarget.value] ??
+  (props.customGroups.some(group => group.name === selectedTarget.value) ? props.groupOutbounds.__custom__ : undefined));
+const inheritedDefault = computed(() => groupDescriptor.value ? inheritedGroupDefault(selectedTarget.value, props.legacyAi, props.customGroups, groupDescriptor.value) : null);
+const selectedDefault = computed(() => props.groupDefaults[selectedTarget.value] ?? '');
+const defaultUnavailable = computed(() => Boolean(selectedDefault.value && groupDescriptor.value && !groupDescriptor.value.options.some(option => option.value === selectedDefault.value)));
+const orphanedDefaults = computed(() => props.groupOutboundsAvailable ? Object.keys(props.groupDefaults).filter(group =>
+  !props.groupOutbounds[group] && !props.customGroups.some(item => item.name === group)) : []);
 const hasPending = computed(() => editLine.value !== null || Boolean(lineForm.value.trim()));
 defineExpose({ hasPending });
 
@@ -57,6 +66,11 @@ function chooseGroup(target: string) {
 function openGroups() {
   groupPickerOpen.value = true;
   void nextTick(() => groupPicker.value?.scrollIntoView({ block: 'start' }));
+}
+function setGroupDefault(value: string) {
+  const defaults = { ...props.groupDefaults };
+  if (value) defaults[selectedTarget.value] = value; else delete defaults[selectedTarget.value];
+  emit('update:group-defaults', defaults);
 }
 function cancelLine() {
   editLine.value = null; lineForm.value = ''; lineForm.option = ''; error.value = '';
@@ -131,6 +145,7 @@ function openRaw(event: MouseEvent) {
         <button type="button" :class="{ active: !selectedTarget }" :aria-pressed="!selectedTarget" @click="chooseGroup('')"><span>全部分组</span><span>{{ groupCounts.total }}</span></button>
         <button v-for="target in filterTargets" :key="target" type="button" :class="{ active: selectedTarget === target }" :aria-pressed="selectedTarget === target" @click="chooseGroup(target)"><span>{{ target }}</span><span>{{ groupCounts.counts.get(target) ?? 0 }}</span></button>
       </div>
+      <p v-if="orphanedDefaults.length" class="group-default-warning">{{ orphanedDefaults.length }} 个分组不属于当前基础模板，请选择后移除其默认出口。</p>
     </nav>
     <div class="rule-list-pane">
       <div ref="ruleHeading" class="subheading rule-list-heading">
@@ -172,7 +187,23 @@ function openRaw(event: MouseEvent) {
       </div>
       <details class="raw-rules"><summary @click="openRaw">编辑规则文本</summary><textarea :value="rules" rows="8" spellcheck="false" aria-label="规则文本" :disabled="busy || hasPending" @input="updateRaw"></textarea><p v-if="hasPending">请先完成或取消当前规则编辑。</p></details>
     </div>
-    <aside class="rule-editor-pane" aria-label="规则编辑">
+    <aside class="rule-side" aria-label="分组与规则编辑">
+    <div v-if="selectedTarget" class="group-settings-pane">
+      <h4>分组设置</h4><p class="group-settings-name">{{ selectedTarget }}</p>
+      <template v-if="groupDescriptor">
+        <label>默认出口<select :value="selectedDefault" :disabled="busy || !groupOutboundsAvailable" @change="setGroupDefault(($event.target as HTMLSelectElement).value)">
+          <option value="">沿用原有默认：{{ outboundLabel(inheritedDefault, groupDescriptor.options) }}</option>
+          <option v-if="defaultUnavailable" :value="selectedDefault" disabled>{{ outboundLabel(selectedDefault, groupDescriptor.options) }}</option>
+          <option v-for="option in groupDescriptor.options" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select></label>
+        <p>保存并发布后生效；客户端可能保留手动选择。节点按用户授权校验。</p>
+      </template>
+      <p v-else-if="!groupOutboundsAvailable">当前无法获取可用出口，请稍后刷新。</p>
+      <template v-else-if="selectedDefault"><p>此分组不属于当前基础模板。</p><button type="button" :disabled="busy" @click="setGroupDefault('')">移除默认出口设置</button></template>
+      <p v-else-if="selectedTarget === 'oracle-cloud'">系统分组固定直连。</p>
+      <p v-else>这是规则动作，没有默认出口。</p>
+    </div>
+    <div class="rule-editor-pane" aria-label="规则编辑">
       <div><h4>{{ editLine === null ? '添加规则' : '编辑规则' }}</h4><p v-if="editLine !== null">正在修改第 {{ editLine + 1 }} 行</p><p v-else-if="selectedTarget && !targets.includes(selectedTarget)">此分组由系统维护，新增规则请选择可编辑目标。</p><p v-else>选择类型和目标后添加。</p></div>
       <label>规则类型<select v-model="lineForm.kind" :disabled="busy"><option v-for="kind in ruleKinds" :key="kind">{{ kind }}</option></select></label>
       <label>匹配内容<input ref="ruleInput" v-model="lineForm.value" placeholder="域名、网段或端口" :disabled="busy"></label>
@@ -184,6 +215,7 @@ function openRaw(event: MouseEvent) {
       <label v-if="editLine === null">添加位置<select v-model="lineForm.position" :disabled="busy"><option value="end">模板末尾</option><option value="start">模板最前（优先匹配）</option></select></label>
       <p v-if="error" class="message" role="alert">{{ error }}</p>
       <div class="rule-editor-actions"><button class="primary" type="button" :disabled="busy" @click="saveLine">{{ editLine === null ? '添加规则' : '更新规则' }}</button><button v-if="hasPending" type="button" :disabled="busy" @click="cancelLine">取消</button></div>
+    </div>
     </aside>
   </div>
 </template>

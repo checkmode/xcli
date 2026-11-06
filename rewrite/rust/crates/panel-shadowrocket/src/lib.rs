@@ -101,9 +101,15 @@ fn valid_metadata(user: &User, domain: &str, address: &str) -> Result<()> {
     Ok(())
 }
 fn categorized(policy: &Value) -> Result<bool> {
+    let defaults = match policy.get("group_defaults") {
+        Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
+        None => false,
+    };
     Ok(field(policy, "base")? == "independent"
         || (flag(policy, "managed", false)?
-            && (!field(policy, "rules")?.is_empty() || !list(policy, "groups")?.is_empty())))
+            && (!field(policy, "rules")?.is_empty()
+                || !list(policy, "groups")?.is_empty()
+                || defaults)))
 }
 pub fn setup(settings: &Value, user: &User, policy: &Value) -> Result<Value> {
     let categorized = categorized(policy)?;

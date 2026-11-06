@@ -165,7 +165,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .template-list button span { color: #637084; font-size: 11px; font-weight: 400; }
 .template-editor { min-width: 0; }
 .template-editor h3, .template-users h3 { margin: 0; font-size: 14px; }
-.template-meta { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 9px; margin-top: 15px; }
+.template-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 15px; }
 .subheading { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
 .subheading h4 { margin: 0; font-size: 12px; }
 .subheading span { color: #61718a; font-size: 11px; }
@@ -174,7 +174,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .group-management summary span { float: right; color: var(--muted); }
 .group-management > p { margin-top: 9px; color: var(--muted); font-size: 11px; }
 .group-management > p.message { color: #b43a40; }
-.group-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--soft-line); font-size: 12px; }
+.group-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--soft-line); font-size: 12px; }
 .group-line > span { min-width: 0; overflow-wrap: anywhere; }
 .group-line > div { display: flex; gap: 5px; }
 .group-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -198,6 +198,7 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .group-picker-items button span:last-child { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .group-picker-items button.active { border-color: #a8c9f5; color: #174b90; background: #eef5ff; }
 .group-picker-items button.active span:last-child { color: #3565a2; }
+.group-default-warning { margin: 8px 3px 0; color: #a75c20; font-size: 11px; line-height: 1.5; }
 .rule-list-heading { flex-wrap: wrap; gap: 8px; margin: 0 0 10px; scroll-margin-top: 125px; }
 .rule-list-heading > div:first-child { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
 .rule-list-heading h4, .rule-editor-pane h4 { margin: 0; font-size: 13px; }
@@ -225,7 +226,14 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .raw-rules { margin-top: 12px; font-size: 12px; }
 .raw-rules summary { cursor: pointer; }
 .raw-rules textarea { margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
-.rule-editor-pane { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid #e4ebf4; border-radius: 10px; background: #f8fafc; }
+.rule-side { display: grid; gap: 12px; min-width: 0; }
+.group-settings-pane, .rule-editor-pane { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid #e4ebf4; border-radius: 10px; background: #f8fafc; }
+.group-settings-pane h4 { margin: 0; font-size: 13px; }
+.group-settings-pane .group-settings-name { margin: -5px 0 0; color: #315f9f; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.group-settings-pane p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.group-settings-pane label { gap: 5px; font-size: 11px; }
+.group-settings-pane select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
+.group-settings-pane button { min-height: 30px; padding: 5px 9px; font-size: 11px; }
 .rule-editor-pane .message { margin: 0; }
 .rule-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .template-users { margin-top: 26px; }

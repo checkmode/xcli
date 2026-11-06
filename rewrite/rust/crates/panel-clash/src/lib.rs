@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
+mod group_defaults;
 use xcli_panel_rules::{
     apply_client_policy, apply_google_policy, apply_template_rules, factory_independent_rules,
     ApplyError,
@@ -105,6 +106,17 @@ pub fn build(
     dynamic_enabled: bool,
     policy: &Value,
 ) -> Result<Value> {
+    build_with_outbound(settings, user, remote_nodes, dynamic_enabled, policy)
+        .map(|(config, _)| config)
+}
+
+fn build_with_outbound(
+    settings: &Value,
+    user: &User,
+    remote_nodes: &[Value],
+    dynamic_enabled: bool,
+    policy: &Value,
+) -> Result<(Value, BTreeMap<String, String>)> {
     let address = field(settings, "public_ip")?;
     let domain = field(settings, "domain")?;
     let public_port = number(settings, "public_port", 443)?;
@@ -472,12 +484,22 @@ pub fn build(
             .ok_or_else(invalid)?
             .shift_remove("managed");
         apply_template_rules(&mut result, &spec, &baseline, factory_independent_rules())?;
+        group_defaults::apply(&mut result, settings, &outbound, &spec)?;
     }
     if independent {
         apply_google_policy(&mut result)?;
     }
     apply_oracle(&mut result)?;
-    Ok(result)
+    Ok((result, outbound))
+}
+
+/// Describes available defaults without returning generated proxy credentials.
+pub fn template_group_catalog(
+    settings: &Value,
+    remote_nodes: &[Value],
+    dynamic_enabled: bool,
+) -> Result<Value> {
+    group_defaults::catalog(settings, remote_nodes, dynamic_enabled)
 }
 
 /// Describe the system-provided base rules using the same generator as a
