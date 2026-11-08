@@ -80,10 +80,31 @@ fn system_rule_edits_validate_fields_and_keep_legacy_specs_unchanged() {
     let mut spec = old.clone();
     spec["system_overrides"] = json!({(id.clone()):{"kind":"DOMAIN-SUFFIX","value":"oraclecloud.com","target":"PROXY","option":""}});
     assert_eq!(validate(&spec).unwrap(), spec);
-    spec["system_overrides"][&id] = json!({"kind":"GEOSITE","value":"geolocation-!cn","target":"DIRECT","option":""});
+    spec["system_overrides"][&id] =
+        json!({"kind":"GEOSITE","value":"geolocation-!cn","target":"DIRECT","option":""});
     assert!(validate(&spec).is_ok());
-    spec["system_overrides"][&id] = json!({"kind":"GEOSITE","value":"../private","target":"DIRECT","option":""});
+    spec["system_overrides"][&id] =
+        json!({"kind":"GEOSITE","value":"../private","target":"DIRECT","option":""});
     assert!(validate(&spec).is_err());
-    spec["system_overrides"][&id] = json!({"kind":"DOMAIN","value":"example.com","target":"未知","option":""});
+    spec["system_overrides"][&id] =
+        json!({"kind":"DOMAIN","value":"example.com","target":"未知","option":""});
     assert!(validate(&spec).is_err());
+}
+
+#[test]
+fn builtin_group_names_allow_valid_aliases_without_conflicts() {
+    let mut spec = json!({"base":"independent","ai_outbound":"proxy","rules":"",
+        "groups":[{"name":"工作","default":"PROXY"}],
+        "group_names":{"独立 · AI":"人工智能","PROXY":"默认代理"}});
+    assert_eq!(validate(&spec).unwrap(), spec);
+    for bad in [
+        json!({"DIRECT":"直连改名"}),
+        json!({"独立 · AI":"DIRECT"}),
+        json!({"独立 · AI":"工作"}),
+        json!({"独立 · AI":"同名","独立 · Google":"同名"}),
+        json!({"独立 · AI":"有,逗号"}),
+    ] {
+        spec["group_names"] = bad;
+        assert!(validate(&spec).is_err());
+    }
 }

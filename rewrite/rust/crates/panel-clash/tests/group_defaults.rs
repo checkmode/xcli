@@ -129,16 +129,61 @@ fn group_order_changes_display_only_and_preserves_other_configuration() {
     let base = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true});
     let old = build(&settings(), &user(), &[], false, &base).unwrap();
     let mut reordered = base.clone();
-    reordered["group_order"] = json!(["独立 · Google", "DIRECT", "独立 · AI", "PROXY", "oracle-cloud"]);
+    reordered["group_order"] = json!([
+        "独立 · Google",
+        "DIRECT",
+        "独立 · AI",
+        "PROXY",
+        "oracle-cloud"
+    ]);
     let new = build(&settings(), &user(), &[], false, &reordered).unwrap();
     for key in ["rules", "dns", "proxies", "rule-providers"] {
         assert_eq!(new[key], old[key], "{key}");
     }
-    let names: Vec<&str> = new["proxy-groups"].as_array().unwrap().iter()
-        .map(|group| group["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = new["proxy-groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| group["name"].as_str().unwrap())
+        .collect();
     let position = |name| names.iter().position(|item| *item == name).unwrap();
     assert!(position("独立 · Google") < position("独立 · AI"));
     assert!(position("独立 · AI") < position("PROXY"));
     assert!(position("PROXY") < position("oracle-cloud"));
     assert_eq!(first(&new, "oracle-cloud"), "DIRECT");
+}
+
+#[test]
+fn builtin_names_update_groups_rules_and_dns_without_changing_priority() {
+    let policy = json!({"base":"independent","ai_outbound":"proxy","managed":true,
+        "rules":"DOMAIN,api.example.com,独立 · AI\nDOMAIN-SUFFIX,example.com,独立 · Google\n",
+        "group_order":["独立 · Google","独立 · AI","PROXY"],
+        "group_defaults":{"独立 · AI":"node:reality"},
+        "group_names":{"独立 · AI":"人工智能","独立 · Google":"谷歌","PROXY":"默认代理"}});
+    let config = build(&settings(), &user(), &[], false, &policy).unwrap();
+    assert_eq!(first(&config, "人工智能"), "REALITY");
+    let groups = config["proxy-groups"].as_array().unwrap();
+    let position = |name| {
+        groups
+            .iter()
+            .position(|group| group["name"] == name)
+            .unwrap()
+    };
+    assert!(position("谷歌") < position("人工智能") && position("人工智能") < position("默认代理"));
+    let rules = config["rules"].as_array().unwrap();
+    let ai = rules
+        .iter()
+        .position(|rule| rule == "DOMAIN,api.example.com,人工智能")
+        .unwrap();
+    let google = rules
+        .iter()
+        .position(|rule| rule == "DOMAIN-SUFFIX,example.com,谷歌")
+        .unwrap();
+    assert!(ai < google);
+    let dns = serde_json::to_string(&config["dns"]).unwrap();
+    assert!(dns.contains("#人工智能") && dns.contains("#默认代理"));
+    assert!(!dns.contains("#独立 · AI") && !dns.contains("#PROXY"));
+    let mut collision = policy.clone();
+    collision["group_names"]["独立 · AI"] = json!("REALITY");
+    assert!(build(&settings(), &user(), &[], false, &collision).is_err());
 }

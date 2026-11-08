@@ -5,7 +5,7 @@ import { changeSelectedRules, parseRuleLines, type SystemRule, type SystemRuleOv
 import { validGroupOutbounds, type GroupOutbounds } from './group-defaults';
 
 type Group = { name: string; default: string };
-type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[]; group_defaults?: Record<string, string>; group_order?: string[]; system_overrides?: Record<string, SystemRuleOverride> };
+type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[]; group_defaults?: Record<string, string>; group_order?: string[]; group_names?: Record<string, string>; system_overrides?: Record<string, SystemRuleOverride> };
 type Template = { id: string; name: string; builtin: boolean; spec: Spec; revision: number; published: boolean;
   published_spec: Spec | null; published_revision: number; can_undo_reset?: boolean; factory_spec?: Spec };
 type User = { id: string; name: string; template_id: string; legacy_independent: boolean };
@@ -21,7 +21,7 @@ const groupMessage = ref('');
 const creating = ref(false); const editingGroup = ref<number | null>(null);
 const importInput = ref<HTMLInputElement | null>(null);
 const ruleWorkspace = ref<InstanceType<typeof RuleWorkspace> | null>(null);
-const form = reactive({ name: '', base: 'standard' as Spec['base'], ai: 'proxy', rules: '', groups: [] as Group[], groupDefaults: {} as Record<string, string>, groupOrder: [] as string[], systemOverrides: {} as Record<string, SystemRuleOverride> });
+const form = reactive({ name: '', base: 'standard' as Spec['base'], ai: 'proxy', rules: '', groups: [] as Group[], groupDefaults: {} as Record<string, string>, groupOrder: [] as string[], groupNames: {} as Record<string, string>, systemOverrides: {} as Record<string, SystemRuleOverride> });
 const groupForm = reactive({ name: '' });
 const selected = computed(() => templates.value.find(item => item.id === selectedId.value) ?? null);
 const targets = computed(() => ['PROXY', 'DIRECT', 'REJECT', ...(form.base === 'standard' ? ['STUN'] :
@@ -30,7 +30,7 @@ const targets = computed(() => ['PROXY', 'DIRECT', 'REJECT', ...(form.base === '
 const dirty = computed(() => !selected.value || creating.value || JSON.stringify({ name: form.name, spec: currentSpec() }) !==
   JSON.stringify({ name: selected.value.name, spec: selected.value.spec }));
 const pendingEditors = computed(() => Boolean(editingGroup.value !== null || groupForm.name.trim() || ruleWorkspace.value?.hasPending));
-const hasUnsaved = computed(() => pendingEditors.value || (creating.value ? Boolean(form.name || form.rules || form.groups.length || form.groupOrder.length || Object.keys(form.groupDefaults).length || Object.keys(form.systemOverrides).length) : Boolean(selected.value && dirty.value)));
+const hasUnsaved = computed(() => pendingEditors.value || (creating.value ? Boolean(form.name || form.rules || form.groups.length || form.groupOrder.length || Object.keys(form.groupNames).length || Object.keys(form.groupDefaults).length || Object.keys(form.systemOverrides).length) : Boolean(selected.value && dirty.value)));
 const assignedCount = computed(() => users.value.filter(user => user.template_id === selectedId.value).length);
 function copyOverrides(value: Record<string, SystemRuleOverride>): Record<string, SystemRuleOverride> {
   return Object.fromEntries(Object.entries(value).map(([id, entry]) => [id, entry ? { ...entry } : null]));
@@ -41,6 +41,7 @@ function currentSpec(): Spec {
   if (form.groups.length) result.groups = form.groups.map(group => ({ name: group.name, default: group.default }));
   if (Object.keys(form.groupDefaults).length) result.group_defaults = { ...form.groupDefaults };
   if (form.groupOrder.length) result.group_order = [...form.groupOrder];
+  if (Object.keys(form.groupNames).length) result.group_names = { ...form.groupNames };
   if (Object.keys(form.systemOverrides).length) result.system_overrides = copyOverrides(form.systemOverrides);
   return result;
 }
@@ -52,11 +53,12 @@ function validSpec(value: unknown): value is Spec {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<Spec>;
   const keys = Object.keys(value);
-  return keys.every(key => ['ai_outbound', 'base', 'rules', 'groups', 'group_defaults', 'group_order', 'system_overrides'].includes(key)) &&
+  return keys.every(key => ['ai_outbound', 'base', 'rules', 'groups', 'group_defaults', 'group_order', 'group_names', 'system_overrides'].includes(key)) &&
     (item.base === 'standard' || item.base === 'independent') && typeof item.ai_outbound === 'string' && typeof item.rules === 'string' &&
     (item.groups === undefined || Array.isArray(item.groups) && item.groups.every(group => group && typeof group.name === 'string' && typeof group.default === 'string')) &&
     (item.group_defaults === undefined || Boolean(item.group_defaults && typeof item.group_defaults === 'object' && !Array.isArray(item.group_defaults) && Object.values(item.group_defaults).every(value => typeof value === 'string'))) &&
     (item.group_order === undefined || Array.isArray(item.group_order) && item.group_order.every(value => typeof value === 'string')) &&
+    (item.group_names === undefined || Boolean(item.group_names && typeof item.group_names === 'object' && !Array.isArray(item.group_names) && Object.values(item.group_names).every(value => typeof value === 'string'))) &&
     (item.system_overrides === undefined || Boolean(item.system_overrides && typeof item.system_overrides === 'object' && !Array.isArray(item.system_overrides) && Object.values(item.system_overrides).every(value => value === null || value && typeof value === 'object' && ['kind', 'value', 'target', 'option'].every(key => typeof (value as Record<string, unknown>)[key] === 'string'))));
 }
 function validSystemRule(value: unknown): value is SystemRule {
@@ -66,12 +68,12 @@ function validSystemRule(value: unknown): value is SystemRule {
 function open(item: Template) {
   selectedId.value = item.id; creating.value = false;
   form.name = item.name; form.base = item.spec.base; form.ai = item.spec.ai_outbound; form.rules = item.spec.rules;
-  form.groups = (item.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...item.spec.group_defaults }; form.groupOrder = [...(item.spec.group_order ?? [])]; form.systemOverrides = copyOverrides(item.spec.system_overrides ?? {}); cancelGroup(); message.value = ''; notice.value = '';
+  form.groups = (item.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...item.spec.group_defaults }; form.groupOrder = [...(item.spec.group_order ?? [])]; form.groupNames = { ...item.spec.group_names }; form.systemOverrides = copyOverrides(item.spec.system_overrides ?? {}); cancelGroup(); message.value = ''; notice.value = '';
 }
 function startNew() {
   if (hasUnsaved.value && !window.confirm('当前修改尚未保存，继续新建？')) return;
   selectedId.value = ''; creating.value = true; form.name = ''; form.base = 'standard'; form.ai = 'proxy'; form.rules = '';
-  form.groups = []; form.groupDefaults = {}; form.groupOrder = []; form.systemOverrides = {}; cancelGroup(); message.value = ''; notice.value = '';
+  form.groups = []; form.groupDefaults = {}; form.groupOrder = []; form.groupNames = {}; form.systemOverrides = {}; cancelGroup(); message.value = ''; notice.value = '';
 }
 function selectItem(item: Template) {
   if (selectedId.value === item.id && !creating.value) return;
@@ -171,7 +173,7 @@ function editGroup(index: number) {
 function addGroup() {
   const name = groupForm.name.trim();
   if (!name || new TextEncoder().encode(name).length > 64 || /[\x00-\x1f\x7f,=#]/.test(name) ||
-      reservedGroups.has(name) || form.groups.some((group, index) => group.name === name && index !== editingGroup.value)) {
+      reservedGroups.has(name) || Object.values(form.groupNames).includes(name) || form.groups.some((group, index) => group.name === name && index !== editingGroup.value)) {
     groupMessage.value = '分组名称为空、过长、重复或与内置名称冲突。'; return;
   }
   if (editingGroup.value !== null) {
@@ -193,6 +195,25 @@ function addGroup() {
     form.groups.push({ name, default: 'PROXY' });
   }
   cancelGroup(); message.value = ''; notice.value = '';
+}
+function renameSelectedGroup(original: string, name: string) {
+  const index = form.groups.findIndex(group => group.name === original);
+  if (index >= 0) {
+    const references = parseRuleLines(form.rules).filter(line => line.fields?.[2] === original).map(line => line.index);
+    form.rules = changeSelectedRules(form.rules, new Set(references), { type: 'target', target: name });
+    if (original in form.groupDefaults) {
+      const defaults = { ...form.groupDefaults, [name]: form.groupDefaults[original]! };
+      delete defaults[original]; form.groupDefaults = defaults;
+    }
+    form.groupOrder = form.groupOrder.map(item => item === original ? name : item);
+    form.systemOverrides = Object.fromEntries(Object.entries(form.systemOverrides).map(([id, value]) => [id, value && value.target === original ? { ...value, target: name } : value]));
+    form.groups[index] = { ...form.groups[index]!, name };
+  } else {
+    const names = { ...form.groupNames };
+    if (name === original) delete names[original]; else names[original] = name;
+    form.groupNames = names;
+  }
+  message.value = ''; notice.value = '分组名称已修改，请保存草稿并发布。';
 }
 function removeGroup(index: number) {
   const group = form.groups[index]; if (!group) return;
@@ -238,7 +259,7 @@ async function importTemplate(event: Event) {
     const validated = await validateTransfer(value.template.name, value.template.spec);
     if (hasUnsaved.value && !window.confirm('导入会替换当前未保存的内容，继续？')) return;
     form.name = validated.name; form.base = validated.spec.base; form.ai = validated.spec.ai_outbound; form.rules = validated.spec.rules;
-    form.groups = (validated.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...validated.spec.group_defaults }; form.groupOrder = [...(validated.spec.group_order ?? [])]; form.systemOverrides = copyOverrides(validated.spec.system_overrides ?? {}); cancelGroup(); notice.value = '模板已导入，请检查后保存。';
+    form.groups = (validated.spec.groups ?? []).map(group => ({ ...group })); form.groupDefaults = { ...validated.spec.group_defaults }; form.groupOrder = [...(validated.spec.group_order ?? [])]; form.groupNames = { ...validated.spec.group_names }; form.systemOverrides = copyOverrides(validated.spec.system_overrides ?? {}); cancelGroup(); notice.value = '模板已导入，请检查后保存。';
   } catch (error) { message.value = error instanceof Error ? error.message : '导入失败。'; }
 }
 onMounted(() => { void refresh(); });
@@ -277,7 +298,7 @@ onMounted(() => { void refresh(); });
           </div>
           <p v-if="groupMessage" class="message" role="alert">{{ groupMessage }}</p>
         </details>
-        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :system-overrides="form.systemOverrides" :group-outbounds="groupOutbounds[form.base]" :group-outbounds-available="groupOutboundsAvailable" :group-defaults="form.groupDefaults" :group-order="form.groupOrder" :custom-groups="form.groups" :legacy-ai="form.ai" :busy="busy" @update:rules="updateRules" @update:system-overrides="updateSystemOverrides" @update:group-defaults="updateGroupDefaults" @update:group-order="updateGroupOrder" />
+        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :system-overrides="form.systemOverrides" :group-outbounds="groupOutbounds[form.base]" :group-outbounds-available="groupOutboundsAvailable" :group-defaults="form.groupDefaults" :group-order="form.groupOrder" :group-names="form.groupNames" :custom-groups="form.groups" :legacy-ai="form.ai" :busy="busy" @update:rules="updateRules" @update:system-overrides="updateSystemOverrides" @update:group-defaults="updateGroupDefaults" @update:group-order="updateGroupOrder" @rename-group="renameSelectedGroup" />
         <div class="editor-actions"><button v-if="selected?.builtin && !creating" type="button" :disabled="busy" @click="templateAction('reset')">恢复默认</button><button v-if="selected?.can_undo_reset && !creating" type="button" :disabled="busy" @click="templateAction('undo-reset')">撤销恢复</button><button type="button" :disabled="busy || !form.name.trim()" @click="save">保存草稿</button><button class="primary" type="button" :disabled="busy || creating || dirty" @click="templateAction('publish')">发布</button></div>
       </div>
     </div>

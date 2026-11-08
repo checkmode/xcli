@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 mod group_defaults;
+mod group_names;
 mod system_overrides;
 use xcli_panel_rules::{
     apply_client_policy, apply_google_policy, apply_template_rules, factory_independent_rules,
@@ -494,6 +495,7 @@ fn build_with_outbound(
     if managed {
         system_overrides::apply(&mut result, policy, domain)?;
         group_defaults::order(&mut result, policy)?;
+        group_names::apply(&mut result, policy)?;
     }
     Ok((result, outbound))
 }

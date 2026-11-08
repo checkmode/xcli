@@ -1734,7 +1734,8 @@ fn validate_template_profile(
             .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
-            .find(|item| item.get("name").and_then(serde_json::Value::as_str) == Some(group))
+            .find(|item| item.get("name").and_then(serde_json::Value::as_str) == Some(
+                policy.get("group_names").and_then(|names| names.get(group)).and_then(serde_json::Value::as_str).unwrap_or(group)))
             .and_then(|item| item.get("proxies"))
             .and_then(serde_json::Value::as_array)
             .and_then(|items| items.first())
@@ -1761,7 +1762,8 @@ fn validate_template_profile(
         .get("system_overrides")
         .and_then(serde_json::Value::as_object)
         .is_some_and(|values| !values.is_empty());
-    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) || has_order || has_system {
+    let has_names = policy.get("group_names").and_then(serde_json::Value::as_object).is_some_and(|values| !values.is_empty());
+    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) || has_order || has_system || has_names {
         let user = xcli_panel_shadowrocket::User {
             id: input.user_id,
             name: input.name,

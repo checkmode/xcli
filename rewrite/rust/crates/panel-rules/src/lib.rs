@@ -235,7 +235,7 @@ pub fn validate(input: &Value) -> Result<Value> {
         || object.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "base" | "ai_outbound" | "rules" | "groups" | "group_defaults" | "group_order" | "system_overrides"
+                "base" | "ai_outbound" | "rules" | "groups" | "group_defaults" | "group_order" | "group_names" | "system_overrides"
             )
         })
     {
@@ -360,6 +360,30 @@ pub fn validate(input: &Value) -> Result<Value> {
         if !items.is_empty() {
             output["group_order"] = json!(items);
         }
+    }
+    if let Some(value) = input.get("group_names") {
+        let entries = value.as_object().filter(|entries| entries.len() <= 16)
+            .ok_or_else(|| invalid("分组名称格式不正确"))?;
+        let reserved = ["DIRECT", "REJECT", "PROXY", "STUN", "直连", "故障转移", "自动选择", "住宅节点",
+            "EaseLian", "独立 · AI", "独立 · Google", "独立 · Telegram", "独立 · YouTube", "独立 · Netflix",
+            "独立 · 国外媒体", "独立 · STUN", "其他流量", "oracle-cloud"];
+        let mut seen = names.clone();
+        let mut normalized = serde_json::Map::new();
+        for (group, value) in entries {
+            let name = value.as_str().ok_or_else(|| invalid("分组名称格式不正确"))?;
+            if !(group == "oracle-cloud" || configurable_group("standard", group, &BTreeSet::new())
+                || configurable_group("independent", group, &BTreeSet::new())) {
+                return Err(invalid("不能修改该分组名称"));
+            }
+            if name == group { continue; }
+            if name.is_empty() || name.len() > 64 || trim(name) != name || reserved.contains(&name)
+                || name.bytes().any(|c| c < 32 || c == 127 || b",=\r\n\t#".contains(&c))
+                || !seen.insert(name.to_owned()) {
+                return Err(invalid("分组名称无效、重复或与内置名称冲突"));
+            }
+            normalized.insert(group.clone(), json!(name));
+        }
+        if !normalized.is_empty() { output["group_names"] = Value::Object(normalized); }
     }
     if let Some(value) = input.get("system_overrides") {
         let items = value.as_object().filter(|items| items.len() <= 128)

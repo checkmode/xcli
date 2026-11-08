@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, moveRule, movedRuleIndex, parseRuleLines, selectVisibleRules } from '../ui/src/rule-list.ts';
+import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, moveRule, movedRuleIndex, parseRuleLines, remapRuleTargets, selectVisibleRules } from '../ui/src/rule-list.ts';
 
 const fixture = [
   '# AI rules',
@@ -15,6 +15,18 @@ const fixture = [
 ].join('\n');
 const defaults = { query: '', target: '', kind: '', resolution: '', selectedOnly: false };
 const contents = lines => lines.map(line => line.text);
+
+test('renamed groups remain searchable and rule text round trips without changing comments or values', () => {
+  const source = '# 独立 · AI\r\nDOMAIN,ai.example, 独立 · AI \r\nDOMAIN,other.example,DIRECT';
+  const names = { '独立 · AI': '人工智能' };
+  const display = remapRuleTargets(source, names);
+  assert.equal(display, '# 独立 · AI\r\nDOMAIN,ai.example, 人工智能 \r\nDOMAIN,other.example,DIRECT');
+  assert.equal(remapRuleTargets(display, { '人工智能': '独立 · AI' }), source);
+  assert.deepEqual(contents(filterRuleLines(parseRuleLines(source), { ...defaults, query: '人工智能' }, new Set(), names)),
+    ['DOMAIN,ai.example, 独立 · AI \r']);
+  const system = [{ kind:'DOMAIN', value:'ai.example', target:'独立 · AI', option:'', provider:'' }];
+  assert.equal(filterSystemRules(system, { ...defaults, query:'人工智能' }, names).length, 1);
+});
 
 test('moving a template rule changes precedence and preserves comments, selections and line endings', () => {
   const source = '# first\r\nDOMAIN,a.example,PROXY\r\n# other\r\nDOMAIN,b.example,DIRECT';

@@ -14,10 +14,10 @@ export function parseRuleLines(text: string): RuleLine[] {
   }).filter(line => line.text.trim() !== '');
 }
 
-export function filterRuleLines(lines: RuleLine[], filters: RuleFilters, selected: ReadonlySet<number>): RuleLine[] {
+export function filterRuleLines(lines: RuleLine[], filters: RuleFilters, selected: ReadonlySet<number>, names: Record<string, string> = {}): RuleLine[] {
   const query = filters.query.trim().toLowerCase();
   return lines.filter(line => {
-    if (query && !line.text.toLowerCase().includes(query)) return false;
+    if (query && !line.text.toLowerCase().includes(query) && !(line.fields?.[2] && names[line.fields[2]]?.toLowerCase().includes(query))) return false;
     if (filters.selectedOnly && (!line.fields || !selected.has(line.index))) return false;
     if (filters.target && (!line.fields || line.fields[2] !== filters.target)) return false;
     if (filters.kind && (!line.fields || line.fields[0] !== filters.kind)) return false;
@@ -27,11 +27,11 @@ export function filterRuleLines(lines: RuleLine[], filters: RuleFilters, selecte
   });
 }
 
-export function filterSystemRules(lines: SystemRule[], filters: RuleFilters): SystemRule[] {
+export function filterSystemRules(lines: SystemRule[], filters: RuleFilters, names: Record<string, string> = {}): SystemRule[] {
   if (filters.selectedOnly) return [];
   const query = filters.query.trim().toLowerCase();
   return lines.filter(line => {
-    if (query && ![line.kind, line.value, line.target, line.option, line.provider].some(value => value.toLowerCase().includes(query))) return false;
+    if (query && ![line.kind, line.value, line.target, names[line.target] ?? '', line.option, line.provider].some(value => value.toLowerCase().includes(query))) return false;
     if (filters.target && line.target !== filters.target) return false;
     if (filters.kind && line.kind !== filters.kind) return false;
     if (filters.resolution && (!resolutionKinds.includes(line.kind) || (line.option || 'default') !== filters.resolution)) return false;
@@ -40,15 +40,29 @@ export function filterSystemRules(lines: SystemRule[], filters: RuleFilters): Sy
 }
 
 /** Group counts reflect the global filters, irrespective of the selected group. */
-export function countRulesByTarget(lines: RuleLine[], system: SystemRule[], filters: RuleFilters, selected: ReadonlySet<number>): { counts: Map<string, number>; total: number } {
+export function countRulesByTarget(lines: RuleLine[], system: SystemRule[], filters: RuleFilters, selected: ReadonlySet<number>, names: Record<string, string> = {}): { counts: Map<string, number>; total: number } {
   const global = { ...filters, target: '' };
   const counts = new Map<string, number>();
-  for (const line of filterRuleLines(lines, global, selected)) {
+  for (const line of filterRuleLines(lines, global, selected, names)) {
     const target = line.fields?.[2];
     if (target) counts.set(target, (counts.get(target) ?? 0) + 1);
   }
-  for (const line of filterSystemRules(system, global)) if (!line.disabled) counts.set(line.target, (counts.get(line.target) ?? 0) + 1);
+  for (const line of filterSystemRules(system, global, names)) if (!line.disabled) counts.set(line.target, (counts.get(line.target) ?? 0) + 1);
   return { counts, total: [...counts.values()].reduce((sum, value) => sum + value, 0) };
+}
+
+/** Translate only rule targets; comments, values and original whitespace remain untouched. */
+export function remapRuleTargets(text: string, names: Record<string, string>): string {
+  const valid = new Set(parseRuleLines(text).filter(line => line.fields).map(line => line.index));
+  return text.split('\n').map((line, index) => {
+    if (!valid.has(index)) return line;
+    const parts = line.split(',');
+    const field = parts[2] ?? '';
+    const whitespace = /^(\s*)(.*?)(\s*)$/.exec(field);
+    const name = whitespace?.[2] ? names[whitespace[2]] : undefined;
+    if (name !== undefined) parts[2] = `${whitespace?.[1] ?? ''}${name}${whitespace?.[3] ?? ''}`;
+    return parts.join(',');
+  }).join('\n');
 }
 
 export function selectVisibleRules(selected: number[], visible: RuleLine[], checked: boolean): number[] {

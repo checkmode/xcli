@@ -113,11 +113,15 @@ fn categorized(policy: &Value) -> Result<bool> {
         Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
         None => false,
     };
+    let names = match policy.get("group_names") {
+        Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
+        None => false,
+    };
     Ok(field(policy, "base")? == "independent"
         || (flag(policy, "managed", false)?
             && (!field(policy, "rules")?.is_empty()
                 || !list(policy, "groups")?.is_empty()
-                || defaults || order || system)))
+                || defaults || order || system || names)))
 }
 pub fn setup(settings: &Value, user: &User, policy: &Value) -> Result<Value> {
     let categorized = categorized(policy)?;
@@ -274,6 +278,9 @@ struct BaseOptions<'a> {
     legacy_google: bool,
     geo_tail: &'a str,
     final_target: Option<&'a str>,
+    proxy_target: &'a str,
+    other_target: &'a str,
+    google_target: &'a str,
 }
 fn extend_base(
     base: &str,
@@ -386,7 +393,7 @@ fn extend_base(
                             (options.legacy_google
                                 && condition == "DOMAIN-KEYWORD,google"
                                 && &capture[2] == "PROXY")
-                                .then_some("XCLI-独立 · Google")
+                                .then_some(options.google_target)
                         });
                 if let Some(replacement) = replacement {
                     let target = capture.get(2).ok_or_else(invalid)?;
@@ -397,9 +404,9 @@ fn extend_base(
                 }
             }
             let target = if line.starts_with("FINAL,") && options.has_other {
-                "XCLI-其他流量"
+                options.other_target
             } else {
-                "XCLI-PROXY"
+                options.proxy_target
             };
             out.push_str(
                 &proxy_tail().replace(original, |capture: &regex::Captures<'_>| {
@@ -425,6 +432,40 @@ fn policy_name(name: &str, nodes: &BTreeMap<String, String>) -> String {
             .unwrap_or_else(|| format!("XCLI-{name}"))
     }
 }
+fn renamed_base(base: &str, policy: &Value) -> String {
+    let Some(names) = policy.get("group_names").and_then(Value::as_object).filter(|values| !values.is_empty()) else { return base.into(); };
+    let aliases: BTreeMap<String, String> = names.iter().filter_map(|(old, new)| new.as_str().map(|name| (format!("XCLI-{old}"), format!("XCLI-{name}")))).collect();
+    static TARGET: OnceLock<Regex> = OnceLock::new();
+    let target = TARGET.get_or_init(|| Regex::new(r"^(.+?,[ \t]*)(XCLI-[^,\r\n#]+?)([ \t]*(?:,[^#\r\n]*)?(?:[ \t]*#.*)?\r?\n?)$").unwrap());
+    let mut section = "";
+    let mut out = String::new();
+    for line in line_parts(base) {
+        let stripped = trim(line);
+        if let Some(capture) = header().captures(stripped) {
+            section = if &capture[1] == "Rule" { "Rule" } else if &capture[1] == "Proxy Group" { "Proxy Group" } else { "" };
+            out.push_str(line);
+        } else if section == "Rule" {
+            if let Some(capture) = target.captures(line) {
+                if let Some(name) = aliases.get(capture[2].trim()) {
+                    out.push_str(&capture[1]); out.push_str(name); out.push_str(&capture[3]); continue;
+                }
+            }
+            out.push_str(line);
+        } else if section == "Proxy Group" && !stripped.starts_with('#') {
+            let mut first = true;
+            for item in line.split(',') {
+                if !first { out.push(','); } first = false;
+                let leading = item.len() - item.trim_start().len();
+                let trailing = item.len() - item.trim_end().len();
+                let value = item.trim();
+                if let Some(name) = aliases.get(value) {
+                    out.push_str(&item[..leading]); out.push_str(name); out.push_str(&item[item.len()-trailing..]);
+                } else { out.push_str(item); }
+            }
+        } else { out.push_str(line); }
+    }
+    out
+}
 fn safe(value: &str) -> Result<&str> {
     if value.contains([',', '=', '\r', '\n']) {
         Err(failure(503, "Shadowrocket policy delimiter in name"))
@@ -446,6 +487,18 @@ fn categorized_profile(
     let mut rules = String::new();
     let mut managed = BTreeMap::new();
     let overrides = policy.get("system_overrides").and_then(Value::as_object);
+    let alias = |name: &str| policy.get("group_names").and_then(|names| names.get(name)).and_then(Value::as_str).unwrap_or(name).to_owned();
+    let proxy_target = policy_name(&alias("PROXY"), nodes);
+    let other_target = policy_name(&alias("其他流量"), nodes);
+    let google_target = policy_name(&alias("独立 · Google"), nodes);
+    if let Some(names) = policy.get("group_names").and_then(Value::as_object) {
+        for name in names.values().filter_map(Value::as_str) {
+            if list(config, "proxy-groups")?.iter().any(|group| group["name"] == name)
+                && (nodes.contains_key(name) || nodes.values().any(|node| node == &format!("XCLI-{name}"))) {
+                return Err(failure(422, "分组名称与小火箭节点名称重复"));
+            }
+        }
+    }
     let system_rows = if overrides.is_some_and(|values| !values.is_empty()) {
         xcli_panel_clash::system_rules_preview(domain, field(policy, "base")?)?
     } else { Vec::new() };
@@ -457,8 +510,8 @@ fn categorized_profile(
     let mut has_google = false;
     for item in list(config, "proxy-groups")? {
         let name = field(item, "name")?;
-        has_other |= name == "其他流量";
-        has_google |= name == "独立 · Google";
+        has_other |= name == alias("其他流量");
+        has_google |= name == alias("独立 · Google");
         let kind = field(item, "type")?;
         groups.push_str(safe(&policy_name(name, nodes))?);
         groups.push_str(" = ");
@@ -590,6 +643,9 @@ fn categorized_profile(
             legacy_google,
             geo_tail: &geo_tail,
             final_target: final_target.as_deref(),
+            proxy_target: &proxy_target,
+            other_target: &other_target,
+            google_target: &google_target,
         },
     )
 }
@@ -678,8 +734,8 @@ pub fn profile(
         let replace = flag(policy, "managed", false)?
             && field(policy, "base")? == "independent"
             && field(policy, "rules")? != factory_independent_rules();
-        let base = base.unwrap_or("[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n");
-        let result = categorized_profile(&config, &nodes, base, &update, replace, policy, domain, origin)?;
+        let base = renamed_base(base.unwrap_or("[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n"), policy);
+        let result = categorized_profile(&config, &nodes, &base, &update, replace, policy, domain, origin)?;
         return integrated_dns(
             &result,
             domain,
@@ -781,6 +837,9 @@ pub fn profile(
                 legacy_google: false,
                 geo_tail: "",
                 final_target: None,
+                proxy_target: "XCLI-PROXY",
+                other_target: "XCLI-其他流量",
+                google_target: "XCLI-独立 · Google",
             },
         );
     }

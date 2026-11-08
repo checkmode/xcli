@@ -149,3 +149,35 @@ fn template_rule_priority_is_preserved_in_clash_and_shadowrocket() {
                 .unwrap()
     );
 }
+
+#[test]
+fn renamed_groups_update_shadowrocket_rules_and_legacy_fallbacks() {
+    let policy = json!({"base":"independent","ai_outbound":"proxy","managed":true,
+        "rules":"DOMAIN,api.example.com,独立 · AI\n",
+        "group_names":{"独立 · AI":"人工智能","独立 · Google":"谷歌","PROXY":"默认代理","其他流量":"其他"}});
+    let mut values = settings();
+    values["shadowrocket_base_profiles"] = json!({(user().id):"[General]\ninclude = default.conf\n[Proxy Group]\nExisting = select,XCLI-独立 · AI\n[Rule]\nDOMAIN,legacy.example,XCLI-独立 · AI\nDOMAIN-KEYWORD,google,PROXY\nFINAL,PROXY\n"});
+    let config = profile(&values, &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("XCLI-人工智能 = select,"));
+    assert!(config.contains("XCLI-谷歌 = select,"));
+    assert!(config.contains("DOMAIN,api.example.com,XCLI-人工智能"));
+    assert!(config.contains("DOMAIN,legacy.example,XCLI-人工智能"));
+    assert!(config.contains("Existing = select,XCLI-人工智能"));
+    assert!(config.contains("DOMAIN-KEYWORD,google,XCLI-谷歌"));
+    assert!(config.contains("FINAL,XCLI-其他"));
+    assert!(!config.contains("XCLI-独立 · AI = select,"));
+}
+
+#[test]
+fn renaming_only_the_standard_proxy_enables_a_matching_profile() {
+    let policy = json!({"base":"standard","ai_outbound":"proxy","rules":"","managed":true,
+        "group_names":{"PROXY":"默认代理"}});
+    assert_eq!(
+        setup(&settings(), &user(), &policy).unwrap()["service_routing"],
+        true
+    );
+    let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("XCLI-默认代理 = select,"));
+    assert!(config.contains("FINAL,XCLI-默认代理"));
+    assert!(!config.contains("XCLI-PROXY = select,"));
+}

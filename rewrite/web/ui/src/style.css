@@ -253,6 +253,9 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .group-settings-pane label { gap: 5px; font-size: 11px; }
 .group-settings-pane select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
 .group-settings-pane button { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+.group-name-editor, .group-name-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; }
+.group-name-editor label { flex: 1 1 150px; min-width: 0; }
+.group-name-editor input { min-height: 32px; padding: 5px 8px; font-size: 12px; }
 .rule-editor-pane .message { margin: 0; }
 .rule-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .template-users { margin-top: 26px; }
