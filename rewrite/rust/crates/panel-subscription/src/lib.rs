@@ -150,7 +150,10 @@ pub fn build(
     }
     let hy2_port = port(settings, "hysteria2_port", 0)?;
     let hy2_brutal_port = port(settings, "hysteria2_brutal_port", 0)?;
-    if hy2_brutal_port > 0 && (hy2_port == 0 || hy2_brutal_port == hy2_port) {
+    let primary_brutal = flag(settings, "hysteria2_primary_brutal", false)?;
+    if hy2_brutal_port > 0 && (hy2_port == 0 || hy2_brutal_port == hy2_port)
+        || primary_brutal && (hy2_port == 0 || hy2_brutal_port > 0)
+    {
         return Err(Error::InvalidConfiguration);
     }
     let node_host = if flag(settings, "node_address_ip", false)? {

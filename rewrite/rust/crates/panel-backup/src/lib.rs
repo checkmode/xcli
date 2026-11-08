@@ -172,6 +172,28 @@ struct RestorePlan {
 // A rate change does not alter the server identity or the database restore
 // contract; restore keeps the current server-side rate and configuration.
 fn same_server_settings(current: &Value, saved: &Value) -> Result<bool> {
+    // A migration from two local listeners to the former Brutal listener does
+    // not change the server or the data restored from the backup. Match the
+    // exact old port before comparing all of the remaining settings.
+    let mut current = SecretBundle(current.clone());
+    if current.0.get("hysteria2_primary_brutal") == Some(&Value::Bool(true))
+        && saved.get("hysteria2_primary_brutal").is_none()
+        && current.0.get("hysteria2_brutal_port").and_then(Value::as_u64) == Some(0)
+        && current.0.get("hysteria2_port").and_then(Value::as_u64)
+            .is_some_and(|p| (1..=65535).contains(&p))
+        && saved.get("hysteria2_brutal_port").and_then(Value::as_u64)
+            == current.0.get("hysteria2_port").and_then(Value::as_u64)
+        && saved.get("hysteria2_port").and_then(Value::as_u64)
+            .is_some_and(|p| (1..=65535).contains(&p))
+    {
+        let values = current.0.as_object_mut().ok_or(BackupError::Invalid)?;
+        values.insert("hysteria2_port".into(), saved["hysteria2_port"].clone());
+        values.insert(
+            "hysteria2_brutal_port".into(),
+            saved["hysteria2_brutal_port"].clone(),
+        );
+        values.shift_remove("hysteria2_primary_brutal");
+    }
     let normalized = |value: &Value| -> Result<Zeroizing<Vec<u8>>> {
         let mut value = SecretBundle(value.clone());
         let object = value.0.as_object_mut().ok_or(BackupError::Invalid)?;
@@ -184,7 +206,7 @@ fn same_server_settings(current: &Value, saved: &Value) -> Result<bool> {
             serde_json::to_vec(&value.0).map_err(|_| BackupError::Invalid)?,
         ))
     };
-    let a = Sha256::digest(normalized(current)?.as_slice());
+    let a = Sha256::digest(normalized(&current.0)?.as_slice());
     let b = Sha256::digest(normalized(saved)?.as_slice());
     Ok(bool::from(a.as_slice().ct_eq(b.as_slice())))
 }

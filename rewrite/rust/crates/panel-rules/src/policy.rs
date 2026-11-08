@@ -106,11 +106,12 @@ pub fn apply_client_policy(
             item["name"] = json!("独立 · STUN");
             item["proxies"] = json!(servers);
         }
+        let selectable = item.get("type").and_then(Value::as_str) == Some("select");
         let members = item
             .get_mut("proxies")
             .and_then(Value::as_array_mut)
             .ok_or_else(unavailable)?;
-        if members.len() == 2
+        if selectable && members.len() == 2
             && members[0]
                 .as_str()
                 .is_some_and(|s| s.ends_with(" · Hysteria2"))
@@ -122,11 +123,12 @@ pub fn apply_client_policy(
     let mut top = Vec::new();
     let mut main = vec![json!("故障转移"), json!("自动选择")];
     main.extend(servers.clone());
-    // The fixed-rate entry is explicitly selectable, but never silently added
-    // to automatic or fallback groups for existing users.
+    // A separate legacy fixed-rate entry remains explicitly selectable.
     for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
         if let Some(value) = outbound.get(tag) {
-            main.push(json!(value));
+            if !main.contains(&json!(value)) {
+                main.push(json!(value));
+            }
         }
     }
     if !countries.is_empty() {
@@ -171,7 +173,9 @@ pub fn apply_client_policy(
         }
         for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
             if let Some(value) = outbound.get(tag) {
-                choices.push(json!(value));
+                if !choices.contains(&json!(value)) {
+                    choices.push(json!(value));
+                }
             }
         }
         let label = if category.name == "EaseLian" {
@@ -186,7 +190,9 @@ pub fn apply_client_policy(
     google.extend(servers);
     for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
         if let Some(value) = outbound.get(tag) {
-            google.push(json!(value));
+            if !google.contains(&json!(value)) {
+                google.push(json!(value));
+            }
         }
     }
     top.push(group("独立 · Google", google));

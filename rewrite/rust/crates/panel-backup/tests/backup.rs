@@ -129,6 +129,25 @@ fn changing_brutal_rate_keeps_existing_backups_restorable_without_changing_curre
 }
 
 #[test]
+fn unifying_brutal_keeps_prior_backups_restorable_only_for_the_same_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.sqlite");
+    fixture(&path);
+    let old = json!({"domain":"example.test","hysteria2_port":443,"hysteria2_brutal_port":8443,"hysteria2_brutal_mbps":60});
+    let mut store = BackupStore::open(&path, old, [7; 32], "1.3.0".into()).unwrap();
+    let id = store.create("manual", 1_700_000_000).unwrap()["id"].as_str().unwrap().to_owned();
+    let unified = json!({"domain":"example.test","hysteria2_port":8443,"hysteria2_brutal_port":0,
+        "hysteria2_brutal_mbps":60,"hysteria2_primary_brutal":true});
+    let mut current = BackupStore::open(&path, unified.clone(), [7; 32], "1.3.0".into()).unwrap();
+    assert_eq!(current.inspect(&id).unwrap()["same_server"], true);
+    current.restore_with_flush(&id, 1_700_000_001, || Ok(())).unwrap();
+    let mut wrong = unified;
+    wrong["hysteria2_port"] = json!(9443);
+    let other = BackupStore::open(&path, wrong, [7; 32], "1.3.0".into()).unwrap();
+    assert_eq!(other.inspect(&id).unwrap()["same_server"], false);
+}
+
+#[test]
 fn restore_does_not_mutate_state_when_flush_or_transaction_fails() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.sqlite");

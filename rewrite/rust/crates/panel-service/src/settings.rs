@@ -99,12 +99,15 @@ pub fn validate(settings: &Value) -> Result<()> {
     let ws = settings["ws_path"].as_str().ok_or(Error::Base)?;
     let hy2 = port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)?;
     let hy2_brutal = port(settings, "hysteria2_brutal_port", 0, 0).ok_or(Error::Base)?;
+    let primary_brutal = optional_bool(settings, "hysteria2_primary_brutal").ok_or(Error::Base)?;
     settings
         .get("hysteria2_brutal_mbps")
         .map_or(Some(40), Value::as_u64)
         .filter(|v| (1..=1000).contains(v))
         .ok_or(Error::Base)?;
-    if hy2_brutal > 0 && (hy2 == 0 || hy2_brutal == hy2) {
+    if hy2_brutal > 0 && (hy2 == 0 || hy2_brutal == hy2)
+        || primary_brutal && (hy2 == 0 || hy2_brutal > 0)
+    {
         return Err(Error::Base);
     }
     port(settings, "public_port", 443, 1).ok_or(Error::Base)?;
@@ -332,7 +335,10 @@ pub fn inbound_tags(settings: &Value) -> Result<Vec<String>> {
     let mut tags = vec!["reality".into(), "websocket".into()];
     let hy2 = port(settings, "hysteria2_port", 0, 0).ok_or(Error::Base)?;
     let brutal = port(settings, "hysteria2_brutal_port", 0, 0).ok_or(Error::Base)?;
-    if brutal > 0 && (hy2 == 0 || brutal == hy2) {
+    let primary = optional_bool(settings, "hysteria2_primary_brutal").ok_or(Error::Base)?;
+    if brutal > 0 && (hy2 == 0 || brutal == hy2)
+        || primary && (hy2 == 0 || brutal > 0)
+    {
         return Err(Error::Base);
     }
     if hy2 > 0 {

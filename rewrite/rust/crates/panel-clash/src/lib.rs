@@ -125,9 +125,11 @@ fn build_with_outbound(
     let hy2_port = number(settings, "hysteria2_port", 0)?;
     let hy2_brutal_port = number(settings, "hysteria2_brutal_port", 0)?;
     let hy2_brutal_mbps = number(settings, "hysteria2_brutal_mbps", 40)?;
+    let primary_brutal = flag(settings, "hysteria2_primary_brutal", false)?;
     if !(0..=65535).contains(&hy2_brutal_port)
         || !(1..=1000).contains(&hy2_brutal_mbps)
         || hy2_brutal_port > 0 && (hy2_port <= 0 || hy2_brutal_port == hy2_port)
+        || primary_brutal && (hy2_port <= 0 || hy2_brutal_port > 0)
     {
         return Err(invalid());
     }
@@ -243,6 +245,43 @@ fn build_with_outbound(
         )?;
     }
     let exits = sequence(settings, "residential_exits")?;
+    // Reserve user-facing names before allocating the hidden automatic groups.
+    let mut occupied: BTreeSet<String> = proxies
+        .iter()
+        .filter_map(|v| v.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    for exit in exits {
+        if flag(exit, "dynamic", false)? && !dynamic_enabled {
+            continue;
+        }
+        let label = field(exit, "label")?;
+        let name = if flag(exit, "dynamic", false)? {
+            label.to_owned()
+        } else {
+            format!("{label} · {}", field(exit, "exit_ip")?)
+        };
+        for value in [name.clone(), format!("{name} · Hysteria2"), format!("{name} · HTTPS")] {
+            occupied.insert(value);
+        }
+    }
+    for item in policy.get("groups").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(name) = item.get("name").and_then(Value::as_str) {
+            occupied.insert(name.into());
+        }
+    }
+    for name in policy.get("group_names").and_then(Value::as_object).into_iter()
+        .flat_map(|values| values.values()).filter_map(Value::as_str)
+    {
+        occupied.insert(name.into());
+    }
+    for item in settings.get("clash_service_routes").and_then(|routes| routes.get(&user.id))
+        .and_then(Value::as_array).into_iter().flatten()
+    {
+        if let Some(name) = item.get("name").and_then(Value::as_str) {
+            occupied.insert(name.into());
+        }
+    }
     let mut countries: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut protocol_groups = Vec::new();
     for exit in exits {
@@ -280,7 +319,23 @@ fn build_with_outbound(
             )?;
             names.truncate(names.len() - 2);
             names.push(json!(name));
-            protocol_groups.push(selector(&name, vec![json!(hy2), json!(https)]));
+            if dynamic {
+                protocol_groups.push(selector(&name, vec![json!(hy2), json!(https)]));
+            } else {
+                let stem = format!("{name} · 自动");
+                let mut automatic = stem.clone();
+                let mut suffix = 2;
+                while !occupied.insert(automatic.clone()) {
+                    automatic = format!("{stem} ({suffix})");
+                    suffix += 1;
+                }
+                protocol_groups.push(selector(
+                    &name, vec![json!(automatic), json!(hy2), json!(https)],
+                ));
+                protocol_groups.push(json!({"name":automatic,"type":"fallback","proxies":[hy2,https],
+                    "url":"https://www.gstatic.com/generate_204","interval":120,"timeout":5000,
+                    "expected-status":"204","lazy":false,"hidden":true}));
+            }
         } else {
             add(
                 &mut proxies,
@@ -308,6 +363,13 @@ fn build_with_outbound(
     }
     if hy2_port > 0 {
         outbound.insert("hysteria2".into(), "Hysteria 2".into());
+        // Existing published rules may still reference the former Brutal
+        // aliases. Resolve them to the single node without adding duplicate
+        // nodes to the subscription.
+        if primary_brutal {
+            outbound.insert("hysteria2-brutal".into(), "Hysteria 2".into());
+            outbound.insert("hysteria2-brutal-current".into(), "Hysteria 2".into());
+        }
     }
     if hy2_brutal_port > 0 {
         outbound.insert(

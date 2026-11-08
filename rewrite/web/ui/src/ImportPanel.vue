@@ -149,6 +149,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); form.text = ''; clearEdit()
     <div class="users-heading"><div><h2 id="import-heading">固定代理</h2><p>检测 SOCKS5、HTTP 和 VMess 代理，查看可用出口。</p></div>
       <button type="button" @click="refresh">刷新</button></div>
     <p class="preview-note">{{ report?.apply_enabled ? '应用变更时，现有连接可能短暂中断。' : '当前服务只能检测，不能应用或修改现有配置。' }}</p>
+    <p class="preview-note">支持双入口的固定代理在客户端中作为一个出口使用：默认优先 Hysteria 2，故障时切换至 HTTPS；也可在出口分组中手动选择协议。</p>
     <p v-if="loading" class="table-message">正在读取检测状态…</p>
     <template v-else-if="report">
       <div class="webshare-status" aria-live="polite"><strong>{{ waiting ? '等待工作进程处理' : state(report.status) }}</strong>

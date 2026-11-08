@@ -441,8 +441,17 @@ impl Store {
             .map_or(Some(40), Value::as_u64)
             .filter(|v| (1..=1000).contains(v))
             .ok_or(JournalError::Invalid)?;
+        let primary = settings
+            .get("hysteria2_primary_brutal")
+            .map_or(Some(false), Value::as_bool)
+            .ok_or(JournalError::Invalid)?;
+        let (port_key, tag) = if primary {
+            ("hysteria2_port", "hysteria2")
+        } else {
+            ("hysteria2_brutal_port", "hysteria2-brutal")
+        };
         let port = settings
-            .get("hysteria2_brutal_port")
+            .get(port_key)
             .and_then(Value::as_u64)
             .filter(|v| (1024..=65535).contains(v))
             .ok_or(JournalError::Invalid)?;
@@ -452,7 +461,7 @@ impl Store {
             .ok_or(JournalError::Invalid)?;
         let mut matches = entries
             .iter_mut()
-            .filter(|v| v.get("tag").and_then(Value::as_str) == Some("hysteria2-brutal"));
+            .filter(|v| v.get("tag").and_then(Value::as_str) == Some(tag));
         let inbound = matches.next().ok_or(JournalError::Invalid)?;
         if matches.next().is_some()
             || inbound.get("port").and_then(Value::as_u64) != Some(port)
@@ -964,6 +973,22 @@ mod tests {
         assert!(fixture.store.brutal_rate_candidate(60).unwrap().0.is_none());
         assert!(fixture.store.brutal_rate_candidate(0).is_err());
         assert!(fixture.store.brutal_rate_candidate(1001).is_err());
+    }
+    #[test]
+    fn brutal_rate_can_change_the_only_hysteria_entry_without_changing_clients() {
+        let fixture = brutal_fixture();
+        fs::write(&fixture.paths["settings"],
+            br#"{"hysteria2_port":8443,"hysteria2_brutal_port":0,"hysteria2_primary_brutal":true,"hysteria2_brutal_mbps":60}"#).unwrap();
+        fs::write(&fixture.paths["core"],
+            br#"{"inbounds":[{"tag":"hysteria2","port":8443,"protocol":"hysteria","streamSettings":{"finalmask":{"quicParams":{"congestion":"force-brutal","brutalUp":"60 mbps"}}}}],"routing":{"preserved":true}}"#).unwrap();
+        let (candidate, expected) = fixture.store.brutal_rate_candidate(40).unwrap();
+        fixture.store.apply(&expected, &candidate.unwrap(), &mut FakeHooks::default()).unwrap();
+        let core: Value = serde_json::from_slice(&fs::read(&fixture.paths["core"]).unwrap()).unwrap();
+        let settings: Value = serde_json::from_slice(&fs::read(&fixture.paths["settings"]).unwrap()).unwrap();
+        assert_eq!(core["inbounds"][0]["streamSettings"]["finalmask"]["quicParams"]["brutalUp"], "40 mbps");
+        assert_eq!(settings["hysteria2_brutal_mbps"], 40);
+        assert_eq!(settings["hysteria2_port"], 8443);
+        assert_eq!(core["routing"]["preserved"], true);
     }
     #[test]
     fn failed_brutal_rate_change_restores_original_and_refuses_external_edits() {

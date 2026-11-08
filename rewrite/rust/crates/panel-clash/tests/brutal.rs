@@ -87,3 +87,30 @@ fn optional_brutal_node_does_not_change_existing_node_or_default() {
     enabled["hysteria2_brutal_port"] = json!(443);
     assert!(build(&enabled, &user, &[], false, &json!({})).is_err());
 }
+
+#[test]
+fn unified_brutal_node_has_one_stable_name_and_legacy_rules_resolve() {
+    let user = User { id: "a".repeat(32), uuid: "01234567-89ab-4def-8123-456789abcdef".into() };
+    let mut config = settings();
+    config["hysteria2_port"] = json!(8443);
+    config["hysteria2_primary_brutal"] = json!(true);
+    config["hysteria2_brutal_mbps"] = json!(60);
+    config["client_policies"] = json!({(user.id.clone()): {"ai_outbound":"hysteria2-brutal"}});
+    let first = build(&config, &user, &[], false, &json!({})).unwrap();
+    let nodes: Vec<_> = first["proxies"].as_array().unwrap().iter()
+        .filter(|node| node["type"] == "hysteria2").collect();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["name"], "Hysteria 2");
+    assert_eq!(nodes[0]["port"], 8443);
+    assert!(nodes[0].get("down").is_none());
+    for group in first["proxy-groups"].as_array().unwrap() {
+        let members = group["proxies"].as_array().unwrap();
+        assert!(members.iter().filter(|v| *v == "Hysteria 2").count() <= 1);
+    }
+    let ai = first["proxy-groups"].as_array().unwrap().iter()
+        .find(|g| g["name"] == "独立 · AI").unwrap();
+    assert_eq!(ai["proxies"][0], "Hysteria 2");
+    config["hysteria2_brutal_mbps"] = json!(40);
+    let second = build(&config, &user, &[], false, &json!({})).unwrap();
+    assert_eq!(first, second, "rate-only updates do not require a client configuration change");
+}

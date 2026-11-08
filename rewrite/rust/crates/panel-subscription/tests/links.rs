@@ -94,3 +94,21 @@ fn optional_brutal_link_preserves_the_existing_hysteria_link() {
         Err(Error::InvalidConfiguration)
     ));
 }
+
+#[test]
+fn unified_brutal_uses_one_hysteria_port_for_regular_and_residential_nodes() {
+    let mut config = settings();
+    config["hysteria2_port"] = json!(8443);
+    config["hysteria2_primary_brutal"] = json!(true);
+    config["hysteria2_brutal_port"] = json!(0);
+    let user = user();
+    let links = build(&config, &user, &[], false).unwrap();
+    assert!(links.get("hysteria2").unwrap().contains(":8443/"));
+    assert!(links.get("residential-01-hy2").unwrap().contains(":8443/"));
+    assert!(links.get("hysteria2-brutal").is_none());
+    assert!(links.get("hysteria2-brutal-current").is_none());
+    let (body, _) = links.generic_subscription(&user, 100).unwrap();
+    let text = String::from_utf8(STANDARD.decode(body).unwrap()).unwrap();
+    assert_eq!(text.lines().filter(|line| line.starts_with("hysteria2://")).count(), 2);
+    assert!(text.lines().filter(|line| line.starts_with("hysteria2://")).all(|line| line.contains(":8443/")));
+}

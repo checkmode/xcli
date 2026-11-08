@@ -1763,7 +1763,15 @@ fn validate_template_profile(
         .and_then(serde_json::Value::as_object)
         .is_some_and(|values| !values.is_empty());
     let has_names = policy.get("group_names").and_then(serde_json::Value::as_object).is_some_and(|values| !values.is_empty());
-    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty()) || has_order || has_system || has_names {
+    let has_fixed = input.settings.get("residential_exits")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|exits| exits.iter().any(|exit| {
+            exit.get("dynamic").and_then(serde_json::Value::as_bool) != Some(true)
+                && exit.get("hysteria2").and_then(serde_json::Value::as_bool) == Some(true)
+        }));
+    if independent || has_rules || has_groups || defaults.is_some_and(|values| !values.is_empty())
+        || has_order || has_system || has_names || has_fixed
+    {
         let user = xcli_panel_shadowrocket::User {
             id: input.user_id,
             name: input.name,
@@ -3567,10 +3575,13 @@ async fn run() -> Result<(), &'static str> {
         import_preview,
         import_apply: args.import_apply,
         brutal_rate: settings.as_ref().and_then(|s| {
-            (s.get("hysteria2_brutal_port")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0)
-                > 0)
+            (s.get("hysteria2_primary_brutal")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || s.get("hysteria2_brutal_port")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    > 0)
             .then(|| {
                 s.get("hysteria2_brutal_mbps")
                     .and_then(serde_json::Value::as_u64)

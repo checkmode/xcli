@@ -53,6 +53,42 @@ fn legacy_ai_is_preserved_and_per_group_defaults_only_reorder_requested_groups()
 }
 
 #[test]
+fn fixed_exit_defaults_to_automatic_fallback_for_both_base_templates() {
+    for base in ["standard", "independent"] {
+        let policy = json!({"base":base,"ai_outbound":"proxy","rules":"","managed":true});
+        let config = build(&settings(), &user(), &[], false, &policy).unwrap();
+        let groups = config["proxy-groups"].as_array().unwrap();
+        let group = groups.iter().find(|g| g["name"] == "住宅 US · 8.8.4.4").unwrap();
+        let automatic = "住宅 US · 8.8.4.4 · 自动";
+        assert_eq!(group["type"], "select");
+        assert_eq!(group["proxies"], json!([automatic,"住宅 US · 8.8.4.4 · Hysteria2","住宅 US · 8.8.4.4 · HTTPS"]));
+        let fallback = groups.iter().find(|g| g["name"] == automatic).unwrap();
+        assert_eq!(fallback["type"], "fallback");
+        assert_eq!(fallback["proxies"], json!(["住宅 US · 8.8.4.4 · Hysteria2","住宅 US · 8.8.4.4 · HTTPS"]));
+        assert_eq!(fallback["hidden"], true);
+        assert_eq!(fallback["lazy"], false);
+        assert_eq!(fallback["expected-status"], "204");
+        assert_eq!(fallback["interval"], 120);
+    }
+}
+
+#[test]
+fn automatic_helper_avoids_custom_group_names_and_preserves_dynamic_groups() {
+    let mut values = settings();
+    values["residential_exits"][1]["hysteria2"] = json!(true);
+    let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
+        "groups":[{"name":"住宅 US · 8.8.4.4 · 自动","default":"PROXY"}]});
+    let config = build(&values, &user(), &[], true, &policy).unwrap();
+    let groups = config["proxy-groups"].as_array().unwrap();
+    let fixed = groups.iter().find(|g| g["name"] == "住宅 US · 8.8.4.4").unwrap();
+    assert_eq!(fixed["proxies"][0], "住宅 US · 8.8.4.4 · 自动 (2)");
+    assert!(groups.iter().any(|g| g["name"] == fixed["proxies"][0] && g["type"] == "fallback"));
+    let dynamic = groups.iter().find(|g| g["name"] == "动态 US").unwrap();
+    assert_eq!(dynamic["type"], "select");
+    assert_eq!(dynamic["proxies"], json!(["动态 US · HTTPS", "动态 US · Hysteria2"]));
+}
+
+#[test]
 fn unavailable_or_ineligible_nodes_do_not_silently_fall_back() {
     let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
         "group_defaults":{"独立 · Google":"node:residential-42","独立 · STUN":"node:residential-41"}});

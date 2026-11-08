@@ -26,6 +26,21 @@ fn independent_group_defaults_are_reflected_in_shadowrocket_groups() {
     assert!(config.contains("XCLI-独立 · AI = select,XCLI-住宅 US · 8.8.4.4,"));
     assert!(config.contains("XCLI-独立 · Google = select,test · REALITY,"));
     assert!(config.contains("XCLI-住宅 US · 8.8.4.4 = select,"));
+    assert!(config.contains("XCLI-住宅 US · 8.8.4.4 = select,XCLI-住宅 US · 8.8.4.4 · 自动,test · 住宅 US · 8.8.4.4,test · 住宅 US · 8.8.4.4 · HTTPS"));
+    assert!(config.contains("XCLI-住宅 US · 8.8.4.4 · 自动 = fallback,test · 住宅 US · 8.8.4.4,test · 住宅 US · 8.8.4.4 · HTTPS,interval=120,timeout=5,url=https://www.gstatic.com/generate_204,hidden=1"));
+}
+
+#[test]
+fn legacy_standard_users_get_a_profile_when_fixed_failover_exists() {
+    let policy = json!({"base":"standard","ai_outbound":"proxy","rules":"","managed":false});
+    let mut values = settings();
+    values["shadowrocket_base_profiles"] = json!({(user().id):"[General]\ninclude = default.conf\n[Rule]\nDOMAIN,custom.example,DIRECT\nFINAL,PROXY\n"});
+    assert_eq!(setup(&values, &user(), &policy).unwrap()["service_routing"], true);
+    let config = profile(&values, &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("DOMAIN,custom.example,DIRECT"));
+    assert!(config.contains("XCLI-住宅 US · 8.8.4.4 · 自动 = fallback,"));
+    values["residential_exits"][0]["hysteria2"] = json!(false);
+    assert_eq!(setup(&values, &user(), &policy).unwrap()["service_routing"], false);
 }
 
 #[test]

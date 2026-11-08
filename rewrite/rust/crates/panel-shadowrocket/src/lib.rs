@@ -100,7 +100,7 @@ fn valid_metadata(user: &User, domain: &str, address: &str) -> Result<()> {
     }
     Ok(())
 }
-fn categorized(policy: &Value) -> Result<bool> {
+fn categorized(settings: &Value, policy: &Value) -> Result<bool> {
     let defaults = match policy.get("group_defaults") {
         Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
         None => false,
@@ -117,14 +117,17 @@ fn categorized(policy: &Value) -> Result<bool> {
         Some(value) => !value.as_object().ok_or_else(invalid)?.is_empty(),
         None => false,
     };
-    Ok(field(policy, "base")? == "independent"
+    let fixed = list(settings, "residential_exits")?.iter().try_fold(false, |found, exit| {
+        Ok::<_, ApplyError>(found || (!flag(exit, "dynamic", false)? && flag(exit, "hysteria2", false)?))
+    })?;
+    Ok(fixed || field(policy, "base")? == "independent"
         || (flag(policy, "managed", false)?
             && (!field(policy, "rules")?.is_empty()
                 || !list(policy, "groups")?.is_empty()
                 || defaults || order || system || names)))
 }
 pub fn setup(settings: &Value, user: &User, policy: &Value) -> Result<Value> {
-    let categorized = categorized(policy)?;
+    let categorized = categorized(settings, policy)?;
     let enabled = categorized
         || list(settings, "shadowrocket_service_users")?
             .iter()
@@ -529,6 +532,9 @@ fn categorized_profile(
                 groups.push_str(",tolerance=100");
             }
         }
+        if item.get("hidden").and_then(Value::as_bool) == Some(true) {
+            groups.push_str(",hidden=1");
+        }
         groups.push('\n');
     }
     let providers = config.get("rule-providers").ok_or_else(invalid)?;
@@ -662,7 +668,7 @@ pub fn profile(
     if user.id.len() < 8 || !user.id.is_ascii() {
         return Err(invalid());
     }
-    let is_categorized = categorized(policy)?;
+    let is_categorized = categorized(settings, policy)?;
     if !is_categorized
         && !list(settings, "shadowrocket_service_users")?
             .iter()
