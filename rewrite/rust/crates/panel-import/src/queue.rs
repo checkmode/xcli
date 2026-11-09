@@ -31,8 +31,10 @@ type Result<T> = std::result::Result<T, QueueError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Preview,
+    PreviewBatch,
     Manage,
     Apply,
+    ApplyBatch,
     BrutalRate,
 }
 pub struct Claimed {
@@ -274,8 +276,10 @@ impl Queue {
         }
         let action = match object.get("action").and_then(Value::as_str) {
             Some("preview") => Action::Preview,
+            Some("preview_batch") => Action::PreviewBatch,
             Some("manage") => Action::Manage,
             Some("apply") => Action::Apply,
+            Some("apply_batch") => Action::ApplyBatch,
             Some("brutal_rate") => Action::BrutalRate,
             _ => return Err(QueueError::Invalid),
         };

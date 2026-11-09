@@ -74,7 +74,7 @@ fn check_label(label: &str) -> Result<(), PreviewError> {
         Ok(())
     }
 }
-fn ready(
+pub(crate) fn ready(
     store: &Store,
     snapshot: BTreeMap<String, String>,
     files: crate::config::Files,

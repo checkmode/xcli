@@ -56,15 +56,20 @@ async fn execute() -> Result<Value, ()> {
                 Some("http") => Protocol::Http,
                 _ => return Err(()),
             };
-            let result = probe(&values[0], protocol).map_err(|_| ())?;
-            Ok(report(&result))
+            Ok(match probe(&values[0], protocol) {
+                Ok(result) => report(&result),
+                Err(error) => json!({"ok":false,"reason":error.code()}),
+            })
         }
         Some("vmess") => {
             if object["protocol"] != "vmess" {
                 return Err(());
             }
             let proxy = VmessProxy::from_record(&object["fields"]).map_err(|_| ())?;
-            let result = probe_vmess(&proxy).await.map_err(|_| ())?;
+            let result = match probe_vmess(&proxy).await {
+                Ok(result) => result,
+                Err(error) => return Ok(json!({"ok":false,"reason":error.code()})),
+            };
             let mut output = report(&result.observed);
             output["server_ip"] = json!(result.server_ip.to_string());
             Ok(output)

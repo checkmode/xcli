@@ -388,7 +388,7 @@ async fn request_import_preview(
         let stamp = now().map_err(ImportRequestError::Auth)?;
         auth.session(&token, Some(&csrf), stamp)
             .map_err(ImportRequestError::Auth)?;
-        if (input.0["action"] == "apply" || input.0["action"] == "brutal_rate") && !app.import_apply
+        if (input.0["action"] == "apply" || input.0["action"] == "apply_batch" || input.0["action"] == "brutal_rate") && !app.import_apply
         {
             return Err(ImportRequestError::Disabled);
         }

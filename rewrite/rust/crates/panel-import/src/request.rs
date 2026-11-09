@@ -75,6 +75,31 @@ pub fn prepare(
     let id = hex::encode(nonce.as_ref());
     let mut result = SecretJson::new(json!({"id":id,"action":action,"requested_at":now}));
     match action {
+        "preview_batch" if exact(input, &["action", "protocol", "label", "text"]) => {
+            let protocol = input["protocol"]
+                .as_str()
+                .filter(|p| ["socks", "http", "vmess"].contains(p))
+                .ok_or_else(invalid)?;
+            let label = xcli_panel_users::validate(&json!({"name":input["label"]}))
+                .map_err(|_| invalid())?
+                .name;
+            if label.chars().count() > 30 {
+                return Err(invalid());
+            }
+            let text = input["text"]
+                .as_str()
+                .filter(|v| !v.is_empty() && v.len() <= 12000)
+                .ok_or_else(invalid)?;
+            let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
+            if !(1..=20).contains(&lines) || existing_exits > 40 {
+                return Err(invalid());
+            }
+            // Individual lines are parsed and revalidated by the worker. The
+            // original input remains only in the authenticated encrypted queue.
+            result.value_mut()["protocol"] = json!(protocol);
+            result.value_mut()["label"] = json!(label);
+            result.value_mut()["text"] = json!(text);
+        }
         "preview" if exact(input, &["action", "protocol", "label", "text"]) => {
             let protocol = input["protocol"].as_str().ok_or_else(invalid)?;
             let label = xcli_panel_users::validate(&json!({"name":input["label"]}))
@@ -241,6 +266,28 @@ pub fn prepare(
         "apply" if exact(input, &["action", "preview_id"]) => {
             result.value_mut()["preview_id"] = json!(identifier(&input["preview_id"])?);
         }
+        "apply_batch" if exact(input, &["action", "preview_id", "selected"]) => {
+            result.value_mut()["preview_id"] = json!(identifier(&input["preview_id"])?);
+            let selected = input["selected"]
+                .as_array()
+                .filter(|v| (1..=20).contains(&v.len()))
+                .ok_or_else(invalid)?;
+            let mut seen = BTreeSet::new();
+            let selected = selected
+                .iter()
+                .map(|item| {
+                    let index = item
+                        .as_u64()
+                        .filter(|v| (1..=20).contains(v))
+                        .ok_or_else(invalid)?;
+                    if !seen.insert(index) {
+                        return Err(invalid());
+                    }
+                    Ok(index)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            result.value_mut()["selected"] = json!(selected);
+        }
         "brutal_rate" if exact(input, &["action", "mbps"]) => {
             let rate = input["mbps"]
                 .as_u64()
@@ -304,6 +351,50 @@ mod tests {
             "synthetic-user"
         );
         assert!(queue.claim(1000).unwrap().is_none());
+    }
+
+    #[test]
+    fn batch_preview_keeps_mixed_input_encrypted_and_selection_bounded() {
+        let key = [7u8; 32];
+        let text = "1.1.1.1:80:fixture:synthetic-password\ninvalid line";
+        let prepared = prepare(
+            &json!({"action":"preview_batch","protocol":"socks","label":"fixture","text":text}),
+            100,
+            &key,
+            39,
+        )
+        .unwrap();
+        assert!(!prepared
+            .encrypted()
+            .windows(18)
+            .any(|v| v == b"synthetic-password"));
+        let decoded = open_xgb1(prepared.encrypted(), &key, CONTEXT).unwrap();
+        let value: Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(value["text"], text);
+        assert!(prepare(&json!({"action":"preview_batch","protocol":"http","label":"fixture","text":vec!["bad"; 21].join("\n")}), 100, &key, 0).is_err());
+        let preview_id = "a".repeat(32);
+        assert!(prepare(
+            &json!({"action":"apply_batch","preview_id":preview_id,"selected":[1,3]}),
+            100,
+            &key,
+            0
+        )
+        .is_ok());
+        for selected in [
+            json!([]),
+            json!([1, 1]),
+            json!([0]),
+            json!([21]),
+            json!(["1"]),
+        ] {
+            assert!(prepare(
+                &json!({"action":"apply_batch","preview_id":preview_id,"selected":selected}),
+                100,
+                &key,
+                0
+            )
+            .is_err());
+        }
     }
 
     #[test]

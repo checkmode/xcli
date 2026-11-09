@@ -149,6 +149,81 @@ fn peer(value: &Value) -> Option<(String, u16)> {
 fn existing_peers(core: &Value) -> Result<BTreeSet<(String, u16)>, ImportError> {
     peers_except(core, None)
 }
+
+/// The same inventory used by candidate creation, including disabled and
+/// deleted pool records whose addresses and slots must remain reserved.
+pub(crate) fn import_inventory(
+    files: &Files,
+) -> Result<(BTreeSet<(String, u16)>, usize), ImportError> {
+    let exits = files.settings()["residential_exits"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let mut peers = existing_peers(files.core())?;
+    let mut inventory_tags = BTreeSet::new();
+    let mut blocked_tags = BTreeSet::new();
+    let mut blocked_ports = BTreeSet::new();
+    for entry in array(files.core(), "inbounds")? {
+        blocked_tags.insert(
+            entry["tag"]
+                .as_str()
+                .ok_or(ImportError("服务器配置不完整"))?
+                .to_owned(),
+        );
+        if let Some(port) = entry["port"].as_u64() {
+            blocked_ports.insert(port);
+        }
+    }
+    for entry in array(files.core(), "outbounds")? {
+        blocked_tags.insert(
+            entry["tag"]
+                .as_str()
+                .ok_or(ImportError("服务器配置不完整"))?
+                .to_owned(),
+        );
+    }
+    for item in array(files.pool(), "proxies")? {
+        let tag = item["tag"]
+            .as_str()
+            .ok_or(ImportError("代理记录与入口不一致"))?;
+        if !inventory_tags.insert(tag.to_owned()) {
+            return Err(ImportError("代理编号重复"));
+        }
+        blocked_tags.insert(tag.to_owned());
+        let entry = item
+            .get("entry")
+            .or_else(|| exits.iter().find(|entry| entry["tag"] == tag))
+            .ok_or(ImportError("代理记录与入口不一致"))?;
+        if let Some(port) = entry["port"].as_u64() {
+            blocked_ports.insert(port);
+        }
+        if let Some(value) = peer(item) {
+            peers.insert(value);
+        }
+    }
+    let mut unmanaged = 0usize;
+    for entry in exits {
+        let tag = entry["tag"]
+            .as_str()
+            .ok_or(ImportError("代理记录与入口不一致"))?;
+        if !inventory_tags.contains(tag) {
+            unmanaged += 1;
+        }
+    }
+    let used = (inventory_tags.len() + unmanaged).max(exits.len());
+    let capacity = 40usize
+        .checked_sub(used)
+        .ok_or(ImportError("代理数量超过上限"))?;
+    let free_tags = (27..100)
+        .filter(|number| {
+            !blocked_tags.contains(&format!("residential-{number:02}"))
+                && !blocked_tags.contains(&format!("residential-{number:02}-exit"))
+        })
+        .count();
+    let free_ports = (10450..10550)
+        .filter(|port| !blocked_ports.contains(port))
+        .count();
+    Ok((peers, capacity.min(free_tags).min(free_ports)))
+}
 fn peers_except(
     core: &Value,
     excluded: Option<&str>,

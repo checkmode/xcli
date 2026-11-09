@@ -44,6 +44,7 @@ struct State {
     expires: Option<i64>,
     rows: Option<Vec<serde_json::Value>>,
     reason: Option<FailureReason>,
+    available: Option<usize>,
 }
 struct Shared {
     channel: ReportChannel,
@@ -58,16 +59,27 @@ impl Shared {
             state.expires,
             state.rows.as_deref(),
             state.reason,
+            state.available,
         ) {
-            (Phase::Ready, Some(expires), Some(rows), None) => {
+            (Phase::Verifying, None, Some(rows), None, Some(available)) => self
+                .channel
+                .publish_progress(&state.id, now, rows, available),
+            (Phase::Ready, Some(expires), Some(rows), None, Some(available)) => self
+                .channel
+                .publish_batch_preview(&state.id, now, expires, rows, available),
+            (Phase::Ready, Some(expires), Some(rows), None, None) => {
                 self.channel.publish_preview(&state.id, now, expires, rows)
             }
-            (Phase::Failed, None, None, Some(reason)) => {
+            (Phase::Complete, None, Some(rows), None, None) => {
+                self.channel.publish_complete(&state.id, now, rows)
+            }
+            (Phase::Failed, None, None, Some(reason), None) => {
                 self.channel.publish_failure(&state.id, now, reason)
             }
-            (_, _, None, None) => self
-                .channel
-                .publish(&state.id, state.phase, now, state.expires),
+            (_, _, None, None, None) => {
+                self.channel
+                    .publish(&state.id, state.phase, now, state.expires)
+            }
             _ => return Err(RunnerError::Unavailable),
         }
         .map_err(|_| RunnerError::Unavailable)
@@ -139,6 +151,7 @@ impl PreviewRunner {
             expires: initial.get("expires").and_then(serde_json::Value::as_i64),
             rows: None,
             reason: initial["reason"].as_str().and_then(FailureReason::parse),
+            available: None,
         };
         let shared = Arc::new(Shared {
             channel: self.channel,
@@ -160,6 +173,7 @@ impl PreviewRunner {
                 expires: None,
                 rows: None,
                 reason: None,
+                available: None,
             });
             return Err(RunnerError::Unavailable);
         }
@@ -203,13 +217,16 @@ impl PreviewRunner {
                         expires: None,
                         rows: None,
                         reason: None,
+                        available: None,
                     })?;
                 }
                 match self.queue.claim(now) {
                     Ok(Some(request)) => {
                         let id = request.id().to_owned();
-                        let applying =
-                            matches!(request.action(), Action::Apply | Action::BrutalRate);
+                        let applying = matches!(
+                            request.action(),
+                            Action::Apply | Action::ApplyBatch | Action::BrutalRate
+                        );
                         if applying && apply_hooks.is_none() {
                             coordinator.discard();
                             shared.transition(State {
@@ -218,6 +235,7 @@ impl PreviewRunner {
                                 expires: None,
                                 rows: None,
                                 reason: Some(FailureReason::ApplyDisabled),
+                                available: None,
                             })?;
                         } else {
                             shared.transition(State {
@@ -230,11 +248,24 @@ impl PreviewRunner {
                                 expires: None,
                                 rows: None,
                                 reason: None,
+                                available: None,
                             })?;
                             let mut refused = RefuseChanges;
                             let hooks: &mut dyn Hooks = match apply_hooks.as_mut() {
                                 Some(hooks) => hooks.as_mut(),
                                 None => &mut refused,
+                            };
+                            let progress = |rows: &[serde_json::Value], available: usize| {
+                                shared
+                                    .transition(State {
+                                        id: id.clone(),
+                                        phase: Phase::Verifying,
+                                        expires: None,
+                                        rows: Some(rows.to_vec()),
+                                        reason: None,
+                                        available: Some(available),
+                                    })
+                                    .map_err(|_| PreviewError::Unavailable)
                             };
                             let result = coordinator.handle_cancellable(
                                 &request,
@@ -243,20 +274,25 @@ impl PreviewRunner {
                                 hooks,
                                 now,
                                 Some(&stop),
+                                Some(&progress),
                             );
                             if stop.load(Ordering::Acquire) {
                                 coordinator.discard();
                                 break;
                             }
                             match result {
-                                Ok(_) if applying => {
+                                Ok(result) if applying => {
                                     refresh_catalog()?;
                                     shared.transition(State {
                                         id,
                                         phase: Phase::Complete,
                                         expires: None,
-                                        rows: None,
+                                        rows: result
+                                            .get("rows")
+                                            .and_then(serde_json::Value::as_array)
+                                            .cloned(),
                                         reason: None,
+                                        available: None,
                                     })?
                                 }
                                 Ok(result) => {
@@ -273,6 +309,10 @@ impl PreviewRunner {
                                         expires: Some(expires),
                                         rows: Some(rows),
                                         reason: None,
+                                        available: result
+                                            .get("available")
+                                            .and_then(serde_json::Value::as_u64)
+                                            .and_then(|v| usize::try_from(v).ok()),
                                     })?;
                                 }
                                 Err(error) => shared.transition(State {
@@ -287,6 +327,7 @@ impl PreviewRunner {
                                         PreviewError::Expired => FailureReason::Expired,
                                         PreviewError::Unavailable => FailureReason::Unavailable,
                                     }),
+                                    available: None,
                                 })?,
                             }
                         }
@@ -298,6 +339,7 @@ impl PreviewRunner {
                             expires: None,
                             rows: None,
                             reason: None,
+                            available: None,
                         })?;
                     }
                     Ok(None) => (),
@@ -310,6 +352,7 @@ impl PreviewRunner {
                                 expires: None,
                                 rows: None,
                                 reason: None,
+                                available: None,
                             })?;
                         }
                     }
@@ -339,6 +382,7 @@ impl PreviewRunner {
             expires: None,
             rows: None,
             reason: None,
+            available: None,
         });
         result.and(unavailable)
     }

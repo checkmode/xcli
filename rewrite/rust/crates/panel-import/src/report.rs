@@ -159,6 +159,21 @@ pub(crate) fn public_entries(entries: &[Value]) -> Vec<Value> {
                     value.insert(key.to_owned(), json!(item));
                 }
             }
+            if let Some(address) = entry
+                .get("address")
+                .and_then(Value::as_str)
+                .filter(|address| {
+                    address.len() <= 253
+                        && address.contains('.')
+                        && address.split('.').all(|part| {
+                            !part.is_empty()
+                                && part.len() <= 63
+                                && part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                        })
+                })
+            {
+                value.insert("address".into(), json!(address));
+            }
             if let Some(port) = entry
                 .get("port")
                 .and_then(Value::as_u64)
@@ -168,6 +183,45 @@ pub(crate) fn public_entries(entries: &[Value]) -> Vec<Value> {
             }
             if let Some(hy2) = entry.get("hysteria2").and_then(Value::as_bool) {
                 value.insert("hysteria2".into(), json!(hy2));
+            }
+            for (key, max) in [
+                ("index", 20),
+                ("line", 12_000),
+                ("https_ms", 120_000),
+                ("doh_ms", 120_000),
+            ] {
+                if let Some(number) = entry
+                    .get(key)
+                    .and_then(Value::as_u64)
+                    .filter(|v| *v <= max && (*v > 0 || key.ends_with("_ms")))
+                {
+                    value.insert(key.into(), json!(number));
+                }
+            }
+            if let Some(state) = entry
+                .get("state")
+                .and_then(Value::as_str)
+                .filter(|v| ["waiting", "testing", "success", "failed"].contains(v))
+            {
+                value.insert("state".into(), json!(state));
+            }
+            if let Some(reason) = entry.get("reason").and_then(Value::as_str).filter(|v| {
+                [
+                    "invalid_format",
+                    "invalid_address",
+                    "invalid_port",
+                    "invalid_credentials",
+                    "invalid_link",
+                    "duplicate",
+                    "unavailable",
+                    "timeout",
+                    "invalid_exit",
+                    "invalid_dns",
+                    "dns_unavailable",
+                ]
+                .contains(v)
+            }) {
+                value.insert("reason".into(), json!(reason));
             }
             Value::Object(value)
         })
@@ -278,7 +332,7 @@ impl ReportChannel {
     }
     /// Only the owning worker may publish. Non-ready states carry no preview.
     pub fn publish(&self, id: &str, phase: Phase, now: i64, expires: Option<i64>) -> Result<()> {
-        self.publish_inner(id, phase, now, expires, None, None)
+        self.publish_inner(id, phase, now, expires, None, None, None)
     }
     /// Publish a ready preview with only bounded display fields. The preview
     /// expires with the in-memory candidate and is never a confirmation.
@@ -286,11 +340,58 @@ impl ReportChannel {
         if rows.len() > 40 || rows.iter().any(|row| !row.is_object()) {
             return Err(ReportError::Invalid);
         }
-        self.publish_inner(id, Phase::Ready, now, Some(expires), Some(rows), None)
+        self.publish_inner(id, Phase::Ready, now, Some(expires), Some(rows), None, None)
+    }
+    pub fn publish_progress(
+        &self,
+        id: &str,
+        now: i64,
+        rows: &[Value],
+        available: usize,
+    ) -> Result<()> {
+        if rows.len() > 20 || rows.iter().any(|row| !row.is_object()) || available > 40 {
+            return Err(ReportError::Invalid);
+        }
+        self.publish_inner(
+            id,
+            Phase::Verifying,
+            now,
+            None,
+            Some(rows),
+            None,
+            Some(available),
+        )
+    }
+    pub fn publish_batch_preview(
+        &self,
+        id: &str,
+        now: i64,
+        expires: i64,
+        rows: &[Value],
+        available: usize,
+    ) -> Result<()> {
+        if rows.len() > 20 || rows.iter().any(|row| !row.is_object()) || available > 40 {
+            return Err(ReportError::Invalid);
+        }
+        self.publish_inner(
+            id,
+            Phase::Ready,
+            now,
+            Some(expires),
+            Some(rows),
+            None,
+            Some(available),
+        )
+    }
+    pub fn publish_complete(&self, id: &str, now: i64, rows: &[Value]) -> Result<()> {
+        if rows.len() > 20 || rows.iter().any(|row| !row.is_object()) {
+            return Err(ReportError::Invalid);
+        }
+        self.publish_inner(id, Phase::Complete, now, None, Some(rows), None, None)
     }
     /// Publish only a fixed diagnostic category, never an upstream error text.
     pub fn publish_failure(&self, id: &str, now: i64, reason: FailureReason) -> Result<()> {
-        self.publish_inner(id, Phase::Failed, now, None, None, Some(reason))
+        self.publish_inner(id, Phase::Failed, now, None, None, Some(reason), None)
     }
     fn publish_inner(
         &self,
@@ -300,6 +401,7 @@ impl ReportChannel {
         expires: Option<i64>,
         rows: Option<&[Value]>,
         reason: Option<FailureReason>,
+        available: Option<usize>,
     ) -> Result<()> {
         if unsafe { libc::geteuid() } != self.owner {
             return Err(ReportError::Unavailable);
@@ -321,6 +423,9 @@ impl ReportChannel {
         }
         if let Some(reason) = reason {
             value["reason"] = json!(reason.name());
+        }
+        if let Some(available) = available {
+            value["available"] = json!(available);
         }
         let bytes = serde_json::to_vec(&value).map_err(|_| ReportError::Unavailable)?;
         if bytes.len() > 32768 {
@@ -396,10 +501,20 @@ impl ReportChannel {
             let rows = rows
                 .as_array()
                 .filter(|rows| rows.len() <= 40 && rows.iter().all(Value::is_object))
-                .filter(|_| phase == Phase::Ready)
+                .filter(|_| matches!(phase, Phase::Verifying | Phase::Ready | Phase::Complete))
                 .ok_or(ReportError::Unavailable)?;
-            if status == "ready" {
+            if matches!(status, "verifying" | "ready" | "complete") {
                 result["rows"] = json!(public_entries(rows));
+            }
+        }
+        if let Some(available) = value.get("available") {
+            let available = available
+                .as_u64()
+                .filter(|v| *v <= 40)
+                .filter(|_| matches!(phase, Phase::Verifying | Phase::Ready))
+                .ok_or(ReportError::Unavailable)?;
+            if matches!(status, "verifying" | "ready") {
+                result["available"] = json!(available);
             }
         }
         if let Some(reason) = value.get("reason") {
@@ -474,6 +589,49 @@ mod tests {
             libc::getegid()
         })
     }
+    #[test]
+    fn batch_progress_and_completion_are_public_bounded_and_secret_free() {
+        let (_dir, path, uid, gid) = fixture();
+        let channel = ReportChannel::open(&path, uid, gid).unwrap();
+        let id = "a".repeat(32);
+        let rows = vec![
+            json!({"index":1,"line":2,"state":"testing","address":"1.1.1.1","port":80,
+            "password":"synthetic-password","username":"synthetic-user","reason":"synthetic-secret"}),
+        ];
+        channel.publish_progress(&id, 1000, &rows, 9).unwrap();
+        let report = channel.read(1001).unwrap();
+        assert_eq!(report["status"], "verifying");
+        assert_eq!(report["available"], 9);
+        assert_eq!(report["rows"][0]["state"], "testing");
+        assert_eq!(report["rows"][0]["line"], 2);
+        assert!(!report.to_string().contains("synthetic"));
+        assert!(!fs::read_to_string(path.join("report.json"))
+            .unwrap()
+            .contains("synthetic"));
+        let rows = vec![
+            json!({"index":1,"line":2,"state":"failed","address":"u:synthetic-secret","reason":"invalid_dns"}),
+        ];
+        channel
+            .publish_batch_preview(&id, 1001, 1100, &rows, 9)
+            .unwrap();
+        let ready = channel.read(1002).unwrap();
+        assert_eq!(ready["rows"][0]["reason"], "invalid_dns");
+        assert!(ready["rows"][0].get("address").is_none());
+        assert!(!ready.to_string().contains("synthetic"));
+        channel
+            .publish_complete(
+                &id,
+                1003,
+                &[json!({"tag":"residential-27","label":"fixture"})],
+            )
+            .unwrap();
+        let done = channel.read(1004).unwrap();
+        assert_eq!(done["status"], "complete");
+        assert_eq!(done["rows"][0]["tag"], "residential-27");
+        assert!(done.get("available").is_none());
+        assert!(channel.publish_progress(&id, 1004, &rows, 41).is_err());
+    }
+
     #[test]
     fn fresh_ready_report_expires_and_stale_or_future_reports_fail_closed() {
         let (_dir, path, uid, gid) = fixture();

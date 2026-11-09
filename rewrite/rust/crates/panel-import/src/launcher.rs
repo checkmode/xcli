@@ -270,6 +270,12 @@ impl Launcher {
         };
         let wrote = writer.join().unwrap_or(false);
         let (read, bytes) = reader.join().map_err(|_| ProbeError::Unavailable)?;
+        if status.is_none()
+            && Instant::now() >= deadline
+            && !stop.is_some_and(|stop| stop.load(Ordering::Acquire))
+        {
+            return Err(ProbeError::Timeout);
+        }
         if !status.is_some_and(|value| value.success()) || !wrote || !read || bytes.len() > 8192 {
             return Err(ProbeError::Unavailable);
         }
@@ -280,6 +286,12 @@ fn parse(bytes: &[u8], vmess: bool) -> Result<(ProbeResult, Option<Ipv4Addr>), P
     let protected = SecretJson::parse(bytes).map_err(|_| ProbeError::Unavailable)?;
     let value = protected.as_value();
     let map = value.as_object().ok_or(ProbeError::Unavailable)?;
+    if value["ok"] == false && map.len() == 2 && map.contains_key("reason") {
+        return Err(value["reason"]
+            .as_str()
+            .and_then(ProbeError::from_code)
+            .unwrap_or(ProbeError::Unavailable));
+    }
     let fields: &[&str] = if vmess {
         &[
             "ok",
@@ -338,6 +350,18 @@ mod tests {
     fn response_parser_rejects_private_extra_or_invalid_values() {
         let good = br#"{"ok":true,"exit_ip":"8.8.8.8","country":"US","https_ms":1,"doh_ms":2}"#;
         assert_eq!(parse(good, false).unwrap().0.exit_ip.to_string(), "8.8.8.8");
+        assert!(matches!(
+            parse(br#"{"ok":false,"reason":"invalid_dns"}"#, false),
+            Err(ProbeError::InvalidDns)
+        ));
+        assert!(matches!(
+            parse(br#"{"ok":false,"reason":"timeout"}"#, false),
+            Err(ProbeError::Timeout)
+        ));
+        assert!(matches!(
+            parse(br#"{"ok":false,"reason":"synthetic-secret"}"#, false),
+            Err(ProbeError::Unavailable)
+        ));
         for input in [
             br#"{"ok":true,"exit_ip":"127.0.0.1","country":"US","https_ms":1,"doh_ms":2}"#
                 .as_slice(),
@@ -403,7 +427,7 @@ printf '%s\n' '{{"ok":true,"exit_ip":"8.8.8.8","country":"US","https_ms":1,"doh_
         let started = Instant::now();
         assert!(matches!(
             launcher.run(&request, Duration::from_millis(250), None),
-            Err(ProbeError::Unavailable)
+            Err(ProbeError::Timeout)
         ));
         assert!(started.elapsed() < Duration::from_secs(3));
         let marker_dir = directory.path().join("cancel");

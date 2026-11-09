@@ -25,11 +25,41 @@ impl Protocol {
         }
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeError {
     Unavailable,
+    Timeout,
     InvalidExit,
     InvalidDns,
+    DnsUnavailable,
+}
+impl ProbeError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Timeout => "timeout",
+            Self::InvalidExit => "invalid_exit",
+            Self::InvalidDns => "invalid_dns",
+            Self::DnsUnavailable => "dns_unavailable",
+        }
+    }
+    pub(crate) fn from_code(value: &str) -> Option<Self> {
+        match value {
+            "unavailable" => Some(Self::Unavailable),
+            "timeout" => Some(Self::Timeout),
+            "invalid_exit" => Some(Self::InvalidExit),
+            "invalid_dns" => Some(Self::InvalidDns),
+            "dns_unavailable" => Some(Self::DnsUnavailable),
+            _ => None,
+        }
+    }
+}
+fn request_error(error: reqwest::Error) -> ProbeError {
+    if error.is_timeout() {
+        ProbeError::Timeout
+    } else {
+        ProbeError::Unavailable
+    }
 }
 pub struct ProbeResult {
     pub exit_ip: Ipv4Addr,
@@ -74,12 +104,7 @@ pub(crate) fn run(proxy: &ImportProxy, targets: &Targets) -> Result<ProbeResult,
     }
     let client = builder.build().map_err(|_| ProbeError::Unavailable)?;
     let start = Instant::now();
-    let trace = body(
-        client
-            .get(&targets.trace)
-            .send()
-            .map_err(|_| ProbeError::Unavailable)?,
-    )?;
+    let trace = body(client.get(&targets.trace).send().map_err(request_error)?)?;
     let trace = std::str::from_utf8(&trace).map_err(|_| ProbeError::InvalidExit)?;
     let (mut address, mut country) = (None, None);
     for line in trace.lines() {
@@ -99,14 +124,22 @@ pub(crate) fn run(proxy: &ImportProxy, targets: &Targets) -> Result<ProbeResult,
         .to_owned();
     let https_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let start = Instant::now();
-    let answer = body(
-        client
-            .get(&targets.dns)
-            .query(&[("dns", URL_SAFE_NO_PAD.encode(DNS_QUERY))])
-            .header("accept", "application/dns-message")
-            .send()
-            .map_err(|_| ProbeError::Unavailable)?,
-    )?;
+    let dns_response = client
+        .get(&targets.dns)
+        .query(&[("dns", URL_SAFE_NO_PAD.encode(DNS_QUERY))])
+        .header("accept", "application/dns-message")
+        .send()
+        .map_err(|error| {
+            if error.is_timeout() {
+                ProbeError::Timeout
+            } else {
+                ProbeError::DnsUnavailable
+            }
+        })?;
+    let answer = body(dns_response).map_err(|error| match error {
+        ProbeError::Unavailable => ProbeError::DnsUnavailable,
+        other => other,
+    })?;
     if answer.len() < 12
         || &answer[..2] != b"XG"
         || answer[2] & 128 == 0
@@ -212,7 +245,7 @@ mod tests {
         let valid = parse_fixed("1.1.1.1:80:fixture-user:synthetic-password").unwrap();
         let invalid = parse_fixed("1.1.1.1:80:fixture-user:wrong-password").unwrap();
         for protocol in ["socks", "http"] {
-            for mode in ["good", "private", "dnsfail", "oversize"] {
+            for mode in ["good", "private", "dnsfail", "dnsunavailable", "oversize"] {
                 let (_fixture, proxy, web) = server(&cert, &key, protocol, mode);
                 let scheme = if protocol == "socks" {
                     "socks5h"
@@ -246,6 +279,7 @@ mod tests {
                     }
                     "private" => assert!(matches!(result, Err(ProbeError::InvalidExit))),
                     "dnsfail" => assert!(matches!(result, Err(ProbeError::InvalidDns))),
+                    "dnsunavailable" => assert!(matches!(result, Err(ProbeError::DnsUnavailable))),
                     "oversize" => assert!(matches!(result, Err(ProbeError::Unavailable))),
                     _ => unreachable!(),
                 }

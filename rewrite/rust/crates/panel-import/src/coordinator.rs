@@ -9,9 +9,13 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroizing;
 
+enum PreviewSlot {
+    Single(Ready),
+    Batch(crate::batch::BatchReady),
+}
 #[derive(Default)]
 pub struct Coordinator {
-    slot: Option<(String, Ready)>,
+    slot: Option<(String, PreviewSlot)>,
 }
 
 fn exact(value: &Value, keys: &[&str]) -> bool {
@@ -69,7 +73,7 @@ impl Coordinator {
         hooks: &mut dyn Hooks,
         now: i64,
     ) -> Result<Value, PreviewError> {
-        self.handle_cancellable(request, store, launcher, hooks, now, None)
+        self.handle_cancellable(request, store, launcher, hooks, now, None, None)
     }
     pub(crate) fn handle_cancellable(
         &mut self,
@@ -79,6 +83,7 @@ impl Coordinator {
         hooks: &mut dyn Hooks,
         now: i64,
         stop: Option<&AtomicBool>,
+        progress: Option<&dyn Fn(&[Value], usize) -> Result<(), PreviewError>>,
     ) -> Result<Value, PreviewError> {
         if now < 0 {
             return Err(PreviewError::Invalid);
@@ -153,6 +158,29 @@ impl Coordinator {
                 };
                 Ok(self.remember(request.id(), ready))
             }
+            Action::PreviewBatch => {
+                self.slot = None;
+                if !exact(
+                    input,
+                    &["id", "requested_at", "action", "protocol", "label", "text"],
+                ) {
+                    return Err(PreviewError::Invalid);
+                }
+                let noop = |_: &[Value], _: usize| Ok(());
+                let batch = crate::batch::detect(
+                    store,
+                    launcher,
+                    input["protocol"].as_str().ok_or(PreviewError::Invalid)?,
+                    input["label"].as_str().ok_or(PreviewError::Invalid)?,
+                    input["text"].as_str().ok_or(PreviewError::Invalid)?,
+                    stop,
+                    progress.unwrap_or(&noop),
+                )?;
+                let rows = crate::report::public_entries(batch.rows());
+                let available = batch.available();
+                self.slot = Some((request.id().to_owned(), PreviewSlot::Batch(batch)));
+                Ok(json!({"id":request.id(),"status":"ready","rows":rows,"available":available}))
+            }
             Action::Manage => {
                 self.slot = None;
                 let operation = input["operation"].as_str().ok_or(PreviewError::Invalid)?;
@@ -218,15 +246,44 @@ impl Coordinator {
                 {
                     return Err(PreviewError::Invalid);
                 }
-                let internal_id = slot.1.id().to_owned();
-                slot.1.confirm(&internal_id, store, hooks)?;
+                let PreviewSlot::Single(ready) = slot.1 else {
+                    return Err(PreviewError::Invalid);
+                };
+                let internal_id = ready.id().to_owned();
+                ready.confirm(&internal_id, store, hooks)?;
                 Ok(json!({"id":request.id(),"status":"complete"}))
+            }
+            Action::ApplyBatch => {
+                let slot = self.slot.take().ok_or(PreviewError::Expired)?;
+                if !exact(
+                    input,
+                    &["id", "requested_at", "action", "preview_id", "selected"],
+                ) || input["preview_id"].as_str() != Some(&slot.0)
+                {
+                    return Err(PreviewError::Invalid);
+                }
+                let selected = input["selected"]
+                    .as_array()
+                    .ok_or(PreviewError::Invalid)?
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_u64()
+                            .and_then(|value| usize::try_from(value).ok())
+                            .ok_or(PreviewError::Invalid)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let PreviewSlot::Batch(batch) = slot.1 else {
+                    return Err(PreviewError::Invalid);
+                };
+                let rows = crate::report::public_entries(&batch.confirm(&selected, store, hooks)?);
+                Ok(json!({"id":request.id(),"status":"complete","rows":rows}))
             }
         }
     }
     fn remember(&mut self, id: &str, ready: Ready) -> Value {
         let rows = crate::report::public_entries(ready.entries());
-        self.slot = Some((id.to_owned(), ready));
+        self.slot = Some((id.to_owned(), PreviewSlot::Single(ready)));
         json!({"id":id,"status":"ready","rows":rows})
     }
 }

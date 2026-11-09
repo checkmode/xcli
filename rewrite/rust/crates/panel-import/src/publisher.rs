@@ -81,7 +81,9 @@ fn decoded(cipher: &[u8], key: &[u8]) -> Result<SecretJson> {
         return Err(PublishError::Invalid);
     }
     match value["action"].as_str() {
-        Some("preview" | "manage" | "apply" | "brutal_rate") => Ok(payload),
+        Some("preview" | "preview_batch" | "manage" | "apply" | "apply_batch" | "brutal_rate") => {
+            Ok(payload)
+        }
         _ => Err(PublishError::Invalid),
     }
 }
@@ -96,8 +98,8 @@ fn audit(value: &Value) -> Result<AuditRecord> {
         .filter(|n| *n >= 0)
         .ok_or(PublishError::Invalid)?;
     let detail = match value["action"].as_str() {
-        Some("preview") => "请求检测固定代理".to_owned(),
-        Some("apply") => "确认应用代理变更".to_owned(),
+        Some("preview" | "preview_batch") => "请求检测固定代理".to_owned(),
+        Some("apply" | "apply_batch") => "确认应用代理变更".to_owned(),
         Some("brutal_rate") => {
             let rate = value["mbps"]
                 .as_u64()
@@ -198,7 +200,7 @@ impl Publisher {
         let request =
             decoded(&desired, self.key.as_ref()).map_err(|_| PublishError::Unavailable)?;
         if preview_only
-            && ["apply", "brutal_rate"]
+            && ["apply", "apply_batch", "brutal_rate"]
                 .iter()
                 .any(|v| request.as_value()["action"] == *v)
         {
@@ -281,7 +283,7 @@ impl Publisher {
         let _guard = self.lock()?;
         let value = decoded(prepared.encrypted(), self.key.as_ref())?;
         if preview_only
-            && ["apply", "brutal_rate"]
+            && ["apply", "apply_batch", "brutal_rate"]
                 .iter()
                 .any(|v| value.as_value()["action"] == *v)
         {
@@ -309,7 +311,9 @@ impl Publisher {
         {
             return Err(PublishError::Invalid);
         }
-        if value.as_value()["action"] == "apply"
+        if ["apply", "apply_batch"]
+            .iter()
+            .any(|action| value.as_value()["action"] == *action)
             && (status != "ready"
                 || value.as_value()["preview_id"] != report["id"]
                 || report["expires"].as_i64().is_none_or(|v| v <= now))
@@ -414,6 +418,17 @@ mod tests {
         let mut audit = Audit::default();
         assert_eq!(
             publisher.submit_preview_only(&apply, &ready, 1000, &mut audit),
+            Err(PublishError::Invalid)
+        );
+        let batch = crate::request::prepare(
+            &json!({"action":"apply_batch","preview_id":"a".repeat(32),"selected":[1]}),
+            1000,
+            &key,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            publisher.submit_preview_only(&batch, &ready, 1000, &mut audit),
             Err(PublishError::Invalid)
         );
         let rate =

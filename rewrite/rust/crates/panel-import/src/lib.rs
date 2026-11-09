@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use zeroize::Zeroizing;
 
+#[cfg(target_os = "linux")]
+mod batch;
 pub mod config;
 #[cfg(target_os = "linux")]
 pub mod coordinator;

@@ -441,6 +441,19 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .proxy-import-result { margin-top: 14px; }
 .proxy-import-result h4 { margin: 0 0 4px; }
 .proxy-import-result .proxy-preview-list { margin-bottom: 12px; }
+.proxy-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.proxy-selection-actions button { min-height: 27px; padding: 4px 7px; font-size: 11px; }
+.proxy-probe-list { display: grid; gap: 5px; max-height: 300px; overflow-y: auto; margin: 10px 0; padding: 0; list-style: none; }
+.proxy-probe-list > li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 9px; border: 1px solid #e5ebf3; border-radius: 7px; background: white; }
+.proxy-probe-detail { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.proxy-probe-detail strong { display: block; color: #33475e; font-size: 11px; }
+.proxy-probe-detail small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.proxy-probe-detail .probe-failure { color: #b34249; }
+.proxy-probe-status { flex: 0 0 auto; color: #69798f; font-size: 10px; white-space: nowrap; }
+.proxy-probe-list .success .proxy-probe-status { color: #228051; }
+.proxy-probe-list .failed .proxy-probe-status { color: #b34249; }
+.proxy-probe-list .testing .proxy-probe-status { color: #245fb7; }
+.proxy-probe-list .proxy-select { margin-top: 1px; }
 .proxy-input-details { margin: 10px 0; color: #5b6c83; font-size: 11px; }
 .proxy-input-details summary { cursor: pointer; }
 .proxy-input-details textarea { width: 100%; margin-top: 8px; font-size: 11px; }

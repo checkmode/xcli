@@ -19,6 +19,8 @@ class Http(http.server.BaseHTTPRequestHandler):
             data = b'ip=127.0.0.1\nloc=US\n' if mode == 'private' else b'ip=8.8.8.8\nloc=US\n'
             if mode == 'oversize': data = b'x' * 8193
         elif urlsplit(self.path).path == '/dns-query':
+            if mode == 'dnsunavailable':
+                self.send_response(503);self.end_headers();return
             data = b'bad' if mode == 'dnsfail' else b'XG\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00'
         else:
             self.send_response(404);self.end_headers();return
