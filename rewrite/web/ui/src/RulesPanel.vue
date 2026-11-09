@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import RuleWorkspace from './RuleWorkspace.vue';
 import { changeSelectedRules, parseRuleLines, type SystemRule, type SystemRuleOverride } from './rule-list';
 import { validGroupOutbounds, type GroupOutbounds } from './group-defaults';
+import { validGroupOrderCatalog, type GroupOrderOption } from './group-order';
 
 type Group = { name: string; default: string };
 type Spec = { base: 'standard' | 'independent'; ai_outbound: string; rules: string; groups?: Group[]; group_defaults?: Record<string, string>; group_order?: string[]; group_names?: Record<string, string>; system_overrides?: Record<string, SystemRuleOverride> };
@@ -16,6 +17,8 @@ const systemRules = ref<Record<Spec['base'], SystemRule[]>>({ standard: [], inde
 const systemRulesAvailable = ref(false);
 const groupOutbounds = ref<Record<Spec['base'], GroupOutbounds>>({ standard: {}, independent: {} });
 const groupOutboundsAvailable = ref(false);
+const groupOrderCatalog = ref<Record<Spec['base'], GroupOrderOption[]>>({ standard: [], independent: [] });
+const groupOrderCatalogAvailable = ref(false);
 const loading = ref(true); const busy = ref(false); const message = ref(''); const notice = ref('');
 const groupMessage = ref('');
 const creating = ref(false); const editingGroup = ref<number | null>(null);
@@ -105,6 +108,9 @@ async function refresh(id?: string): Promise<boolean> {
     const outbounds = 'group_outbounds' in body && body.group_outbounds && typeof body.group_outbounds === 'object' ? body.group_outbounds as Record<string, unknown> : null;
     groupOutboundsAvailable.value = Boolean(outbounds && validGroupOutbounds(outbounds.standard) && validGroupOutbounds(outbounds.independent));
     groupOutbounds.value = groupOutboundsAvailable.value ? { standard: outbounds!.standard as GroupOutbounds, independent: outbounds!.independent as GroupOutbounds } : { standard: {}, independent: {} };
+    const ordering = 'group_order_catalog' in body && body.group_order_catalog && typeof body.group_order_catalog === 'object' ? body.group_order_catalog as Record<string, unknown> : null;
+    groupOrderCatalogAvailable.value = Boolean(ordering && validGroupOrderCatalog(ordering.standard) && validGroupOrderCatalog(ordering.independent));
+    groupOrderCatalog.value = groupOrderCatalogAvailable.value ? { standard: ordering!.standard as GroupOrderOption[], independent: ordering!.independent as GroupOrderOption[] } : { standard: [], independent: [] };
     templates.value = next; users.value = nextUsers;
     const item = next.find(template => template.id === (id ?? selectedId.value)) ?? next[0];
     if (item) open(item);
@@ -298,7 +304,7 @@ onMounted(() => { void refresh(); });
           </div>
           <p v-if="groupMessage" class="message" role="alert">{{ groupMessage }}</p>
         </details>
-        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :system-overrides="form.systemOverrides" :group-outbounds="groupOutbounds[form.base]" :group-outbounds-available="groupOutboundsAvailable" :group-defaults="form.groupDefaults" :group-order="form.groupOrder" :group-names="form.groupNames" :custom-groups="form.groups" :legacy-ai="form.ai" :busy="busy" @update:rules="updateRules" @update:system-overrides="updateSystemOverrides" @update:group-defaults="updateGroupDefaults" @update:group-order="updateGroupOrder" @rename-group="renameSelectedGroup" />
+        <RuleWorkspace :key="creating ? 'new' : selectedId" ref="ruleWorkspace" :rules="form.rules" :targets="targets" :system-rules="systemRules[form.base]" :system-rules-available="systemRulesAvailable" :system-overrides="form.systemOverrides" :group-outbounds="groupOutbounds[form.base]" :group-outbounds-available="groupOutboundsAvailable" :group-order-catalog="groupOrderCatalog[form.base]" :group-order-catalog-available="groupOrderCatalogAvailable" :group-defaults="form.groupDefaults" :group-order="form.groupOrder" :group-names="form.groupNames" :custom-groups="form.groups" :legacy-ai="form.ai" :busy="busy" @update:rules="updateRules" @update:system-overrides="updateSystemOverrides" @update:group-defaults="updateGroupDefaults" @update:group-order="updateGroupOrder" @rename-group="renameSelectedGroup" />
         <div class="editor-actions"><button v-if="selected?.builtin && !creating" type="button" :disabled="busy" @click="templateAction('reset')">恢复默认</button><button v-if="selected?.can_undo_reset && !creating" type="button" :disabled="busy" @click="templateAction('undo-reset')">撤销恢复</button><button type="button" :disabled="busy || !form.name.trim()" @click="save">保存草稿</button><button class="primary" type="button" :disabled="busy || creating || dirty" @click="templateAction('publish')">发布</button></div>
       </div>
     </div>

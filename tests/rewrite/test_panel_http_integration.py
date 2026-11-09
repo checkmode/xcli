@@ -237,9 +237,13 @@ class PanelHttpIntegration(unittest.TestCase):
                 self.assertEqual(request(port,'/api/rule-templates')[0],401)
                 status,_,data=request(port,'/api/rule-templates',cookie=cookie)
                 self.assertEqual(status,200)
-                self.assertEqual([item['id'] for item in json.loads(data)['templates']],['standard','independent'])
+                catalog=json.loads(data)
+                self.assertEqual([item['id'] for item in catalog['templates']],['standard','independent'])
+                visible=[item['value'] for item in catalog['group_order_catalog']['independent']]
+                self.assertTrue({'PROXY','直连','故障转移','自动选择','独立 · Google'}.issubset(visible))
                 rule_spec={'base':'independent','ai_outbound':'proxy','rules':'DOMAIN-SUFFIX,google.com,独立 · Google',
-                    'groups':[{'name':'工作','default':'故障转移'}]}
+                    'groups':[{'name':'工作','default':'故障转移'}],
+                    'group_order':['自动选择','故障转移','直连','PROXY','独立 · Google','工作']}
                 rule_body=json.dumps({'name':'  fixture  ','spec':rule_spec},ensure_ascii=False).encode()
                 self.assertEqual(request(port,'/api/rule-templates/validate','POST',rule_body)[0],401)
                 self.assertEqual(request(port,'/api/rule-templates/validate','POST',rule_body,cookie,'wrong')[0],403)
@@ -322,6 +326,9 @@ class PanelHttpIntegration(unittest.TestCase):
                 self.assertEqual(status,200);self.assertTrue(json.loads(data)['service_routing'])
                 status,_,data=request(port,'/s/'+token+'/shadowrocket.conf')
                 self.assertEqual(status,200);self.assertIn('XCLI-独立 · Google'.encode(),data)
+                shadow=data.decode()
+                positions=[shadow.index('XCLI-'+name+' = ') for name in ['自动选择','故障转移','直连','PROXY','独立 · Google','工作']]
+                self.assertEqual(positions,sorted(positions))
                 large = json.dumps({'name':'fixture', 'quota':10_000_000_000_000_000}).encode()
                 self.assertEqual(request(port, '/api/users/'+user_id, 'PUT', large, cookie, csrf)[0], 200)
                 self.assertEqual(json.loads(request(port, '/api/users', cookie=cookie)[2])['users'][0]['quota'], '10000000000000000')

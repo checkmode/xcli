@@ -2024,9 +2024,10 @@ async fn list_rule_templates(State(app): State<App>, headers: HeaderMap) -> Resp
             })
             .cloned()
             .collect::<Vec<_>>();
-        catalog["group_outbounds"] =
-            xcli_panel_clash::template_group_catalog(&settings, &remote, dynamic_enabled)
-                .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
+        let (defaults, order) = xcli_panel_clash::template_group_catalogs(&settings, &remote, dynamic_enabled)
+            .map_err(|_| RuleCatalogError::Store(RuleStoreError::Unavailable))?;
+        catalog["group_outbounds"] = defaults;
+        catalog["group_order_catalog"] = order;
         Ok(catalog)
     })
     .await;

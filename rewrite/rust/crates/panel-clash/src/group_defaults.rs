@@ -159,16 +159,23 @@ pub(super) fn apply(
     Ok(())
 }
 
-/// Reorder only named policy groups; generated helper groups keep their slots.
-pub(super) fn order(config: &mut Value, spec: &Value) -> Result<()> {
+/// Reorder requested groups, preserving the positions of unlisted helpers.
+pub(super) fn order(config: &mut Value, spec: &Value, outbound: &BTreeMap<String, String>) -> Result<()> {
     let Some(order) = spec.get("group_order").and_then(Value::as_array) else {
         return Ok(());
     };
-    let mut ranks = order
-        .iter()
-        .enumerate()
-        .map(|(index, value)| value.as_str().map(|name| (name, index)).ok_or_else(invalid))
-        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut ranks = BTreeMap::new();
+    for (index, value) in order.iter().enumerate() {
+        let name = value.as_str().ok_or_else(invalid)?;
+        let actual = if let Some(country) = name.strip_prefix("#country:") {
+            Some(format!("住宅分组 · {}", country_label(country)))
+        } else if let Some(tag) = name.strip_prefix("#node:") {
+            outbound.get(tag).cloned()
+        } else {
+            Some(name.to_owned())
+        };
+        if let Some(actual) = actual { ranks.insert(actual, index); }
+    }
     let mut next = order.len();
     for name in ["PROXY", "STUN", "EaseLian", "独立 · AI", "独立 · Google", "独立 · Telegram",
                  "独立 · YouTube", "独立 · Netflix", "独立 · 国外媒体", "独立 · STUN", "其他流量", "oracle-cloud"]
@@ -177,7 +184,7 @@ pub(super) fn order(config: &mut Value, spec: &Value) -> Result<()> {
             .filter_map(|group| group.get("name").and_then(Value::as_str)))
     {
         if !ranks.contains_key(name) {
-            ranks.insert(name, next);
+            ranks.insert(name.to_owned(), next);
             next += 1;
         }
     }
@@ -201,7 +208,7 @@ pub(super) fn order(config: &mut Value, spec: &Value) -> Result<()> {
 /// Construct an authenticated editor catalog from configured resources using
 /// the same generation path as subscriptions. It contains labels and stable
 /// selectors only, never credentials or generated proxies.
-pub(super) fn catalog(settings: &Value, remote: &[Value], dynamic_enabled: bool) -> Result<Value> {
+pub(super) fn catalogs(settings: &Value, remote: &[Value], dynamic_enabled: bool) -> Result<(Value, Value)> {
     let mut settings = settings.clone();
     if let Some(object) = settings.as_object_mut() {
         object.remove("clash_service_routes");
@@ -212,6 +219,7 @@ pub(super) fn catalog(settings: &Value, remote: &[Value], dynamic_enabled: bool)
         uuid: "00000000-0000-4000-8000-000000000000".into(),
     };
     let mut result = Map::new();
+    let mut order_catalog = Map::new();
     for base in ["standard", "independent"] {
         let policy = json!({"base":base,"ai_outbound":"proxy","rules":"","groups":[{"name":CUSTOM,"default":"PROXY"}],"managed":true});
         let (config, outbound) =
@@ -219,11 +227,24 @@ pub(super) fn catalog(settings: &Value, remote: &[Value], dynamic_enabled: bool)
         let mut custom = BTreeSet::new();
         custom.insert(CUSTOM.to_owned());
         let mut groups = Map::new();
+        let mut ordered = Vec::new();
         for item in config["proxy-groups"].as_array().ok_or_else(invalid)? {
             let name = item
                 .get("name")
                 .and_then(Value::as_str)
                 .ok_or_else(invalid)?;
+            if item.get("hidden").and_then(Value::as_bool) != Some(true) {
+                let country = settings.get("residential_exits").and_then(Value::as_array)
+                    .into_iter().flatten().filter_map(|exit| exit.get("country").and_then(Value::as_str))
+                    .find(|country| name == format!("住宅分组 · {}", country_label(country)));
+                let dynamic = outbound.iter().find(|(tag, target)|
+                    tag.starts_with("residential-") && target.as_str() == name);
+                let value = if name == CUSTOM { "__custom__".to_owned() }
+                    else if let Some(country) = country { format!("#country:{country}") }
+                    else if let Some((tag, _)) = dynamic { format!("#node:{tag}") }
+                    else { name.to_owned() };
+                ordered.push(json!({"value":value,"label":name}));
+            }
             if !configurable_group(base, name, &custom) {
                 continue;
             }
@@ -251,6 +272,7 @@ pub(super) fn catalog(settings: &Value, remote: &[Value], dynamic_enabled: bool)
             );
         }
         result.insert(base.into(), Value::Object(groups));
+        order_catalog.insert(base.into(), json!(ordered));
     }
-    Ok(Value::Object(result))
+    Ok((Value::Object(result), Value::Object(order_catalog)))
 }

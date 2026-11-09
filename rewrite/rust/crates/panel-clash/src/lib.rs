@@ -490,7 +490,7 @@ fn build_with_outbound(
     apply_oracle(&mut result)?;
     if managed {
         system_overrides::apply(&mut result, policy, domain)?;
-        group_defaults::order(&mut result, policy)?;
+        group_defaults::order(&mut result, policy, &outbound)?;
         group_names::apply(&mut result, policy)?;
     }
     Ok((result, outbound))
@@ -502,7 +502,16 @@ pub fn template_group_catalog(
     remote_nodes: &[Value],
     dynamic_enabled: bool,
 ) -> Result<Value> {
-    group_defaults::catalog(settings, remote_nodes, dynamic_enabled)
+    group_defaults::catalogs(settings, remote_nodes, dynamic_enabled).map(|(defaults, _)| defaults)
+}
+
+/// Return default choices and the visible groups in their generated order.
+pub fn template_group_catalogs(
+    settings: &Value,
+    remote_nodes: &[Value],
+    dynamic_enabled: bool,
+) -> Result<(Value, Value)> {
+    group_defaults::catalogs(settings, remote_nodes, dynamic_enabled)
 }
 
 /// Describe the system-provided base rules using the same generator as a

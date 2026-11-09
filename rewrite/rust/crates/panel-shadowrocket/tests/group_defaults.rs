@@ -155,6 +155,23 @@ fn group_display_order_is_shared_with_shadowrocket() {
 }
 
 #[test]
+fn generated_groups_follow_the_same_order_in_shadowrocket() {
+    let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
+        "group_order":["自动选择","独立 · AI","故障转移","直连","PROXY"]});
+    let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
+    let positions: Vec<usize> = ["XCLI-自动选择 = ", "XCLI-独立 · AI = ", "XCLI-故障转移 = ",
+        "XCLI-直连 = ", "XCLI-PROXY = "].iter().map(|name| config.find(name).unwrap()).collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let standard = json!({"base":"standard","ai_outbound":"proxy","rules":"","managed":true,
+        "group_order":["#country:US","PROXY","STUN"]});
+    let config = profile(&settings(), &user(), &[], false, &standard).unwrap();
+    let positions: Vec<usize> = ["XCLI-住宅分组 · 美国 = ", "XCLI-PROXY = ", "XCLI-STUN = "]
+        .iter().map(|name| config.find(name).unwrap()).collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
 fn system_domain_edits_are_included_in_shadowrocket() {
     let rows = xcli_panel_clash::system_rules_preview("panel.example.com", "independent").unwrap();
     let row = rows

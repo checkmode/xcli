@@ -70,6 +70,13 @@ fn group_order_allows_known_actions_and_groups_without_duplicates() {
     let mut unknown = spec.clone();
     unknown["group_order"] = json!(["未知"]);
     assert!(validate(&unknown).is_err());
+    let mut generated = spec.clone();
+    generated["group_order"] = json!(["自动选择", "故障转移", "直连", "#country:SG", "#node:residential-41"]);
+    assert_eq!(validate(&generated).unwrap(), generated);
+    for name in ["#country:sg", "#country:SG2", "#node:residential-xyz", "#node:reality"] {
+        generated["group_order"] = json!([name]);
+        assert!(validate(&generated).is_err(), "{name}");
+    }
 }
 
 #[test]

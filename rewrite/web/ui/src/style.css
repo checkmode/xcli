@@ -191,11 +191,12 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 .group-picker-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px; margin: 0 4px 8px; }
 .group-picker-heading h4 { margin: 0; font-size: 13px; }
 .group-picker-heading span { color: var(--muted); font-size: 11px; }
-.mobile-group-picker-toggle, .mobile-group-return { display: none; }
+.mobile-group-picker-toggle, .mobile-group-return, .mobile-group-picker-hint, .group-move-control { display: none; }
 .group-picker-items { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
-.group-picker-items > button, .group-picker-item > button:not(.drag-handle) { display: flex; justify-content: space-between; width: 100%; min-width: 0; min-height: 33px; gap: 6px; padding: 6px 8px; border-color: transparent; background: transparent; text-align: left; font-size: 11px; font-weight: 500; white-space: normal; }
-.group-picker-items > button span:first-child, .group-picker-item > button:not(.drag-handle) span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.group-picker-items > button span:last-child, .group-picker-item > button:not(.drag-handle) span:last-child { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.group-picker-subheading { margin: 8px 8px 1px; color: var(--muted); font-size: 11px; }
+.group-picker-items > button, .group-picker-item > button:not(.drag-handle):not(.group-move-control) { display: flex; justify-content: space-between; width: 100%; min-width: 0; min-height: 33px; gap: 6px; padding: 6px 8px; border-color: transparent; background: transparent; text-align: left; font-size: 11px; font-weight: 500; white-space: normal; }
+.group-picker-items > button span:first-child, .group-picker-item > button:not(.drag-handle):not(.group-move-control) span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.group-picker-items > button span:last-child, .group-picker-item > button:not(.drag-handle):not(.group-move-control) span:last-child { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .group-picker-items > button.active, .group-picker-item > button.active { border-color: #a8c9f5; color: #174b90; background: #eef5ff; }
 .group-picker-items > button.active span:last-child, .group-picker-item > button.active span:last-child { color: #3565a2; }
 .group-picker-item { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; min-width: 0; }
@@ -324,6 +325,11 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
   .group-picker-heading { display: none; }
   .mobile-group-picker-toggle { display: flex; justify-content: flex-start; width: 100%; min-width: 0; border-color: transparent; background: transparent; text-align: left; font-size: 12px; }
   .mobile-group-picker-toggle strong { min-width: 0; margin-left: auto; overflow-wrap: anywhere; color: #315f9f; font-weight: 600; white-space: normal; }
+  .mobile-group-picker-hint { display: block; margin: 5px 8px 0; color: var(--muted); font-size: 11px; }
+  .group-picker-item { grid-template-columns: 24px minmax(0, 1fr) 26px 26px; }
+  .group-picker-items .drag-handle { width: 24px; min-width: 24px; min-height: 34px; }
+  .group-picker-item > .group-move-control { display: inline-flex; align-items: center; justify-content: center; width: 26px; min-width: 26px; min-height: 32px; padding: 0; border: 0; color: #61718a; background: transparent; font-size: 14px; }
+  .group-picker-item > .group-move-control:disabled { opacity: .3; }
   .group-picker-items { display: none; }
   .group-picker-items.is-open { display: grid; max-height: min(45vh, 420px); overflow-y: auto; margin-top: 6px; }
   .mobile-group-return { display: inline-flex; min-height: 30px; padding: 5px 9px; font-size: 11px; }

@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use xcli_panel_clash::{build, template_group_catalog, User};
+use xcli_panel_clash::{build, template_group_catalog, template_group_catalogs, User};
 use xcli_panel_rules::{factory_independent_rules, factory_spec};
 
 fn settings() -> Value {
@@ -292,6 +292,48 @@ fn group_order_changes_display_only_and_preserves_other_configuration() {
     assert!(position("独立 · AI") < position("PROXY"));
     assert!(position("PROXY") < position("oracle-cloud"));
     assert_eq!(first(&new, "oracle-cloud"), "DIRECT");
+}
+
+#[test]
+fn visible_generated_groups_can_be_catalogued_and_reordered() {
+    let mut values = settings();
+    values["residential_exits"][1]["hysteria2"] = json!(true);
+    let (_, catalog) = template_group_catalogs(&values, &[], true).unwrap();
+    let ids = |base: &str| catalog[base].as_array().unwrap().iter()
+        .map(|item| item["value"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let independent = ids("independent");
+    for group in ["PROXY", "直连", "故障转移", "自动选择", "独立 · AI", "#node:residential-42", "__custom__", "oracle-cloud"] {
+        assert!(independent.contains(&group.to_owned()), "{group}");
+    }
+    assert!(!independent.contains(&"#country:US".to_owned()));
+    assert!(!independent.contains(&"#node:residential-41".to_owned()));
+    assert!(ids("standard").contains(&"#country:US".to_owned()));
+
+    let mut policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
+        "group_order":["自动选择","独立 · AI","故障转移","#node:residential-42","直连","PROXY"]});
+    let mut original_policy = policy.clone();
+    original_policy.as_object_mut().unwrap().remove("group_order");
+    let original = build(&values, &user(), &[], true, &original_policy).unwrap();
+    let actual = build(&values, &user(), &[], true, &policy).unwrap();
+    for key in ["rules", "dns", "proxies", "rule-providers"] {
+        assert_eq!(actual[key], original[key], "{key}");
+    }
+    let positions = |config: &Value, names: &[&str]| names.iter().map(|name|
+        config["proxy-groups"].as_array().unwrap().iter().position(|g| g["name"] == *name).unwrap()
+    ).collect::<Vec<_>>();
+    let independent_positions = positions(&actual, &["自动选择", "独立 · AI", "故障转移", "动态 US", "直连", "PROXY"]);
+    assert!(independent_positions.windows(2).all(|v| v[0] < v[1]));
+    policy["base"] = json!("standard");
+    policy["group_order"] = json!(["#country:US", "#node:residential-42", "PROXY", "STUN"]);
+    let standard = build(&values, &user(), &[], true, &policy).unwrap();
+    let standard_positions = positions(&standard, &["住宅分组 · 美国", "动态 US", "PROXY", "STUN"]);
+    assert!(standard_positions.windows(2).all(|v| v[0] < v[1]));
+
+    let existing_custom = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
+        "groups":[{"name":"country:US","default":"PROXY"}],"group_order":["country:US","PROXY"]});
+    let config = build(&values, &user(), &[], false, &existing_custom).unwrap();
+    let custom_positions = positions(&config, &["country:US", "PROXY"]);
+    assert!(custom_positions[0] < custom_positions[1]);
 }
 
 #[test]

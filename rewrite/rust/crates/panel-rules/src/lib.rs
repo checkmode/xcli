@@ -346,15 +346,22 @@ pub fn validate(input: &Value) -> Result<Value> {
     if let Some(value) = input.get("group_order") {
         let items = value
             .as_array()
-            .filter(|items| items.len() <= 32)
+            .filter(|items| items.len() <= 128)
             .ok_or_else(|| invalid("分组顺序格式不正确"))?;
         let mut seen = BTreeSet::new();
         for item in items {
             let name = item.as_str().ok_or_else(|| invalid("分组顺序格式不正确"))?;
             let builtin = matches!(name, "PROXY" | "DIRECT" | "REJECT" | "STUN" | "EaseLian" |
+                "直连" | "故障转移" | "自动选择" |
                 "独立 · AI" | "独立 · Google" | "独立 · Telegram" | "独立 · YouTube" |
                 "独立 · Netflix" | "独立 · 国外媒体" | "独立 · STUN" | "其他流量" | "oracle-cloud");
-            if !(builtin || names.contains(name)) || !seen.insert(name) {
+            // '#' cannot occur in user-defined group names, so generated
+            // identifiers cannot be confused with an existing custom name.
+            let country = name.strip_prefix("#country:").is_some_and(|value|
+                value.len() == 2 && value.bytes().all(|c| c.is_ascii_uppercase()));
+            let dynamic = name.strip_prefix("#node:residential-").is_some_and(|value|
+                value.len() == 2 && value.bytes().all(|c| c.is_ascii_digit()));
+            if !(builtin || country || dynamic || names.contains(name)) || !seen.insert(name) {
                 return Err(invalid("分组顺序包含重复或未知分组"));
             }
         }

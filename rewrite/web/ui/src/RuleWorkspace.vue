@@ -2,9 +2,10 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { changeSelectedRules, countRulesByTarget, filterRuleLines, filterSystemRules, moveRule, movedRuleIndex, parseRuleLines, remapRuleTargets, resolutionKinds, ruleKinds, selectVisibleRules, type RuleLine, type SystemRule, type SystemRuleOverride } from './rule-list';
 import { inheritedGroupDefault, outboundLabel, type CustomGroup, type GroupOutbounds } from './group-defaults';
+import { orderedGroups, type GroupOrderOption } from './group-order';
 
 const props = defineProps<{ rules: string; targets: string[]; systemRules: SystemRule[]; systemRulesAvailable: boolean;
-  systemOverrides: Record<string, SystemRuleOverride>; groupOutbounds: GroupOutbounds; groupOutboundsAvailable: boolean; groupDefaults: Record<string, string>; groupOrder: string[]; groupNames: Record<string, string>; customGroups: CustomGroup[]; legacyAi: string; busy: boolean }>();
+  systemOverrides: Record<string, SystemRuleOverride>; groupOutbounds: GroupOutbounds; groupOutboundsAvailable: boolean; groupOrderCatalog: GroupOrderOption[]; groupOrderCatalogAvailable: boolean; groupDefaults: Record<string, string>; groupOrder: string[]; groupNames: Record<string, string>; customGroups: CustomGroup[]; legacyAi: string; busy: boolean }>();
 const emit = defineEmits<{ 'update:rules': [value: string]; 'update:system-overrides': [value: Record<string, SystemRuleOverride>]; 'update:group-defaults': [value: Record<string, string>]; 'update:group-order': [value: string[]]; 'rename-group': [original: string, name: string] }>();
 const filters = reactive({ query: '', kind: '', resolution: '', selectedOnly: false });
 const selectedTarget = ref('');
@@ -62,11 +63,13 @@ const allChecked = computed(() => visibleRules.value.length > 0 && visibleSelect
 const someChecked = computed(() => visibleSelected.value > 0 && !allChecked.value);
 const globalFiltersActive = computed(() => Boolean(filters.query.trim() || filters.kind || filters.resolution || filters.selectedOnly));
 const filterActive = computed(() => Boolean(globalFiltersActive.value || selectedTarget.value));
-const filterTargets = computed(() => {
+const groupOptions = computed(() => orderedGroups(props.groupOrderCatalog, props.customGroups.map(group => group.name), props.groupOrder));
+const filterTargets = computed(() => groupOptions.value.map(group => group.value));
+const actionTargets = computed(() => {
   const values = [...new Set([...props.targets, ...Object.keys(props.groupDefaults), ...effectiveSystemRules.value.map(rule => rule.target), ...lines.value.flatMap(line => line.fields?.[2] ? [line.fields[2]] : [])])];
-  const ordered = props.groupOrder.filter(name => values.includes(name));
-  return [...ordered, ...values.filter(name => !ordered.includes(name))];
+  return values.filter(name => !filterTargets.value.includes(name));
 });
+const allTargets = computed(() => [...filterTargets.value, ...actionTargets.value]);
 const filterKinds = computed(() => [...new Set([...ruleKinds, ...effectiveSystemRules.value.map(rule => rule.kind)])]);
 const groupCounts = computed(() => countRulesByTarget(lines.value, effectiveSystemRules.value, effectiveFilters.value, selectedSet.value, props.groupNames));
 const groupDescriptor = computed(() => props.groupOutbounds[selectedTarget.value] ??
@@ -87,7 +90,9 @@ const hasPending = computed(() => rulePending.value || editingGroupName.value);
 const displayRules = computed(() => remapRuleTargets(props.rules, props.groupNames));
 const reverseNames = computed(() => Object.fromEntries(Object.entries(props.groupNames).map(([original, display]) => [display, original])));
 const reservedNames = new Set(['DIRECT', 'REJECT', 'PROXY', 'STUN', '直连', '故障转移', '自动选择', '住宅节点', 'EaseLian', '独立 · AI', '独立 · Google', '独立 · Telegram', '独立 · YouTube', '独立 · Netflix', '独立 · 国外媒体', '独立 · STUN', '其他流量', 'oracle-cloud']);
-function displayTarget(target: string) { return props.groupNames[target] ?? target; }
+function displayTarget(target: string) { return props.groupNames[target] ?? groupOptions.value.find(group => group.value === target)?.label ?? target; }
+const canRenameGroup = computed(() => selectedTarget.value === 'oracle-cloud' ||
+  (props.targets.includes(selectedTarget.value) && !['DIRECT', 'REJECT'].includes(selectedTarget.value)));
 function targetLabel(target: string) { return target === 'DIRECT' ? 'DIRECT · 直连' : target === 'REJECT' ? 'REJECT · 拒绝' : displayTarget(target); }
 function beginGroupName() {
   if (rulePending.value) { error.value = '请先完成正在编辑的规则。'; return; }
@@ -114,7 +119,7 @@ watch(() => props.rules, value => {
   if (value === expectedRules) { expectedRules = undefined; return; }
   expectedRules = undefined; selectedLines.value = []; lastChange.value = null; notice.value = ''; cancelLine();
 });
-watch(filterTargets, targets => { if (selectedTarget.value && !targets.includes(selectedTarget.value)) selectedTarget.value = ''; });
+watch(allTargets, targets => { if (selectedTarget.value && !targets.includes(selectedTarget.value)) selectedTarget.value = ''; });
 watch(() => props.targets, targets => {
   if (!editingExisting.value && !hasPending.value && !targets.includes(lineForm.target)) lineForm.target = targets[0] ?? 'PROXY';
   if (!targets.includes(bulkTarget.value)) bulkTarget.value = '';
@@ -142,7 +147,7 @@ function openGroups() {
   void nextTick(() => groupPicker.value?.scrollIntoView({ block: 'start' }));
 }
 function reorderGroup(source: string, target: string, after: boolean) {
-  if (props.busy) return;
+  if (props.busy || !props.groupOrderCatalogAvailable) return;
   const values = [...filterTargets.value];
   const from = values.indexOf(source); const position = values.indexOf(target);
   if (from < 0 || position < 0 || from === position) return;
@@ -369,15 +374,21 @@ function openRaw(event: MouseEvent) {
       </div>
     </div>
     <nav ref="groupPicker" class="group-picker" aria-label="查看分组规则">
-      <div class="group-picker-heading"><h4>查看分组</h4><span>匹配数量</span></div>
+      <div class="group-picker-heading"><h4>查看分组</h4><span>{{ filterTargets.length }} 组 · 拖动排序</span></div>
       <button class="mobile-group-picker-toggle" type="button" :aria-expanded="groupPickerOpen" aria-controls="rule-groups" @click="groupPickerOpen = !groupPickerOpen"><span>查看分组</span><strong>{{ selectedTarget ? displayTarget(selectedTarget) : '全部分组' }}</strong><span aria-hidden="true">{{ groupPickerOpen ? '▴' : '▾' }}</span></button>
+      <p v-if="groupPickerOpen" class="mobile-group-picker-hint">共 {{ filterTargets.length }} 个分组 · 上下滚动查看，可拖动或用箭头排序</p>
       <div id="rule-groups" class="group-picker-items" :class="{ 'is-open': groupPickerOpen }">
         <button type="button" :class="{ active: !selectedTarget }" :aria-pressed="!selectedTarget" @click="chooseGroup('')"><span>全部分组</span><span>{{ groupCounts.total }}</span></button>
-        <div v-for="target in filterTargets" :key="target" class="group-picker-item" :data-group-name="target" :class="{ 'drag-before': drag?.kind === 'group' && drag.active && drag.target === target && !drag.after, 'drag-after': drag?.kind === 'group' && drag.active && drag.target === target && drag.after }">
-          <button class="drag-handle" type="button" :disabled="busy" :aria-label="'调整分组顺序 ' + displayTarget(target)" title="拖动调整顺序；也可使用上下方向键" @pointerdown="startDrag($event, 'group', target)" @pointermove="updateDrag" @pointerup="endDrag($event)" @pointercancel="endDrag($event, true)" @keydown.up.prevent="moveAdjacent('group', target, -1)" @keydown.down.prevent="moveAdjacent('group', target, 1)"><span aria-hidden="true">⋮⋮</span></button>
+        <div v-for="(target, index) in filterTargets" :key="target" class="group-picker-item" :data-group-name="target" :class="{ 'drag-before': drag?.kind === 'group' && drag.active && drag.target === target && !drag.after, 'drag-after': drag?.kind === 'group' && drag.active && drag.target === target && drag.after }">
+          <button class="drag-handle" type="button" :disabled="busy || !groupOrderCatalogAvailable" :aria-label="'调整分组顺序 ' + displayTarget(target)" title="拖动调整顺序；也可使用上下方向键" @pointerdown="startDrag($event, 'group', target)" @pointermove="updateDrag" @pointerup="endDrag($event)" @pointercancel="endDrag($event, true)" @keydown.up.prevent="moveAdjacent('group', target, -1)" @keydown.down.prevent="moveAdjacent('group', target, 1)"><span aria-hidden="true">⋮⋮</span></button>
           <button type="button" :class="{ active: selectedTarget === target }" :aria-pressed="selectedTarget === target" @click="chooseGroup(target)"><span>{{ displayTarget(target) }}</span><span>{{ groupCounts.counts.get(target) ?? 0 }}</span></button>
+          <button class="group-move-control" type="button" :disabled="busy || !groupOrderCatalogAvailable || index === 0" :aria-label="'上移分组 ' + displayTarget(target)" @click="moveAdjacent('group', target, -1)">↑</button>
+          <button class="group-move-control" type="button" :disabled="busy || !groupOrderCatalogAvailable || index === filterTargets.length - 1" :aria-label="'下移分组 ' + displayTarget(target)" @click="moveAdjacent('group', target, 1)">↓</button>
         </div>
+        <p v-if="actionTargets.length" class="group-picker-subheading">规则动作</p>
+        <button v-for="target in actionTargets" :key="target" type="button" :class="{ active: selectedTarget === target }" :aria-pressed="selectedTarget === target" @click="chooseGroup(target)"><span>{{ targetLabel(target) }}</span><span>{{ groupCounts.counts.get(target) ?? 0 }}</span></button>
       </div>
+      <p v-if="!groupOrderCatalogAvailable" class="group-default-warning">无法读取完整分组，请刷新页面后重试。</p>
       <p v-if="orphanedDefaults.length" class="group-default-warning">{{ orphanedDefaults.length }} 个分组不属于当前基础模板，请选择后移除其默认出口。</p>
     </nav>
     <div class="rule-list-pane">
@@ -433,7 +444,7 @@ function openRaw(event: MouseEvent) {
     <aside class="rule-side" aria-label="分组与规则编辑">
     <div v-if="selectedTarget" class="group-settings-pane">
       <h4>分组设置</h4><p class="group-settings-name">{{ displayTarget(selectedTarget) }}</p>
-      <div v-if="!['DIRECT', 'REJECT'].includes(selectedTarget)" class="group-name-editor">
+      <div v-if="canRenameGroup" class="group-name-editor">
         <template v-if="editingGroupName"><label>分组名称<input v-model="groupNameDraft" maxlength="64" :disabled="busy" @keydown.enter.prevent="saveGroupName" @keydown.esc.prevent="cancelGroupName"></label><div class="group-name-actions"><button type="button" :disabled="busy" @click="saveGroupName">确定名称</button><button type="button" :disabled="busy" @click="cancelGroupName">取消</button></div><p v-if="groupNameError" class="message" role="alert">{{ groupNameError }}</p></template>
         <template v-else><button type="button" :disabled="busy || rulePending" @click="beginGroupName">修改名称</button><button v-if="groupNames[selectedTarget]" type="button" :disabled="busy || rulePending" @click="$emit('rename-group', selectedTarget, selectedTarget)">恢复默认名称</button></template>
       </div>
