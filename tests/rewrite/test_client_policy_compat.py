@@ -23,7 +23,32 @@ class ClientPolicyCompatibility(unittest.TestCase):
             expected=ask(old,payload);actual=ask(new,payload)
             self.assertEqual(actual['ok'],expected['ok'])
             if expected['ok']:
-                self.assertEqual(json.dumps(actual['value'],ensure_ascii=False),json.dumps(expected['value'],ensure_ascii=False))
+                if payload['action']=='client-policy':
+                    previous,current=expected['value'],actual['value']
+                    # Matching rules, DNS and concrete nodes still follow the
+                    # legacy implementation; selection lists intentionally do not.
+                    for key in ('proxies','rules','dns','rule-providers'):
+                        self.assertEqual(json.dumps(current[key],ensure_ascii=False),
+                                         json.dumps(previous[key],ensure_ascii=False),key)
+                    old_groups={item['name']:item for item in previous['proxy-groups']}
+                    new_groups={item['name']:item for item in current['proxy-groups']}
+                    self.assertEqual(set(old_groups)-{'住宅节点'},set(new_groups))
+                    for name in ('故障转移','自动选择','独立 · STUN','直连'):
+                        self.assertEqual(new_groups[name],old_groups[name])
+                    countries=[g for g in payload['config']['proxy-groups'] if g['name'].startswith('住宅分组 · ')]
+                    residential={node for g in countries for node in g['proxies']
+                                 if node in {v for k,v in payload['outbound'].items() if k.startswith('residential-')}}
+                    for country in countries:self.assertTrue(new_groups[country['name']]['hidden'])
+                    for name,group in new_groups.items():
+                        if name in ('独立 · STUN',) or not (name.startswith('独立 · ') or name=='EaseLian'):continue
+                        self.assertEqual(group['proxies'][0],old_groups[name]['proxies'][0])
+                        self.assertIn('DIRECT',group['proxies'])
+                        self.assertTrue(residential.issubset(group['proxies']))
+                        self.assertFalse(any(value.startswith('住宅分组 · ') for value in group['proxies']))
+                    self.assertTrue(residential.issubset(new_groups['PROXY']['proxies']))
+                    self.assertEqual(new_groups['其他流量']['proxies'][:2],old_groups['其他流量']['proxies'][:2])
+                else:
+                    self.assertEqual(json.dumps(actual['value'],ensure_ascii=False),json.dumps(expected['value'],ensure_ascii=False))
             else:self.assertEqual(actual,expected)
             return expected
         try:

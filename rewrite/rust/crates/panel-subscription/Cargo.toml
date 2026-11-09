@@ -12,6 +12,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 xcli-auth-compat = { path = "../auth-compat" }
 xcli-panel-users = { path = "../panel-users" }
+xcli-panel-rules = { path = "../panel-rules" }
 zeroize = "1.8"
 
 [dev-dependencies]

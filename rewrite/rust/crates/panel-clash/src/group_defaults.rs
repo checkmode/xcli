@@ -88,6 +88,29 @@ fn choices(
             }
         }
     }
+    if members.iter().any(|member| member == "DIRECT") {
+        add(&mut output, "selector:直连".into(), "直连（旧默认）".into(), "DIRECT".into());
+    }
+    // Older templates can name a country as their default. In flattened
+    // policies resolve that legacy value to the country's first actual exit.
+    if !matches!(group, "STUN" | "独立 · STUN") {
+        let mut first: BTreeMap<String, String> = BTreeMap::new();
+        for exit in settings.get("residential_exits").and_then(Value::as_array).into_iter().flatten() {
+            let country = exit.get("country").and_then(Value::as_str).ok_or_else(invalid)?;
+            let tag = exit.get("tag").and_then(Value::as_str).ok_or_else(invalid)?;
+            if let Some(target) = outbound.get(tag) {
+                if exit.get("dynamic").and_then(Value::as_bool) == Some(true) {
+                    first.insert(country.into(), target.clone());
+                } else {
+                    first.entry(country.into()).or_insert_with(|| target.clone());
+                }
+            }
+        }
+        for (country, target) in first {
+            add(&mut output, format!("country:{country}"),
+                format!("{} · 首个出口（旧默认）", country_label(&country)), target);
+        }
+    }
     // An administrator may select a concrete configured node instead of a
     // country selector. STUN must remain on UDP-capable server entries.
     for (tag, target) in outbound {

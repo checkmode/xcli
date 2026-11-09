@@ -109,16 +109,49 @@ class ClashCompatibility(unittest.TestCase):
                     subpath='/s/'+token+'/clash.yaml'
                     status,old_headers,body=get_from(listen,subpath);self.assertEqual(status,200)
                     expected=yaml.safe_load(body);result=rust(payload);self.assertTrue(result['ok'])
-                    self.assertEqual(json.dumps(result['value'],ensure_ascii=False),json.dumps(expected,ensure_ascii=False))
-                    self.assertEqual(result['yaml'].encode(),body)
+                    actual=result['value']
+                    self.assertEqual(actual.keys(),expected.keys())
+                    aliases={'住宅 HK · 8.8.8.8':'香港01','住宅 US · 1.1.1.1':'美国01'}
+                    def normalized_proxy(item):
+                        item=dict(item)
+                        for old_name,new_name in aliases.items():
+                            if item['name']==old_name or item['name'].startswith(old_name+' · '):
+                                item['name']=new_name+item['name'][len(old_name):];break
+                        return item
+                    self.assertEqual(actual['proxies'],[normalized_proxy(item) for item in expected['proxies']])
+                    for field in expected:
+                        if field not in ('proxies','proxy-groups'):
+                            self.assertEqual(json.dumps(actual[field],ensure_ascii=False),json.dumps(expected[field],ensure_ascii=False),field)
+                    groups={item['name']:item for item in actual['proxy-groups']}
+                    old_groups={item['name']:item for item in expected['proxy-groups']}
+                    for name in ('STUN','独立 · STUN','直连','故障转移','自动选择','GITHUB','MISSING'):
+                        if name in old_groups:self.assertEqual(groups[name],old_groups[name],name)
+                    self.assertEqual(groups['香港01']['type'],'fallback')
+                    self.assertEqual(groups['香港01']['proxies'],['香港01 · Hysteria2','香港01 · HTTPS'])
+                    self.assertTrue(groups['香港01']['hidden'])
+                    self.assertTrue({'香港01','美国01'}.issubset(groups['PROXY']['proxies']))
+                    if '独立 · AI' in groups:
+                        for name in ('独立 · AI','独立 · Google'):
+                            self.assertTrue({'香港01','美国01','DIRECT'}.issubset(groups[name]['proxies']))
+                            self.assertFalse(any(node.startswith('住宅分组 · ') for node in groups[name]['proxies']))
+                    self.assertEqual(yaml.safe_load(result['yaml']),actual)
+                    setup_status,setup_body=request('/s/'+token+'/shadowrocket.json')
+                    self.assertEqual(setup_status,200)
+                    old_setup=json.loads(setup_body)
                     if shadow_driver is not None:
                         shadow_driver.stdin.write(json.dumps(payload,ensure_ascii=False)+'\n');shadow_driver.stdin.flush()
                         shadow=json.loads(shadow_driver.stdout.readline());self.assertTrue(shadow['ok'])
-                        setup_status,setup_body=request('/s/'+token+'/shadowrocket.json')
-                        self.assertEqual(setup_status,200);self.assertEqual(shadow['setup'],json.loads(setup_body))
+                        # Fixed exits with protocol failover require an
+                        # integrated profile even on standard rules.
+                        self.assertTrue(shadow['setup']['service_routing'])
+                        self.assertEqual(shadow['setup']['dns_routing'],'integrated')
+                        if old_setup['service_routing']:
+                            self.assertEqual(shadow['setup']['resource'],old_setup['resource'])
                         profile_status,profile_body=request('/s/'+token+'/shadowrocket.conf')
-                        self.assertEqual(shadow['status'],profile_status)
-                        if profile_status==200:self.assertEqual(shadow['profile'].encode(),profile_body)
+                        if old_setup['service_routing']:self.assertEqual(shadow['status'],profile_status)
+                        self.assertEqual(shadow['status'],200)
+                        if shadow['status']==200:
+                            self.assertIn('XCLI-香港01 = fallback,测试 / A · 香港01,测试 / A · 香港01 · HTTPS,',shadow['profile'])
                     if RUST_PANEL:
                         self.assertTrue(Path(RUST_PANEL).is_file())
                         with tempfile.TemporaryDirectory(dir=root,prefix='rust-state-') as folder:
@@ -138,17 +171,22 @@ class ClashCompatibility(unittest.TestCase):
                                     except OSError:time.sleep(.05)
                                 else:self.fail('disposable Rust panel did not become ready')
                                 new_status,new_headers,new_body=get_from(rust_port,subpath)
-                                self.assertEqual(new_status,status);self.assertEqual(new_body,body)
+                                self.assertEqual(new_status,status);self.assertEqual(new_body,result['yaml'].encode())
                                 for header in ('subscription-userinfo','profile-update-interval','content-type','content-disposition'):
                                     self.assertEqual(new_headers[header],old_headers[header])
                                 for suffix in ('shadowrocket.json','shadowrocket.conf'):
                                     shadow_path='/s/'+token+'/'+suffix
                                     old_status,old_headers,old_body=get_from(listen,shadow_path)
                                     new_status,new_headers,new_body=get_from(rust_port,shadow_path)
-                                    self.assertEqual(new_status,old_status)
-                                    if suffix.endswith('.json') or old_status!=200:self.assertEqual(json.loads(new_body),json.loads(old_body))
-                                    else:self.assertEqual(new_body,old_body)
-                                    self.assertEqual(new_headers['content-type'],old_headers['content-type'])
+                                    if shadow_driver is not None:
+                                        self.assertEqual(new_status,200 if suffix.endswith('.json') else shadow['status'])
+                                        if suffix.endswith('.json'):self.assertEqual(json.loads(new_body),shadow['setup'])
+                                        else:self.assertEqual(new_body,shadow['profile'].encode())
+                                    else:
+                                        self.assertEqual(new_status,200)
+                                        if suffix.endswith('.json'):self.assertTrue(json.loads(new_body)['service_routing'])
+                                        else:self.assertIn(b'fallback,',new_body)
+                                    if new_status==old_status:self.assertEqual(new_headers['content-type'],old_headers['content-type'])
                                 old_status,_,old_module=get_from(listen,'/shadowrocket-dns.sgmodule')
                                 new_status,_,new_module=get_from(rust_port,'/shadowrocket-dns.sgmodule')
                                 self.assertEqual((new_status,new_module),(old_status,old_module))
@@ -156,9 +194,13 @@ class ClashCompatibility(unittest.TestCase):
                                 self.assertEqual(get_from(rust_port,client_path)[0],401)
                                 old_status,_,old_clients=get_from(listen,client_path,cookie)
                                 new_status,_,new_clients=get_from(rust_port,client_path,cookie)
-                                self.assertEqual(new_status,old_status);self.assertEqual(json.loads(new_clients),json.loads(old_clients))
+                                self.assertEqual(new_status,old_status)
+                                previous_clients,client=json.loads(old_clients),json.loads(new_clients)
+                                for entry_name in client:
+                                    if entry_name!='shadowrocket' or old_setup['service_routing']:
+                                        self.assertEqual(client[entry_name],previous_clients[entry_name])
+                                self.assertTrue(client['shadowrocket'].startswith('shadowrocket://config/add/'))
                                 if not checked_qr:
-                                    client=json.loads(new_clients)
                                     for kind,expected in [('shadowrocket',client['shadowrocket']),('dns',client['dns_install']),('clash',client['clash'])]:
                                         qr_path='/api/users/'+user_id+'/qr/'+kind
                                         self.assertEqual(get_from(rust_port,qr_path)[0],401)
@@ -169,7 +211,9 @@ class ClashCompatibility(unittest.TestCase):
                                             self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
                                             png=root/('synthetic-'+side+'-'+kind+'.png');png.write_bytes(data);decoded=decode_qr(png)
                                             if os.environ.get('XCLI_REQUIRE_QR_DECODER'):self.assertIsNotNone(decoded,'QR decoder required')
-                                            if decoded is not None:self.assertEqual(decoded,expected)
+                                            if decoded is not None:
+                                                old_expected=previous_clients['shadowrocket'] if kind=='shadowrocket' else expected
+                                                self.assertEqual(decoded,old_expected if side=='old' else expected)
                                     self.assertEqual(get_from(rust_port,'/api/users/'+user_id+'/qr/missing',cookie)[0],404)
                                     checked_qr=True
                             finally:stop(rust_panel)

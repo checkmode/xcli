@@ -169,6 +169,32 @@ def identities(rows):
     return [row[:7] + row[9:] for row in rows]
 
 
+def protected_rows_compatible(before, after):
+    """Allow the candidate to reserve new display names without changing existing data."""
+    if before.keys() != after.keys():
+        return False
+    if any(before[key] != after[key] for key in before if key != 'metadata'):
+        return False
+    old_meta = dict(before.get('metadata', []))
+    new_meta = dict(after.get('metadata', []))
+    key = 'residential_client_names_v1'
+    old_names = old_meta.pop(key, None)
+    new_names = new_meta.pop(key, None)
+    if old_meta != new_meta:
+        return False
+    try:
+        previous = json.loads(old_names) if old_names is not None else {}
+        current = json.loads(new_names) if new_names is not None else {}
+        if not isinstance(previous, dict) or not isinstance(current, dict):
+            return False
+        if any(not isinstance(tags, dict) for tags in (*previous.values(), *current.values())):
+            return False
+        return all(current.get(country, {}).get(tag) == number
+                   for country, tags in previous.items() for tag, number in tags.items())
+    except (TypeError, ValueError):
+        return False
+
+
 def node_totals(path):
     with contextlib.closing(sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=30)) as db:
         rows = db.execute('SELECT user_id,upload,download,ack_upload,ack_download FROM node_totals').fetchall()
@@ -266,7 +292,7 @@ def verify_candidate(info, release, backup):
             finally:
                 stop_process(process)
             after, after_protected = private_rows(sandbox / 'gateway.sqlite', include_metadata=True)
-            if identities(after) != identities(baseline) or after_protected != protected:
+            if identities(after) != identities(baseline) or not protected_rows_compatible(protected, after_protected):
                 raise RuntimeError('新版数据库兼容检查未通过')
     finally:
         shutil.rmtree(sandbox)

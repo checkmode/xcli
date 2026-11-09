@@ -1,5 +1,6 @@
 """Compare synthetic connection links and generic subscriptions with C++."""
 import http.client
+import base64
 from contextlib import closing
 import json
 import os
@@ -9,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from urllib.parse import unquote
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from test_panel_auth_compat import free_port
@@ -21,6 +23,24 @@ RUST_PANEL=os.environ.get('XCLI_PANEL_SERVICE','')
 @unittest.skipUnless(PANEL and DRIVER and Path(PANEL).is_file() and Path(DRIVER).is_file(),
                      'set XCLI_LEGACY_PANEL and XCLI_LINKS_DRIVER')
 class SubscriptionLinksCompatibility(unittest.TestCase):
+    def compare_links(self, old, new):
+        self.assertEqual(old.keys(),new.keys())
+        renamed={'residential-01':'香港01 · HTTPS','residential-01-hy2':'香港01',
+                 'residential-02':'美国01'}
+        replacements={}
+        for tag,original in old.items():
+            if tag in renamed:
+                self.assertEqual(original.split('#',1)[0],new[tag].split('#',1)[0])
+                self.assertTrue(unquote(new[tag].split('#',1)[1]).endswith(' · '+renamed[tag]))
+                replacements[original]=new[tag]
+            else:self.assertEqual(original,new[tag],tag)
+        return replacements
+
+    def compare_body(self, old, new, replacements):
+        previous=base64.b64decode(old).decode().splitlines()
+        current=base64.b64decode(new).decode().splitlines()
+        self.assertEqual([replacements.get(line,line) for line in previous],current)
+
     def test_links_and_generic_subscription_match(self):
         for node_address_ip in (False,True):
             with self.subTest(node_address_ip=node_address_ip):self.scenario(node_address_ip)
@@ -85,8 +105,8 @@ class SubscriptionLinksCompatibility(unittest.TestCase):
                 status,headers,body=request('/s/'+user['token']);self.assertEqual(status,200)
                 driver=subprocess.Popen([DRIVER],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,bufsize=1)
                 payload={'settings':settings,'user':user,'remote_nodes':nodes,'dynamic_enabled':False,'now':int(time.time())}
-                result=rust(payload);self.assertTrue(result['ok']);self.assertEqual(result['value']['links'],expected)
-                self.assertEqual(result['value']['body'],body.decode());self.assertEqual(result['value']['info'],headers['subscription-userinfo'])
+                result=rust(payload);self.assertTrue(result['ok']);replacements=self.compare_links(expected,result['value']['links'])
+                self.compare_body(body,result['value']['body'],replacements);self.assertEqual(result['value']['info'],headers['subscription-userinfo'])
                 if RUST_PANEL:
                     self.assertTrue(Path(RUST_PANEL).is_file())
                     rust_state=root/'rust-state';rust_state.mkdir()
@@ -105,10 +125,10 @@ class SubscriptionLinksCompatibility(unittest.TestCase):
                     def compare():
                         old_status,_,old_body=request('/api/users/'+user_id+'/links',cookie=cookie)
                         new_status,_,new_body=request('/api/users/'+user_id+'/links',cookie=cookie,port=rust_port)
-                        self.assertEqual((old_status,new_status),(200,200));self.assertEqual(json.loads(old_body),json.loads(new_body))
+                        self.assertEqual((old_status,new_status),(200,200));replacements=self.compare_links(json.loads(old_body),json.loads(new_body))
                         old_status,old_headers,old_body=request('/s/'+user['token'])
                         new_status,new_headers,new_body=request('/s/'+user['token'],port=rust_port)
-                        self.assertEqual((old_status,new_status),(200,200));self.assertEqual(old_body,new_body)
+                        self.assertEqual((old_status,new_status),(200,200));self.compare_body(old_body,new_body,replacements)
                         for header in ('subscription-userinfo','profile-update-interval','content-type','content-disposition'):
                             self.assertEqual(old_headers[header],new_headers[header])
                     self.assertEqual(request('/api/users/'+user_id+'/links',port=rust_port)[0],401)
@@ -119,7 +139,7 @@ class SubscriptionLinksCompatibility(unittest.TestCase):
                         (location/'webshare').mkdir();(location/'webshare/config.xgb').write_bytes(frame)
                     compare()
                     payload['dynamic_enabled']=True
-                    self.assertEqual(rust(payload)['value']['links'],json.loads(request('/api/users/'+user_id+'/links',cookie=cookie)[2]))
+                    self.compare_links(json.loads(request('/api/users/'+user_id+'/links',cookie=cookie)[2]),rust(payload)['value']['links'])
                     frame=frame[:20]+bytes([frame[20]^1])+frame[21:]
                     for location in (state,rust_state):(location/'webshare/config.xgb').write_bytes(frame)
                     compare()

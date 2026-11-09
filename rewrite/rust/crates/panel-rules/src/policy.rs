@@ -1,4 +1,4 @@
-use super::{apply::selects_direct, factory_independent_rules, ApplyError};
+use super::{factory_independent_rules, ApplyError};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -96,11 +96,26 @@ pub fn apply_client_policy(
             servers.push(json!(value));
         }
     }
-    let mut countries = Vec::new();
+    // Flatten residential exits into each policy, in country order.
+    let residential_names: BTreeSet<&str> = outbound
+        .iter()
+        .filter(|(tag, _)| tag.starts_with("residential-"))
+        .map(|(_, name)| name.as_str())
+        .collect();
+    let mut residential = Vec::new();
     for item in &mut groups {
         let group_name = name(item)?.to_owned();
         if group_name.starts_with("住宅分组 · ") {
-            countries.push(json!(group_name));
+            for node in array(item.get("proxies").ok_or_else(unavailable)?)? {
+                if node.as_str().is_some_and(|name| residential_names.contains(name))
+                    && !residential.contains(node)
+                {
+                    residential.push(node.clone());
+                }
+            }
+            // Existing custom client rules may still reference the old group.
+            // Keep it hidden without making independent groups depend on it.
+            item["hidden"] = json!(true);
         }
         if group_name == "STUN" {
             item["name"] = json!("独立 · STUN");
@@ -131,11 +146,11 @@ pub fn apply_client_policy(
             }
         }
     }
-    if !countries.is_empty() {
-        main.push(json!("住宅节点"));
-    }
-    main.push(json!("直连"));
-    top.push(group("PROXY", main));
+    main.push(json!("DIRECT"));
+    // Custom groups inherit their choices from PROXY, so append these after
+    // its existing choices without changing any group's default.
+    main.extend(residential.iter().cloned());
+    top.push(group("PROXY", main.clone()));
     top.push(group("直连", vec![json!("DIRECT")]));
     for (label, kind) in [("故障转移", "fallback"), ("自动选择", "url-test")] {
         let mut item = json!({"name":label,"type":kind,"proxies":servers,"url":"https://www.gstatic.com/generate_204",
@@ -144,9 +159,6 @@ pub fn apply_client_policy(
             item["tolerance"] = json!(100);
         }
         top.push(item);
-    }
-    if !countries.is_empty() {
-        top.push(group("住宅节点", countries.clone()));
     }
     let default = if ai_outbound == "proxy" {
         "故障转移"
@@ -165,7 +177,6 @@ pub fn apply_client_policy(
         if category.name == "AI" && default != "故障转移" {
             choices.insert(0, json!(default));
         }
-        choices.extend(countries.clone());
         for node in &servers {
             if !choices.contains(node) {
                 choices.push(node.clone());
@@ -178,6 +189,14 @@ pub fn apply_client_policy(
                 }
             }
         }
+        for node in &residential {
+            if !choices.contains(node) {
+                choices.push(node.clone());
+            }
+        }
+        if !choices.contains(&json!("DIRECT")) {
+            choices.push(json!("DIRECT"));
+        }
         let label = if category.name == "EaseLian" {
             "EaseLian".to_owned()
         } else {
@@ -186,7 +205,6 @@ pub fn apply_client_policy(
         top.push(group(&label, choices));
     }
     let mut google = vec![json!("故障转移"), json!("自动选择")];
-    google.extend(countries);
     google.extend(servers);
     for tag in ["hysteria2-brutal", "hysteria2-brutal-current"] {
         if let Some(value) = outbound.get(tag) {
@@ -195,8 +213,18 @@ pub fn apply_client_policy(
             }
         }
     }
+    for node in &residential {
+        if !google.contains(node) {
+            google.push(node.clone());
+        }
+    }
+    google.push(json!("DIRECT"));
     top.push(group("独立 · Google", google));
-    top.push(group("其他流量", vec![json!("PROXY"), json!("DIRECT")]));
+    let mut other = vec![json!("PROXY"), json!("DIRECT")];
+    for node in main.iter() {
+        if !other.contains(node) { other.push(node.clone()); }
+    }
+    top.push(group("其他流量", other));
     for item in groups {
         if name(&item)? != "PROXY" {
             top.push(item);
@@ -241,7 +269,9 @@ pub fn apply_client_policy(
         } else {
             format!("独立 · {}", category.name)
         };
-        let direct = category.direct || selects_direct(&top, &target);
+        // A direct option does not change DNS for a group that was already
+        // using a proxy. Direct exits use direct-nameserver at runtime.
+        let direct = category.direct || category.name == "EaseLian";
         let mut payload = Vec::new();
         for (kind, value) in category.entries {
             if kind == "DOMAIN" || kind == "DOMAIN-SUFFIX" {

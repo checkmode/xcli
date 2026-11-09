@@ -34,13 +34,21 @@ fn insert_unique(values: &mut Vec<Value>, value: Value) {
     }
 }
 
-pub(super) fn selects_direct(groups: &[Value], target: &str) -> bool {
+pub fn selects_direct(groups: &[Value], target: &str) -> bool {
     fn visit(groups: &[Value], target: &str, visited: &mut BTreeSet<String>) -> bool {
         if target == "DIRECT" {
             return true;
         }
         if !visited.insert(target.to_owned()) {
             return false;
+        }
+        // Adding DIRECT as an optional choice must not switch a proxy-first
+        // service's DNS to domestic resolvers for all of its users.
+        if matches!(target, "独立 · AI" | "独立 · Google" | "独立 · Telegram"
+            | "独立 · YouTube" | "独立 · Netflix" | "独立 · 国外媒体") {
+            return groups.iter().find(|g| g.get("name").and_then(Value::as_str) == Some(target))
+                .and_then(|g| g.get("proxies").and_then(Value::as_array))
+                .and_then(|members| members.first()).and_then(Value::as_str) == Some("DIRECT");
         }
         groups
             .iter()

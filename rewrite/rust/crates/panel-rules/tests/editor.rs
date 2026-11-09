@@ -275,6 +275,10 @@ fn group_defaults_stay_in_draft_until_publish_and_survive_reset_undo() {
         .unwrap()
         .get("group_defaults")
         .is_none());
+    let reset_policy = reader.effective("u").unwrap();
+    assert!(reset_policy["rules"].as_str().unwrap()
+        .contains("DOMAIN-SUFFIX,stripe.com,独立 · Stripe\n"));
+    assert_eq!(reset_policy["groups"][0]["name"], "独立 · Stripe");
     editor
         .undo_reset(
             "independent",

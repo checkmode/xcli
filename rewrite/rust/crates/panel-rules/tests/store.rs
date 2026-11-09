@@ -3,6 +3,19 @@ use serde_json::json;
 use xcli_panel_rules::{factory_spec, RuleStore, RuleStoreError};
 
 #[test]
+fn independent_factory_contains_the_published_rules_and_group_configuration() {
+    let spec = factory_spec("independent").unwrap();
+    assert_eq!(xcli_panel_rules::validate(&spec).unwrap(), spec);
+    let rules = spec["rules"].as_str().unwrap();
+    assert_eq!(rules.lines().count(), 137);
+    assert!(rules.contains("DOMAIN-SUFFIX,stripe.com,独立 · Stripe\n"));
+    assert!(rules.contains("DOMAIN-SUFFIX,aliyun.com,DIRECT\n"));
+    assert_eq!(spec["groups"], json!([{"name":"独立 · Stripe","default":"PROXY"}]));
+    assert_eq!(spec["group_order"][4], "独立 · Google");
+    assert_eq!(spec["group_names"]["EaseLian"], "独立 · EaseLian");
+}
+
+#[test]
 fn catalog_and_effective_policy_preserve_published_state_and_assignments() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.sqlite");

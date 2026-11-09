@@ -1,5 +1,6 @@
 """Compare read-only legacy and Rust diagnostics with synthetic credentials."""
 import base64
+import copy
 from contextlib import closing
 import hashlib
 import json
@@ -9,6 +10,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import yaml
 
 from test_panel_http_integration import PANEL, free_port, request, stop, wait_ready
 
@@ -80,7 +82,14 @@ class SubscriptionDiagnosticsCompatibility(unittest.TestCase):
                     previous, current = json.loads(old_data), json.loads(new_data)
                     self.assertIsInstance(current.pop('generated_at'), int)
                     previous.pop('generated_at')
-                    self.assertEqual(previous, current)
+                    previous_compare, current_compare = copy.deepcopy(previous), copy.deepcopy(current)
+                    if index == 1:
+                        # Independent group options intentionally differ while
+                        # diagnostic fields and group ordering remain compatible.
+                        for kind in ('clash', 'shadowrocket'):
+                            previous_compare['formats'][kind].pop('sha256', None)
+                            current_compare['formats'][kind].pop('sha256', None)
+                    self.assertEqual(previous_compare, current_compare)
                     self.assertEqual(current['last_fetch'], 'unknown')
                     self.assertEqual(current['client_enabled'], 'unknown')
                     self.assertNotIn(uuid.encode(), new_data)
@@ -100,6 +109,8 @@ class SubscriptionDiagnosticsCompatibility(unittest.TestCase):
                             self.assertEqual(current['template']['name'], '独立服务分组')
                             self.assertIn('独立 · Google', current['formats']['clash']['groups'])
                             self.assertIn('XCLI-独立 · Google', mobile['groups'])
+                            clash_json=json.dumps(yaml.safe_load(before[1][2]),ensure_ascii=False,separators=(',',':')).encode()
+                            self.assertEqual(current['formats']['clash']['sha256'], hashlib.sha256(clash_json).hexdigest())
                             self.assertEqual(mobile['sha256'], hashlib.sha256(before[2][2]).hexdigest())
             finally:
                 stop(new)

@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 import ProxyProbeList from './ProxyProbeList.vue';
 import { probeReasons, probeStates, type ProxyPreviewRow as Row } from './proxy-probe';
 
-type ProxyItem = { tag: string; protocol: string; address: string; port: number; label: string; country: string; exit_ip: string; enabled: boolean; deleted_at: number;
+type ProxyItem = { tag: string; protocol: string; address: string; port: number; label: string; client_name?: string; country: string; exit_ip: string; enabled: boolean; deleted_at: number;
   network?: string; security?: string; server_name?: string; host?: string; path?: string; alpn?: string; fingerprint?: string; tls?: boolean };
 type Report = { status: string; id?: string; updated?: number; expires?: number; rows?: Row[]; available?: number; reason?: string; apply_enabled?: boolean; items?: ProxyItem[] | null };
 type Operation = 'import' | 'edit' | 'delete' | 'enable' | 'disable' | 'restore' | 'other';
@@ -39,7 +39,7 @@ const visibleItems = computed(() => {
   return items.value.filter(i => {
     if (filter.value === 'trash' ? !i.deleted_at : Boolean(i.deleted_at)) return false;
     if (filter.value === 'enabled' && !i.enabled || filter.value === 'disabled' && i.enabled) return false;
-    return !term || [i.label, i.tag, i.address, i.exit_ip, i.country, i.protocol].some(v => v.toLocaleLowerCase().includes(term));
+    return !term || [i.label, i.client_name ?? '', i.tag, i.address, i.exit_ip, i.country, i.protocol].some(v => v.toLocaleLowerCase().includes(term));
   }).sort((a, b) => Number(recent.value.includes(b.tag)) - Number(recent.value.includes(a.tag)));
 });
 const visibleSelected = computed(() => visibleItems.value.filter(i => selected.value.includes(i.tag)).length);
@@ -80,7 +80,7 @@ function parse(value: unknown): Report {
   if (data.items !== undefined && data.items !== null && (!Array.isArray(data.items) || data.items.length > 40 ||
       !data.items.every(item => item && typeof item === 'object' &&
         ['tag', 'protocol', 'address', 'label', 'country', 'exit_ip'].every(key => typeof item[key as keyof ProxyItem] === 'string') &&
-        ['network', 'security', 'server_name', 'host', 'path', 'alpn', 'fingerprint'].every(key => item[key as keyof ProxyItem] === undefined || typeof item[key as keyof ProxyItem] === 'string') &&
+        ['client_name', 'network', 'security', 'server_name', 'host', 'path', 'alpn', 'fingerprint'].every(key => item[key as keyof ProxyItem] === undefined || typeof item[key as keyof ProxyItem] === 'string') &&
         (item.tls === undefined || typeof item.tls === 'boolean') &&
         Number.isSafeInteger(item.port) && item.port > 0 && item.port <= 65535 && typeof item.enabled === 'boolean' &&
         Number.isSafeInteger(item.deleted_at) && item.deleted_at >= 0))) throw new Error('invalid catalog');
@@ -326,7 +326,8 @@ onUnmounted(() => { if (timer) clearInterval(timer); closePanel(); });
           <ul v-else class="proxy-list"><li v-for="item in visibleItems" :key="item.tag" :class="{ recent: recent.includes(item.tag), selected: editing?.tag === item.tag }">
             <label v-if="filter !== 'trash' && report.apply_enabled" class="proxy-select"><input v-model="selected" type="checkbox" :value="item.tag" :disabled="locked" :aria-label="`选择 ${item.label}`"></label>
             <span v-else class="proxy-select" aria-hidden="true"></span>
-            <div class="proxy-identity"><div><strong>{{ item.label }}</strong><span v-if="recent.includes(item.tag)" class="proxy-new">新导入</span></div>
+            <div class="proxy-identity"><div><strong>{{ item.client_name || item.label }}</strong><span v-if="recent.includes(item.tag)" class="proxy-new">新导入</span></div>
+              <small v-if="item.client_name && item.label !== item.client_name">备注 {{ item.label }}</small>
               <small>{{ item.address }}:{{ item.port }} · {{ item.protocol.toUpperCase() }}</small><small>出口 {{ item.exit_ip || '—' }}<template v-if="item.country"> · {{ item.country }}</template></small></div>
             <span class="status-badge" :class="{ active:item.enabled && !item.deleted_at }">{{ item.deleted_at ? '回收站' : item.enabled ? '已启用' : '已停用' }}</span>
             <div v-if="report.apply_enabled" class="proxy-row-actions"><button v-if="item.deleted_at" type="button" :disabled="locked" @click="manage(item, 'restore')">找回</button>

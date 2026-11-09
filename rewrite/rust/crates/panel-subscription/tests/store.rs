@@ -13,7 +13,7 @@ fn token() -> String {
 fn settings() -> Value {
     json!({"origin":"https://panel.example","domain":"panel.example","public_ip":"8.8.8.8",
     "reality_sni":"www.bing.com","reality_public":"Y".repeat(43),"short_id":"0123456789abcdef","ws_path":"/connect/test",
-    "hysteria2_port":443,"residential_exits":[{"tag":"residential-11","label":"动态 US","exit_ip":"",
+    "hysteria2_port":443,"residential_exits":[{"tag":"residential-11","label":"动态 US","country":"US","exit_ip":"",
         "ws_path":"/connect/test/residential-11","dynamic":true}]})
 }
 fn fixture(path: &Path) {

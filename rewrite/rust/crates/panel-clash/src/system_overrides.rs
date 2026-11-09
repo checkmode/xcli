@@ -109,23 +109,8 @@ fn encode(entry: &Entry) -> String {
 }
 
 fn nameserver(config: &Value, target: &str) -> Value {
-    fn direct(config: &Value, target: &str, seen: &mut BTreeSet<String>) -> bool {
-        if target == "DIRECT" {
-            return true;
-        }
-        if !seen.insert(target.into()) {
-            return false;
-        }
-        config["proxy-groups"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|group| group["name"].as_str() == Some(target))
-            .flat_map(|group| group["proxies"].as_array().into_iter().flatten())
-            .filter_map(Value::as_str)
-            .any(|child| direct(config, child, seen))
-    }
-    let hosts = if direct(config, target, &mut BTreeSet::new()) {
+    let groups = config["proxy-groups"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let hosts = if xcli_panel_rules::selects_direct(groups, target) {
         [
             "https://223.5.5.5/dns-query#",
             "https://1.12.12.12/dns-query#",

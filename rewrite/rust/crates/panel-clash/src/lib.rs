@@ -10,6 +10,7 @@ use xcli_panel_rules::{
     apply_client_policy, apply_google_policy, apply_template_rules, factory_independent_rules,
     ApplyError,
 };
+use xcli_panel_rules::residential::{self, country_label};
 
 // No Debug: the UUID authorizes access to the node.
 #[derive(Deserialize)]
@@ -47,27 +48,6 @@ fn add(proxies: &mut Vec<Value>, names: &mut Vec<Value>, proxy: Value) -> Result
     names.push(json!(field(&proxy, "name")?));
     proxies.push(proxy);
     Ok(())
-}
-fn country_label(country: &str) -> &str {
-    match country {
-        "US" => "美国",
-        "JP" => "日本",
-        "SG" => "新加坡",
-        "ZZ" => "全球",
-        "HK" => "香港",
-        "TW" => "台湾",
-        "KR" => "韩国",
-        "TH" => "泰国",
-        "MY" => "马来西亚",
-        "IN" => "印度",
-        "CA" => "加拿大",
-        "GB" => "英国",
-        "DE" => "德国",
-        "FR" => "法国",
-        "NL" => "荷兰",
-        "AU" => "澳大利亚",
-        _ => country,
-    }
 }
 fn reality(
     name: &str,
@@ -245,43 +225,7 @@ fn build_with_outbound(
         )?;
     }
     let exits = sequence(settings, "residential_exits")?;
-    // Reserve user-facing names before allocating the hidden automatic groups.
-    let mut occupied: BTreeSet<String> = proxies
-        .iter()
-        .filter_map(|v| v.get("name").and_then(Value::as_str))
-        .map(str::to_owned)
-        .collect();
-    for exit in exits {
-        if flag(exit, "dynamic", false)? && !dynamic_enabled {
-            continue;
-        }
-        let label = field(exit, "label")?;
-        let name = if flag(exit, "dynamic", false)? {
-            label.to_owned()
-        } else {
-            format!("{label} · {}", field(exit, "exit_ip")?)
-        };
-        for value in [name.clone(), format!("{name} · Hysteria2"), format!("{name} · HTTPS")] {
-            occupied.insert(value);
-        }
-    }
-    for item in policy.get("groups").and_then(Value::as_array).into_iter().flatten() {
-        if let Some(name) = item.get("name").and_then(Value::as_str) {
-            occupied.insert(name.into());
-        }
-    }
-    for name in policy.get("group_names").and_then(Value::as_object).into_iter()
-        .flat_map(|values| values.values()).filter_map(Value::as_str)
-    {
-        occupied.insert(name.into());
-    }
-    for item in settings.get("clash_service_routes").and_then(|routes| routes.get(&user.id))
-        .and_then(Value::as_array).into_iter().flatten()
-    {
-        if let Some(name) = item.get("name").and_then(Value::as_str) {
-            occupied.insert(name.into());
-        }
-    }
+    let fixed_names = residential::names(settings).map_err(|_| invalid())?;
     let mut countries: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut protocol_groups = Vec::new();
     for exit in exits {
@@ -294,7 +238,7 @@ fn build_with_outbound(
         let name = if dynamic {
             label.to_owned()
         } else {
-            format!("{label} · {}", field(exit, "exit_ip")?)
+            fixed_names.get(tag).ok_or_else(invalid)?.clone()
         };
         if flag(exit, "hysteria2", false)? {
             let hy2 = format!("{name} · Hysteria2");
@@ -322,17 +266,7 @@ fn build_with_outbound(
             if dynamic {
                 protocol_groups.push(selector(&name, vec![json!(hy2), json!(https)]));
             } else {
-                let stem = format!("{name} · 自动");
-                let mut automatic = stem.clone();
-                let mut suffix = 2;
-                while !occupied.insert(automatic.clone()) {
-                    automatic = format!("{stem} ({suffix})");
-                    suffix += 1;
-                }
-                protocol_groups.push(selector(
-                    &name, vec![json!(automatic), json!(hy2), json!(https)],
-                ));
-                protocol_groups.push(json!({"name":automatic,"type":"fallback","proxies":[hy2,https],
+                protocol_groups.push(json!({"name":name,"type":"fallback","proxies":[hy2,https],
                     "url":"https://www.gstatic.com/generate_204","interval":120,"timeout":5000,
                     "expected-status":"204","lazy":false,"hidden":true}));
             }

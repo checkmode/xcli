@@ -2674,6 +2674,7 @@ dependencies = [
  "serde_json",
  "xcli-panel-clash",
  "xcli-panel-rules",
+ "xcli-panel-subscription",
 ]
 
 [[package]]
@@ -2688,6 +2689,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "xcli-auth-compat",
+ "xcli-panel-rules",
  "xcli-panel-users",
  "zeroize",
 ]

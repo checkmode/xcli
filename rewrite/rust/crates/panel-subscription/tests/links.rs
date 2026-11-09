@@ -19,8 +19,8 @@ fn settings() -> serde_json::Value {
     json!({"origin":"https://panel.example.com","domain":"panel.example.com","public_ip":"8.8.8.8",
     "reality_sni":"www.bing.com","reality_public":"Y".repeat(43),"short_id":"0123456789abcdef","ws_path":"/connect/test",
     "hysteria2_port":443,"vmess_ws_path":"/connect/test/vmess","node_address_ip":true,
-    "residential_exits":[{"tag":"residential-01","label":"住宅 HK","exit_ip":"1.1.1.1","ws_path":"/connect/test/residential-01","hysteria2":true},
-        {"tag":"residential-02","label":"动态 US","exit_ip":"","ws_path":"/connect/test/residential-02","dynamic":true}]})
+    "residential_exits":[{"tag":"residential-01","label":"住宅 HK","country":"HK","exit_ip":"1.1.1.1","ws_path":"/connect/test/residential-01","hysteria2":true},
+        {"tag":"residential-02","label":"动态 US","country":"US","exit_ip":"","ws_path":"/connect/test/residential-02","dynamic":true}]})
 }
 
 #[test]

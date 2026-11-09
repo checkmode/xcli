@@ -476,6 +476,47 @@ fn safe(value: &str) -> Result<&str> {
         Ok(value)
     }
 }
+
+/// Keep custom base rules and groups referring to old subscription node names
+/// usable after the compact residential names are introduced.
+fn renamed_residential_nodes(base: &str, aliases: &BTreeMap<String, String>) -> String {
+    let mut section = "";
+    let mut output = String::new();
+    for line in line_parts(base) {
+        let trimmed = trim(line);
+        if let Some(capture) = header().captures(trimmed) {
+            section = match &capture[1] { "Proxy Group" => "group", "Rule" => "rule", _ => "" };
+            output.push_str(line);
+            continue;
+        }
+        if section.is_empty() || trimmed.starts_with('#') || trimmed.is_empty() {
+            output.push_str(line);
+            continue;
+        }
+        let (prefix, body) = if section == "group" {
+            match line.split_once('=') {
+                Some((head, tail)) => (format!("{head}="), tail),
+                None => { output.push_str(line); continue; }
+            }
+        } else { (String::new(), line) };
+        output.push_str(&prefix);
+        for (index, part) in body.split(',').enumerate() {
+            if index != 0 { output.push(','); }
+            let candidate = part.trim_start();
+            let start = part.len() - candidate.len();
+            let matched = aliases.iter().find(|(old, _)| candidate.strip_prefix(old.as_str())
+                .is_some_and(|rest| rest.trim_start().is_empty() || rest.trim_start().starts_with('#')));
+            if let Some((old, replacement)) = matched {
+                output.push_str(&part[..start]);
+                output.push_str(replacement);
+                output.push_str(&candidate[old.len()..]);
+            } else {
+                output.push_str(part);
+            }
+        }
+    }
+    output
+}
 fn categorized_profile(
     config: &Value,
     nodes: &BTreeMap<String, String>,
@@ -679,6 +720,7 @@ pub fn profile(
     let domain = field(settings, "domain")?;
     let address = field(settings, "public_ip")?;
     valid_metadata(user, domain, address)?;
+    let fixed_names = xcli_panel_rules::residential::names(settings).map_err(|_| invalid())?;
     let origin = field(settings, "origin")?;
     let update = format!("{origin}/s/{}/shadowrocket.conf", user.token);
     let base = settings
@@ -686,6 +728,7 @@ pub fn profile(
         .and_then(|v| v.get(&user.id))
         .and_then(Value::as_str);
     if is_categorized {
+        let mut legacy_names = BTreeMap::new();
         let mut nodes: BTreeMap<String, String> = [
             ("REALITY".into(), format!("{} · REALITY", user.name)),
             ("HTTPS".into(), format!("{} · HTTPS", user.name)),
@@ -710,9 +753,19 @@ pub fn profile(
             let label = if dynamic {
                 field(exit, "label")?.to_owned()
             } else {
-                format!("{} · {}", field(exit, "label")?, field(exit, "exit_ip")?)
+                fixed_names.get(field(exit, "tag")?).ok_or_else(invalid)?.clone()
             };
             let node = format!("{} · {label}", user.name);
+            if !dynamic {
+                let old_label = format!("{} · {}", field(exit, "label")?, field(exit, "exit_ip")?);
+                let old_node = format!("{} · {old_label}", user.name);
+                legacy_names.insert(old_node.clone(), node.clone());
+                if flag(exit, "hysteria2", false)? {
+                    legacy_names.insert(format!("{old_node} · HTTPS"), format!("{node} · HTTPS"));
+                    legacy_names.insert(format!("XCLI-{old_label}"), format!("XCLI-{label}"));
+                    legacy_names.insert(format!("XCLI-{old_label} · 自动"), format!("XCLI-{label}"));
+                }
+            }
             if flag(exit, "hysteria2", false)? {
                 nodes.insert(format!("{label} · Hysteria2"), node.clone());
                 nodes.insert(format!("{label} · HTTPS"), format!("{node} · HTTPS"));
@@ -740,7 +793,8 @@ pub fn profile(
         let replace = flag(policy, "managed", false)?
             && field(policy, "base")? == "independent"
             && field(policy, "rules")? != factory_independent_rules();
-        let base = renamed_base(base.unwrap_or("[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n"), policy);
+        let base = renamed_residential_nodes(base.unwrap_or("[General]\ninclude = default.conf\n\n[Rule]\nFINAL,PROXY\n"), &legacy_names);
+        let base = renamed_base(&base, policy);
         let result = categorized_profile(&config, &nodes, &base, &update, replace, policy, domain, origin)?;
         return integrated_dns(
             &result,
@@ -777,12 +831,12 @@ pub fn profile(
                     && (!flag(exit, "dynamic", false)? || dynamic_enabled)
                 {
                     found = true;
-                    existing = format!(
-                        "{} · {} · {}",
-                        user.name,
-                        field(exit, "label")?,
-                        field(exit, "exit_ip")?
-                    );
+                    let label = if flag(exit, "dynamic", false)? {
+                        field(exit, "label")?
+                    } else {
+                        fixed_names.get(tag).map(String::as_str).ok_or_else(invalid)?
+                    };
+                    existing = format!("{} · {label}", user.name);
                 }
             }
             available &= found;

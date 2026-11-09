@@ -335,10 +335,23 @@ async fn import_status(State(app): State<App>, headers: HeaderMap) -> Response {
             .unwrap_or_else(|| json!({"status":"unavailable"}));
         report["apply_enabled"] = json!(app.import_apply);
         report["brutal_rate_mbps"] = json!(app.brutal_rate);
-        report["items"] = json!(app
+        let mut items = app
             .import_report
             .as_ref()
-            .and_then(|channel| channel.read_catalog().ok()));
+            .and_then(|channel| channel.read_catalog().ok());
+        if let (Some(items), Some(subscription)) = (&mut items, &app.subscription) {
+            let store = subscription.lock().map_err(|_| AuthError::Unavailable)?;
+            let (settings, _) = store.template_context();
+            for item in items {
+                let tag = item.get("tag").and_then(serde_json::Value::as_str);
+                let country = item.get("country").and_then(serde_json::Value::as_str);
+                if let Some(name) = tag.zip(country).and_then(|(tag, country)|
+                    xcli_panel_rules::residential::reserved_name(&settings, tag, country)) {
+                    item["client_name"] = json!(name);
+                }
+            }
+        }
+        report["items"] = json!(items);
         Ok::<_, AuthError>(report)
     })
     .await;
@@ -3387,6 +3400,14 @@ async fn run() -> Result<(), &'static str> {
     let auth = AdminAuth::open(&args.db, *key).map_err(|_| "管理数据库不可用")?;
     let users = Repository::open(&args.db).map_err(|_| "用户数据库不可用")?;
     let nodes = NodeSync::open(&args.db).map_err(|_| "节点数据库不可用")?;
+    // Keep the persisted settings untouched: compact names are attached only
+    // to the subscription/editor snapshot and their numbering lives in SQLite.
+    let profile_settings = settings.as_ref().map(|value| {
+        let mut value = value.clone();
+        xcli_panel_rules::residential::attach_registry(&args.db, &mut value)
+            .map_err(|_| "住宅出口编号不可用")?;
+        Ok::<_, &'static str>(value)
+    }).transpose()?;
     let security_domain = settings
         .as_ref()
         .and_then(|value| value.get("domain"))
@@ -3402,7 +3423,7 @@ async fn run() -> Result<(), &'static str> {
     let shadow_dns = settings
         .as_ref()
         .and_then(|value| xcli_panel_shadowrocket::dns_module(value).ok());
-    let subscription = settings
+    let subscription = profile_settings
         .as_ref()
         .map(|settings| {
             SubscriptionStore::open(&args.db, settings.clone(), *key)
@@ -3410,7 +3431,7 @@ async fn run() -> Result<(), &'static str> {
                 .map_err(|_| "订阅数据库不可用")
         })
         .transpose()?;
-    let rules = settings
+    let rules = profile_settings
         .as_ref()
         .map(|settings| {
             RuleStore::open(&args.db, settings.clone())

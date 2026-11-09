@@ -112,6 +112,25 @@ class UpdateFixture:
 
 
 class RustUpgradeTests(unittest.TestCase):
+    def test_candidate_may_reserve_new_names_without_changing_existing_data(self):
+        key = 'residential_client_names_v1'
+        before = {'admin': [(1, 'hash')], 'metadata': [('rules', 'unchanged')]}
+        with_names = {'admin': [(1, 'hash')], 'metadata': [
+            ('rules', 'unchanged'), (key, json.dumps({'SG': {'residential-01': 1}}))]}
+        self.assertTrue(upgrade.protected_rows_compatible(before, with_names))
+        extended = {'admin': [(1, 'hash')], 'metadata': [
+            ('rules', 'unchanged'), (key, json.dumps({'SG': {'residential-01': 1, 'residential-02': 2}}))]}
+        self.assertTrue(upgrade.protected_rows_compatible(with_names, extended))
+        renumbered = {'admin': [(1, 'hash')], 'metadata': [
+            ('rules', 'unchanged'), (key, json.dumps({'SG': {'residential-01': 2}}))]}
+        self.assertFalse(upgrade.protected_rows_compatible(with_names, renumbered))
+        self.assertFalse(upgrade.protected_rows_compatible(with_names, before))
+        changed_rules = {'admin': [(1, 'hash')], 'metadata': [
+            ('rules', 'changed'), (key, json.dumps({'SG': {'residential-01': 1}}))]}
+        self.assertFalse(upgrade.protected_rows_compatible(with_names, changed_rules))
+        self.assertFalse(upgrade.protected_rows_compatible(with_names, {'admin': [(1, 'other')],
+            'metadata': with_names['metadata']}))
+
     def test_detects_existing_node_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             f = UpdateFixture(Path(temporary), 'node')

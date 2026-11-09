@@ -441,7 +441,7 @@ function openRaw(event: MouseEvent) {
         <label>默认出口<select :value="selectedDefault" :disabled="busy || !groupOutboundsAvailable" @change="setGroupDefault(($event.target as HTMLSelectElement).value)">
           <option value="">沿用原有默认：{{ outboundLabel(inheritedDefault, groupDescriptor.options) }}</option>
           <option v-if="defaultUnavailable" :value="selectedDefault" disabled>{{ outboundLabel(selectedDefault, groupDescriptor.options) }}</option>
-          <option v-for="option in groupDescriptor.options" :key="option.value" :value="option.value">{{ option.label }}</option>
+          <option v-for="option in groupDescriptor.options.filter(option => !option.label.endsWith('（旧默认）') || option.value === selectedDefault)" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select></label>
         <p>保存并发布后生效；客户端可能保留手动选择。节点按用户授权校验。</p>
       </template>

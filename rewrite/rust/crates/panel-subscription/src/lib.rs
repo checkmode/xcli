@@ -255,6 +255,8 @@ pub fn build(
         .map_or(Ok(Vec::new()), |value| {
             value.as_array().cloned().ok_or(Error::InvalidConfiguration)
         })?;
+    let fixed_names = xcli_panel_rules::residential::names(settings)
+        .map_err(|_| Error::InvalidConfiguration)?;
     for exit in &exits {
         let tag = field(exit, "tag")?;
         inbound_tags.push(tag.to_owned());
@@ -266,18 +268,12 @@ pub fn build(
         if dynamic && !dynamic_enabled {
             continue;
         }
-        let label = field(exit, "label")?;
-        let exit_ip = field(exit, "exit_ip")?;
-        let name = format!(
-            "{} · {}{}",
-            user.name,
-            label,
-            if dynamic {
-                String::new()
-            } else {
-                format!(" · {exit_ip}")
-            }
-        );
+        let label = if dynamic {
+            field(exit, "label")?
+        } else {
+            fixed_names.get(tag).map(String::as_str).ok_or(Error::InvalidConfiguration)?
+        };
+        let name = format!("{} · {label}", user.name);
         if supports_hy2 {
             if hy2_port == 0 {
                 return Err(Error::InvalidConfiguration);

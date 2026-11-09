@@ -5,8 +5,9 @@ use std::collections::BTreeSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 mod apply;
 mod policy;
+pub mod residential;
 mod store;
-pub use apply::{apply_template_rules, ApplyError};
+pub use apply::{apply_template_rules, selects_direct, ApplyError};
 pub use policy::{apply_client_policy, apply_google_policy};
 pub use store::{factory_independent_rules, factory_spec, RuleEditor, RuleStore, RuleStoreError};
 

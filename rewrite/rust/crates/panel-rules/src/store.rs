@@ -444,14 +444,23 @@ impl RuleEditor {
 }
 type Result<T> = std::result::Result<T, RuleStoreError>;
 pub fn factory_independent_rules() -> &'static str {
+    // Legacy category data is also used to recognize existing published
+    // templates and to generate the base independent policy.
     include_str!("factory-independent.rules")
 }
 pub fn factory_spec(id: &str) -> Result<Value> {
     match id {
         "standard" => Ok(json!({"base":"standard","ai_outbound":"proxy","rules":""})),
-        "independent" => Ok(
-            json!({"base":"independent","ai_outbound":"proxy","rules":factory_independent_rules()}),
-        ),
+        "independent" => {
+            // Keep the editable factory template separate from the legacy
+            // category data: published rules may add groups or reorder targets.
+            let mut spec: Value = serde_json::from_str(include_str!(
+                "factory-independent-defaults.json"
+            ))
+            .map_err(|_| RuleStoreError::Unavailable)?;
+            spec["rules"] = json!(include_str!("factory-independent-published.rules"));
+            checked(&spec)
+        }
         _ => Err(RuleStoreError::NotFound),
     }
 }
