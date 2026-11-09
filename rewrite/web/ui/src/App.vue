@@ -28,6 +28,7 @@ const message = ref('');
 const form = reactive({ username: 'admin', password: '', code: '' });
 const rulesPanel = ref<InstanceType<typeof RulesPanel> | null>(null);
 const usersPanel = ref<InstanceType<typeof UsersPanel> | null>(null);
+const importsPanel = ref<InstanceType<typeof ImportPanel> | null>(null);
 
 type Page = 'overview' | 'users' | 'nodes' | 'imports' | 'webshare' | 'rules' | 'activity' | 'history' | 'events' | 'notifications' | 'security';
 type NavigationItem = { id: Page; label: string; description: string; icon: Component };
@@ -52,6 +53,7 @@ const page = ref<Page>('overview');
 const mobileNavigationOpen = ref(false);
 const mobileNavigationButton = ref<HTMLButtonElement | null>(null);
 const usersVisited = ref(false);
+const importsVisited = ref(false);
 const rulesVisited = ref(false);
 function currentPage(): NavigationItem {
   return navigation.flatMap(group => group.items).find(item => item.id === page.value)!;
@@ -65,6 +67,7 @@ function navigate(next: Page) {
   closeMobileNavigation();
   if (page.value === next) return;
   if (page.value === 'users') usersPanel.value?.closeLinks();
+  if (page.value === 'imports') importsPanel.value?.leave();
   page.value = next;
   if (next === 'users') {
     if (usersVisited.value) void usersPanel.value?.refresh();
@@ -74,10 +77,14 @@ function navigate(next: Page) {
     if (rulesVisited.value) void rulesPanel.value?.refreshUsers();
     rulesVisited.value = true;
   }
+  if (next === 'imports') {
+    if (importsVisited.value) void importsPanel.value?.refresh();
+    importsVisited.value = true;
+  }
 }
 function endSession(reason = '') {
   session.value = null; stage.value = 'anonymous'; page.value = 'overview';
-  mobileNavigationOpen.value = false; usersVisited.value = false; rulesVisited.value = false; message.value = reason;
+  mobileNavigationOpen.value = false; usersVisited.value = false; importsVisited.value = false; rulesVisited.value = false; message.value = reason;
 }
 
 function sessionBody(value: unknown): Session | null {
@@ -203,7 +210,7 @@ onMounted(() => { void checkHealth(); void restoreSession(); });
           </template>
           <UsersPanel v-if="usersVisited" v-show="page === 'users'" ref="usersPanel" :csrf="session.csrf" @changed="rulesPanel?.refreshUsers()" @expired="endSession()" />
           <NodesPanel v-if="page === 'nodes'" :csrf="session.csrf" @expired="endSession()" />
-          <ImportPanel v-if="page === 'imports'" :csrf="session.csrf" @expired="endSession()" />
+          <ImportPanel v-if="importsVisited" v-show="page === 'imports'" ref="importsPanel" :csrf="session.csrf" @expired="endSession()" />
           <WebsharePanel v-if="page === 'webshare'" :csrf="session.csrf" @expired="endSession()" />
           <RulesPanel v-if="rulesVisited" v-show="page === 'rules'" ref="rulesPanel" :csrf="session.csrf" @policy-changed="usersPanel?.refreshLinks()" @expired="endSession()" />
           <ActivityPanel v-if="page === 'activity'" @expired="endSession()" />

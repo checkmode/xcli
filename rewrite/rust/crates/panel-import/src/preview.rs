@@ -10,7 +10,7 @@ use crate::probe::{ProbeResult, Protocol};
 use crate::vmess::{parse_links, SecretJson, VmessProxy};
 use crate::{parse_fixed, Proxy};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -295,6 +295,53 @@ pub fn manage(
 ) -> Result<Ready, PreviewError> {
     manage_cancellable(store, launcher, tag, operation, None)
 }
+/// Build one atomic candidate for the whole selection. A failed item leaves
+/// the original files untouched and no partial preview is returned.
+pub(crate) fn delete_many_cancellable(
+    store: &Store,
+    tags: &[String],
+    now: u64,
+    stop: Option<&AtomicBool>,
+) -> Result<Ready, PreviewError> {
+    let mut unique = BTreeSet::new();
+    if now == 0
+        || tags.is_empty()
+        || tags.len() > 40
+        || tags.iter().any(|tag| {
+            tag.len() != 14
+                || !tag.starts_with("residential-")
+                || !tag[12..].bytes().all(|b| b.is_ascii_digit())
+                || !unique.insert(tag)
+        })
+    {
+        return Err(PreviewError::Invalid);
+    }
+    let (mut files, snapshot) = store.load()?;
+    let mut rows = Vec::with_capacity(tags.len());
+    for tag in tags {
+        if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+            return Err(PreviewError::Probe);
+        }
+        let item = files.pool()["proxies"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["tag"] == *tag))
+            .ok_or(PreviewError::Invalid)?;
+        let entry = item
+            .get("entry")
+            .or_else(|| {
+                files.settings()["residential_exits"]
+                    .as_array()
+                    .and_then(|items| items.iter().find(|entry| entry["tag"] == *tag))
+            })
+            .ok_or(PreviewError::Invalid)?;
+        rows.push(json!({"tag":tag,"label":entry["label"].as_str().unwrap_or(""),
+            "exit_ip":entry["exit_ip"].as_str().unwrap_or(""),"country":entry["country"].as_str().unwrap_or("")}));
+        files = manage_candidate(files, tag, Manage::Delete { now })
+            .map_err(|_| PreviewError::Invalid)?
+            .0;
+    }
+    ready(store, snapshot, files, rows)
+}
 pub(crate) fn manage_cancellable(
     store: &Store,
     launcher: &Launcher,
@@ -511,6 +558,53 @@ esac
             fs::read_to_string(&user_data).unwrap(),
             "traffic-counter-123"
         );
+        let before = store.snapshot().unwrap();
+        let invalid = vec!["residential-27".into(), "residential-99".into()];
+        assert!(matches!(
+            delete_many_cancellable(&store, &invalid, 1000, None),
+            Err(PreviewError::Invalid)
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        let duplicate = vec!["residential-27".into(), "residential-27".into()];
+        assert!(matches!(
+            delete_many_cancellable(&store, &duplicate, 1000, None),
+            Err(PreviewError::Invalid)
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        let batch_tags = vec!["residential-27".into(), "residential-28".into()];
+        let batch = delete_many_cancellable(&store, &batch_tags, 1000, None).unwrap();
+        assert_eq!(batch.entries().len(), 2);
+        assert!(!serde_json::to_string(batch.entries())
+            .unwrap()
+            .contains("synthetic-"));
+        assert_eq!(store.snapshot().unwrap(), before);
+        let id = batch.id().to_owned();
+        batch.confirm(&id, &store, &mut HooksFixture).unwrap();
+        let pool: Value = serde_json::from_slice(&fs::read(etc.join("pool")).unwrap()).unwrap();
+        assert!(pool["proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["deleted_at"] == 1000 && item["enabled"] == false));
+        let settings_after: Value =
+            serde_json::from_slice(&fs::read(etc.join("settings")).unwrap()).unwrap();
+        assert!(settings_after["residential_exits"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        for name in ["core", "monitor", "locations"] {
+            let content = fs::read_to_string(etc.join(name)).unwrap();
+            for tag in &batch_tags {
+                assert!(!content.contains(tag), "deleted tag remains in {name}");
+            }
+        }
+        for tag in &batch_tags {
+            for action in [Operation::Restore, Operation::Enable] {
+                let restore = manage(&store, &launcher, tag, action).unwrap();
+                let id = restore.id().to_owned();
+                restore.confirm(&id, &store, &mut HooksFixture).unwrap();
+            }
+        }
 
         let saved: Value = serde_json::from_slice(&fs::read(etc.join("core")).unwrap()).unwrap();
         assert_eq!(saved["inbounds"][0], core["inbounds"][0]);
@@ -668,6 +762,40 @@ esac
         );
         let pool: Value = serde_json::from_slice(&fs::read(etc.join("pool")).unwrap()).unwrap();
         assert_eq!(pool["proxies"][0]["enabled"], false);
+        let before_batch = store.snapshot().unwrap();
+        let batch_id = "1".repeat(32);
+        let batch = claim(json!({"id":batch_id,"requested_at":1000,"action":"manage",
+            "operation":"delete","tags":["residential-27","residential-28"]}));
+        let batch_report = coordinator
+            .handle(&batch, &store, &launcher, &mut HooksFixture, 1000)
+            .unwrap();
+        assert_eq!(batch_report["status"], "ready");
+        assert_eq!(batch_report["rows"].as_array().unwrap().len(), 2);
+        assert_eq!(store.snapshot().unwrap(), before_batch);
+        let confirm = claim(
+            json!({"id":"2".repeat(32),"requested_at":1000,"action":"apply","preview_id":batch_id}),
+        );
+        assert_eq!(
+            coordinator
+                .handle(&confirm, &store, &launcher, &mut HooksFixture, 1000)
+                .unwrap()["status"],
+            "complete"
+        );
+        let pool: Value = serde_json::from_slice(&fs::read(etc.join("pool")).unwrap()).unwrap();
+        assert!(pool["proxies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .take(2)
+            .all(|item| item["deleted_at"] == 1000));
+        for tag in ["residential-27", "residential-28"] {
+            let restore = manage(&store, &launcher, tag, Operation::Restore).unwrap();
+            let id = restore.id().to_owned();
+            restore.confirm(&id, &store, &mut HooksFixture).unwrap();
+        }
+        let enable = manage(&store, &launcher, "residential-28", Operation::Enable).unwrap();
+        let id = enable.id().to_owned();
+        enable.confirm(&id, &store, &mut HooksFixture).unwrap();
         assert_eq!(
             fs::read_to_string(&user_data).unwrap(),
             "traffic-counter-123"
@@ -689,7 +817,7 @@ esac
         publisher
             .submit(
                 &prepared,
-                &json!({"status":"complete","updated":1000,"id":"e".repeat(32)}),
+                &json!({"status":"complete","updated":1000,"id":"2".repeat(32)}),
                 1000,
                 &mut audit,
             )

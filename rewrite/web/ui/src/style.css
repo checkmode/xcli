@@ -392,3 +392,56 @@ button.danger { color: #b43a40; border-color: #e7bfc1; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Fixed proxies: list first, with an adjacent task panel on wide screens. */
+.fixed-proxies .proxy-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; margin-top: 20px; }
+.fixed-proxies .proxy-workspace.with-editor { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); align-items: start; }
+.proxy-list-pane, .proxy-editor-pane { min-width: 0; }
+.proxy-list-heading, .proxy-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; scroll-margin-top: 130px; }
+.proxy-list-heading h3, .proxy-editor-heading h3, .proxy-confirmation h3 { margin: 0; font-size: 15px; }
+.proxy-list-heading p, .proxy-editor-heading p { margin: 4px 0 0; font-size: 12px; }
+.proxy-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.proxy-search { flex: 1 1 180px; min-width: 0; }
+.proxy-search .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.proxy-search input { min-height: 34px; }
+.proxy-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.proxy-tabs button { min-height: 32px; padding: 5px 9px; border-color: transparent; background: #f4f6f9; color: #5b6c83; font-size: 11px; }
+.proxy-tabs button.active { color: #245fb7; background: #eaf2fe; border-color: #dce9fa; }
+.proxy-tabs button span { margin-left: 2px; opacity: .75; }
+.proxy-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0 5px; color: var(--muted); font-size: 12px; }
+.proxy-bulk .checkbox { display: inline-flex; align-items: center; gap: 6px; margin-right: 0; }
+.proxy-bulk button, .proxy-row-actions button { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.proxy-list { margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--soft-line); }
+.proxy-list > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 11px 5px; border-bottom: 1px solid var(--soft-line); }
+.proxy-list > li.recent { background: #f0f7ff; }
+.proxy-list > li.selected { box-shadow: inset 3px 0 #5994df; }
+.proxy-select { display: inline-flex; align-items: center; min-width: 15px; }
+.proxy-select input { width: 15px; min-width: 15px; height: 15px; min-height: 15px; margin: 0; accent-color: var(--accent); }
+.proxy-identity { min-width: 0; overflow-wrap: anywhere; }
+.proxy-identity strong { font-size: 13px; }
+.proxy-identity small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.proxy-new { display: inline-block; margin-left: 6px; color: #2468b9; font-size: 10px; }
+.proxy-row-actions, .proxy-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.proxy-empty { margin: 14px 0 0; padding: 24px 12px; border: 1px dashed var(--line); border-radius: 9px; text-align: center; }
+.proxy-hint { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.proxy-editor-pane { padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: #f9fbfd; scroll-margin-top: 80px; }
+.proxy-editor-pane .import-form { gap: 11px; margin-top: 14px; }
+.proxy-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.proxy-confirmation { margin-top: 18px; padding: 15px; border: 1px solid #cdddf0; border-radius: 10px; background: #f6faff; scroll-margin-top: 80px; }
+.proxy-confirmation p { margin: 6px 0 0; font-size: 12px; }
+.proxy-preview-list { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin: 12px 0; padding: 0; list-style: none; }
+.proxy-preview-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; padding: 7px 9px; border-radius: 6px; background: white; font-size: 12px; }
+.proxy-preview-list li span { color: var(--muted); }
+.proxy-actions { margin-top: 12px; }
+@media (max-width: 800px) {
+  .fixed-proxies .proxy-workspace.with-editor { grid-template-columns: 1fr; }
+  .proxy-editor-pane { grid-row: 1; }
+  .proxy-list > li { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .proxy-row-actions { grid-column: 2 / -1; }
+}
+@media (max-width: 420px) {
+  .fixed-proxies .users-heading { flex-wrap: wrap; }
+  .proxy-form-grid { grid-template-columns: 1fr; }
+  .proxy-tabs { width: 100%; }
+  .proxy-tabs button { flex: 1 1 auto; }
+}

@@ -1,23 +1,53 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 
 type Row = { tag?: string; label?: string; exit_ip?: string; country?: string; port?: number; hysteria2?: boolean };
 type ProxyItem = { tag: string; protocol: string; address: string; port: number; label: string; country: string; exit_ip: string; enabled: boolean; deleted_at: number;
   network?: string; security?: string; server_name?: string; host?: string; path?: string; alpn?: string; fingerprint?: string; tls?: boolean };
 type Report = { status: string; id?: string; updated?: number; expires?: number; rows?: Row[]; reason?: string; apply_enabled?: boolean; items?: ProxyItem[] | null };
+type Operation = 'import' | 'edit' | 'delete' | 'enable' | 'disable' | 'restore';
+type Current = { kind: Operation; name: string; tags: string[]; phase: 'preview' | 'apply' };
 const props = defineProps<{ csrf: string }>();
 const emit = defineEmits<{ expired: [] }>();
 const report = ref<Report | null>(null); const loading = ref(true); const busy = ref(false);
-const failure = ref(''); const pendingId = ref(''); const notice = ref('');
-const managementDescription = ref('');
+const failure = ref(''); const fetchFailure = ref(''); const pendingId = ref(''); const notice = ref('');
+const current = ref<Current | null>(null); const dismissedId = ref('');
+const panel = ref<'import' | 'edit' | null>(null); const panelElement = ref<HTMLElement | null>(null);
+const confirmationElement = ref<HTMLElement | null>(null);
+const listElement = ref<HTMLElement | null>(null);
+const query = ref(''); const filter = ref<'all' | 'enabled' | 'disabled' | 'trash'>('all');
+const selected = ref<string[]>([]); const recent = ref<string[]>([]);
 const form = reactive({ protocol: 'socks', label: '', text: '' });
 const editing = ref<ProxyItem | null>(null);
 const edit = reactive({ label:'', address:'', port:0, protocol:'socks', username:'', password:'', uuid:'', network:'tcp',
   security:'auto', tls:false, server_name:'', host:'', path:'', alpn:'', fingerprint:'' });
 let timer: ReturnType<typeof setInterval> | undefined;
+const items = computed(() => report.value?.items ?? []);
+const counts = computed(() => ({ all: items.value.filter(i => !i.deleted_at).length,
+  enabled: items.value.filter(i => !i.deleted_at && i.enabled).length,
+  disabled: items.value.filter(i => !i.deleted_at && !i.enabled).length,
+  trash: items.value.filter(i => Boolean(i.deleted_at)).length }));
+const visibleItems = computed(() => {
+  const term = query.value.trim().toLocaleLowerCase();
+  return items.value.filter(i => {
+    if (filter.value === 'trash' ? !i.deleted_at : Boolean(i.deleted_at)) return false;
+    if (filter.value === 'enabled' && !i.enabled || filter.value === 'disabled' && i.enabled) return false;
+    return !term || [i.label, i.tag, i.address, i.exit_ip, i.country, i.protocol].some(v => v.toLocaleLowerCase().includes(term));
+  }).sort((a, b) => Number(recent.value.includes(b.tag)) - Number(recent.value.includes(a.tag)));
+});
+const visibleSelected = computed(() => visibleItems.value.filter(i => selected.value.includes(i.tag)).length);
 const waiting = computed(() => Boolean(pendingId.value && report.value?.id !== pendingId.value));
+const confirming = computed(() => report.value?.status === 'ready' && !waiting.value && report.value.id !== dismissedId.value);
 const blocked = computed(() => busy.value || waiting.value || !report.value ||
   ['unavailable', 'verifying', 'applying'].includes(report.value.status));
+const locked = computed(() => blocked.value || confirming.value);
+const actionName: Record<Operation, string> = { import:'导入', edit:'保存修改', delete:'删除', enable:'启用', disable:'停用', restore:'找回' };
+const previewTitle = computed(() => {
+  if (!current.value) return '待确认的代理变更';
+  if (current.value.kind === 'delete') return `确认删除 ${current.value.tags.length} 个代理？`;
+  if (current.value.kind === 'import') return `检测完成，可以导入 ${report.value?.rows?.length ?? 0} 个代理`;
+  return `确认${actionName[current.value.kind]}「${current.value.name}」？`;
+});
 
 function parse(value: unknown): Report {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid report');
@@ -39,169 +69,191 @@ function parse(value: unknown): Report {
     (row.port === undefined || Number.isSafeInteger(row.port)) && (row.hysteria2 === undefined || typeof row.hysteria2 === 'boolean')))) throw new Error('invalid rows');
   return data as Report;
 }
+function closePanel() { panel.value = null; editing.value = null; form.text = ''; edit.username = ''; edit.password = ''; edit.uuid = ''; }
+function scrollPanel() { void nextTick(() => { if (window.matchMedia('(max-width: 800px)').matches) panelElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }); }); }
+function finish(value: Report) {
+  const op = current.value;
+  if (!op) { notice.value = '代理变更已应用。'; return; }
+  if (op.kind === 'import') {
+    recent.value = op.tags;
+    filter.value = 'all'; query.value = '';
+    const shown = op.tags.filter(tag => value.items?.some(item => item.tag === tag && !item.deleted_at)).length;
+    notice.value = shown === op.tags.length && shown > 0 ? `已导入 ${shown} 个代理，已在列表顶部标出。` : '导入已完成，正在同步列表，请刷新查看。';
+    form.label = '';
+    void nextTick(() => listElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
+  } else if (op.kind === 'delete') {
+    notice.value = `已将 ${op.tags.length} 个代理移入回收站，可在“回收站”中找回。`;
+    selected.value = [];
+  } else {
+    notice.value = op.kind === 'restore' ? `已找回「${op.name}」，当前为停用状态，可在列表中启用。` : `已${actionName[op.kind]}「${op.name}」。`;
+  }
+  current.value = null; closePanel();
+}
 async function refresh() {
   try {
-    const response = await fetch('/api/proxy-import', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    const response = await fetch('/api/proxy-import', { credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(10000) });
     if (response.status === 401) { emit('expired'); return; }
     if (!response.ok) throw new Error('unavailable');
-    const value = parse(await response.json());
-    report.value = value; failure.value = '';
+    const value = parse(await response.json()); report.value = value; fetchFailure.value = '';
+    if (value.items) selected.value = selected.value.filter(tag => value.items?.some(item => item.tag === tag && !item.deleted_at));
     if (pendingId.value && value.id === pendingId.value && ['ready', 'complete', 'failed', 'expired'].includes(value.status)) {
       pendingId.value = '';
-      notice.value = value.status === 'complete' ? '代理配置已应用。' : value.status === 'ready' ? '检测完成，请核对结果。' : '';
-      if (value.status !== 'ready') managementDescription.value = '';
+      if (value.status === 'ready') {
+        if (current.value?.kind === 'import') current.value.tags = (value.rows ?? []).flatMap(row => row.tag ? [row.tag] : []);
+        notice.value = ''; void nextTick(() => confirmationElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      } else if (value.status === 'complete') finish(value);
+      else { notice.value = ''; current.value = null; }
     }
-  } catch { failure.value = '暂时无法读取检测状态。'; }
+  } catch { fetchFailure.value = '暂时无法读取代理列表或处理状态，请刷新重试。'; }
   finally { loading.value = false; }
 }
-async function submit() {
-  if (blocked.value || !form.label.trim() || !form.text.trim()) return;
-  busy.value = true; failure.value = ''; notice.value = ''; managementDescription.value = '';
+async function send(payload: object, op: Current) {
+  if (locked.value) return;
+  busy.value = true; failure.value = ''; notice.value = '';
   try {
-    const response = await fetch('/api/proxy-import', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': props.csrf },
-      body: JSON.stringify({ action: 'preview', ...form }), signal: AbortSignal.timeout(15000) });
+    const response = await fetch('/api/proxy-import', { method:'POST', credentials:'same-origin', cache:'no-store',
+      headers: { 'Content-Type':'application/json', 'X-CSRF-Token':props.csrf }, body:JSON.stringify(payload), signal:AbortSignal.timeout(15000) });
     if (response.status === 401) { emit('expired'); return; }
     if (!response.ok) {
       const body: unknown = await response.json().catch(() => null);
-      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '检测请求未完成。';
-      return;
+      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '请求未完成。'; return;
     }
     const body: unknown = await response.json();
     if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string' || !/^[0-9a-f]{32}$/.test(body.id)) throw new Error('invalid response');
-    pendingId.value = body.id; form.text = ''; notice.value = '检测请求已提交。';
+    current.value = op; pendingId.value = body.id; dismissedId.value = ''; form.text = ''; edit.username = ''; edit.password = ''; edit.uuid = '';
+    notice.value = op.kind === 'import' || op.kind === 'edit' || op.kind === 'enable' ? '正在检测，请稍候。' : '正在准备变更，请稍候。';
     await refresh();
   } catch { failure.value = '提交结果暂时未知，请刷新状态后重试。'; }
   finally { busy.value = false; }
 }
-function clearEdit() { editing.value = null; edit.username = ''; edit.password = ''; edit.uuid = ''; edit.path = ''; edit.host = ''; edit.server_name = ''; }
+function startImport() { closePanel(); panel.value = 'import'; notice.value = ''; scrollPanel(); }
+function submit() {
+  if (!form.label.trim() || !form.text.trim()) return;
+  void send({ action:'preview', ...form }, { kind:'import', name:'', tags:[], phase:'preview' });
+}
 function startEdit(item: ProxyItem) {
-  editing.value = item;
+  closePanel(); panel.value = 'edit'; editing.value = item; notice.value = '';
   Object.assign(edit, { label:item.label, address:item.address, port:item.port, protocol:item.protocol, username:'', password:'', uuid:'',
     network:item.network || 'tcp', security:item.security || 'auto', tls:item.tls || false, server_name:item.server_name || '',
     host:item.host || '', path:item.path || '', alpn:item.alpn || '', fingerprint:item.fingerprint || '' });
+  scrollPanel();
 }
-async function manage(item: ProxyItem, operation: 'enable' | 'disable' | 'delete' | 'restore' | 'edit') {
-  if (blocked.value || !report.value?.apply_enabled) return;
-  const action = { enable: '启用', disable: '停用', delete: '移入回收站', restore: '从回收站找回', edit: '修改' }[operation];
-  busy.value = true; failure.value = ''; notice.value = '';
-  try {
-    const changes = operation === 'edit' ? {
-      label:edit.label, address:edit.address, port:edit.port, protocol:edit.protocol,
-      ...(edit.protocol === 'vmess' ? { uuid:edit.uuid, network:edit.network, security:edit.security, tls:edit.tls,
-        server_name:edit.tls ? edit.server_name : '', host:edit.host, path:edit.path,
-        alpn:edit.tls ? edit.alpn : '', fingerprint:edit.tls ? edit.fingerprint : '' }
-        : { username:edit.username, password:edit.password }),
-    } : undefined;
-    const response = await fetch('/api/proxy-import', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': props.csrf },
-      body: JSON.stringify({ action: 'manage', operation, tag: item.tag, ...(changes ? { changes } : {}) }), signal: AbortSignal.timeout(15000) });
-    if (response.status === 401) { emit('expired'); return; }
-    if (!response.ok) {
-      const body: unknown = await response.json().catch(() => null);
-      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '操作未完成。';
-      return;
-    }
-    const body: unknown = await response.json();
-    if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string' || !/^[0-9a-f]{32}$/.test(body.id)) throw new Error('invalid response');
-    managementDescription.value = `确认${action}「${item.label}」？`;
-    clearEdit();
-    pendingId.value = body.id; notice.value = '操作已提交，正在准备。';
-    await refresh();
-  } catch { failure.value = '操作结果暂时未知，请刷新状态后重试。'; }
-  finally { busy.value = false; }
+function manage(item: ProxyItem, operation: 'enable' | 'disable' | 'restore' | 'edit') {
+  if (!report.value?.apply_enabled) return;
+  const changes = operation === 'edit' ? {
+    label:edit.label, address:edit.address, port:edit.port, protocol:edit.protocol,
+    ...(edit.protocol === 'vmess' ? { uuid:edit.uuid, network:edit.network, security:edit.security, tls:edit.tls,
+      server_name:edit.tls ? edit.server_name : '', host:edit.host, path:edit.path,
+      alpn:edit.tls ? edit.alpn : '', fingerprint:edit.tls ? edit.fingerprint : '' } : { username:edit.username, password:edit.password }),
+  } : undefined;
+  void send({ action:'manage', operation, tag:item.tag, ...(changes ? { changes } : {}) },
+    { kind:operation, name:item.label, tags:[item.tag], phase:'preview' });
 }
+function remove(tags: string[]) {
+  if (!report.value?.apply_enabled || !tags.length) return;
+  closePanel();
+  void send({ action:'manage', operation:'delete', tags }, { kind:'delete', name:'', tags:[...tags], phase:'preview' });
+}
+function toggleAll() {
+  const visible = visibleItems.value.map(i => i.tag);
+  selected.value = visibleSelected.value === visible.length ? selected.value.filter(tag => !visible.includes(tag)) : [...new Set([...selected.value, ...visible])];
+}
+function cancelPreview() { dismissedId.value = report.value?.id ?? ''; current.value = null; notice.value = '已取消预览，变更未应用。'; }
 async function apply() {
-  if (blocked.value || !report.value?.apply_enabled || report.value.status !== 'ready' || !report.value.id) return;
+  if (blocked.value || !report.value?.apply_enabled || !confirming.value || !report.value.id) return;
   busy.value = true; failure.value = ''; notice.value = '';
   try {
-    const response = await fetch('/api/proxy-import', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': props.csrf },
-      body: JSON.stringify({ action: 'apply', preview_id: report.value.id }), signal: AbortSignal.timeout(15000) });
+    const response = await fetch('/api/proxy-import', { method:'POST', credentials:'same-origin', cache:'no-store',
+      headers: { 'Content-Type':'application/json', 'X-CSRF-Token':props.csrf },
+      body:JSON.stringify({ action:'apply', preview_id:report.value.id }), signal:AbortSignal.timeout(15000) });
     if (response.status === 401) { emit('expired'); return; }
     if (!response.ok) {
       const body: unknown = await response.json().catch(() => null);
-      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '应用未完成。';
-      return;
+      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '应用未完成。'; return;
     }
     const body: unknown = await response.json();
     if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string' || !/^[0-9a-f]{32}$/.test(body.id)) throw new Error('invalid response');
-    pendingId.value = body.id; notice.value = '应用请求已提交，正在等待结果。';
-    await refresh();
+    pendingId.value = body.id; if (current.value) current.value.phase = 'apply'; notice.value = '正在应用变更，请稍候。'; await refresh();
   } catch { failure.value = '应用结果暂时未知，请刷新状态后重试。'; }
   finally { busy.value = false; }
 }
-function state(value: string): string {
-  return ({ idle: '等待检测', verifying: '正在检测', ready: '检测完成', applying: '正在应用', complete: '已完成',
-    failed: '操作失败', expired: '检测结果已过期', unavailable: '检测服务不可用' } as Record<string, string>)[value] ?? '未知';
-}
 function reason(value?: string): string {
-  return ({ invalid: '输入或现有配置不符合要求。', probe: '代理连接或出口检测未通过。', conflict: '配置在检测期间发生变化，请重新检测。',
-    expired: '检测结果已过期，请重新检测。', unavailable: '检测服务暂时不可用。', apply_disabled: '应用功能尚未启用。',
-    interrupted: '检测过程已中断，请重新检测。' } as Record<string, string>)[value ?? ''] ?? '请检查输入和检测服务后重试。';
+  return ({ invalid:'输入或现有配置不符合要求。', probe:'代理连接或出口检测未通过。', conflict:'配置在检测期间发生变化，请重新操作。',
+    expired:'检测结果已过期，请重新操作。', unavailable:'检测服务暂时不可用。', apply_disabled:'应用功能尚未启用。',
+    interrupted:'检测过程已中断，请重新操作。' } as Record<string, string>)[value ?? ''] ?? '请检查输入和检测服务后重试。';
 }
-onMounted(() => { void refresh(); timer = setInterval(() => { void refresh(); }, 5000); });
-onUnmounted(() => { if (timer) clearInterval(timer); form.text = ''; clearEdit(); });
+function leave() { form.text = ''; edit.username = ''; edit.password = ''; edit.uuid = ''; }
+defineExpose({ refresh, leave });
+onMounted(() => { void refresh(); timer = setInterval(() => { void refresh(); }, 3000); });
+onUnmounted(() => { if (timer) clearInterval(timer); closePanel(); });
 </script>
 
 <template>
-  <section aria-labelledby="import-heading">
-    <div class="users-heading"><div><h2 id="import-heading">固定代理</h2><p>检测 SOCKS5、HTTP 和 VMess 代理，查看可用出口。</p></div>
-      <button type="button" @click="refresh">刷新</button></div>
-    <p class="preview-note">{{ report?.apply_enabled ? '应用变更时，现有连接可能短暂中断。' : '当前服务只能检测，不能应用或修改现有配置。' }}</p>
-    <p class="preview-note">支持双入口的固定代理在客户端中作为一个出口使用：默认优先 Hysteria 2，故障时切换至 HTTPS；也可在出口分组中手动选择协议。</p>
-    <p v-if="loading" class="table-message">正在读取检测状态…</p>
-    <template v-else-if="report">
-      <div class="webshare-status" aria-live="polite"><strong>{{ waiting ? '等待工作进程处理' : state(report.status) }}</strong>
-        <span v-if="report.status === 'ready' && !waiting">仅供预览，尚未应用。</span>
-        <span v-if="report.status === 'failed' && !waiting">{{ reason(report.reason) }}</span></div>
-      <div v-if="report.status === 'ready' && !waiting && report.rows?.length" class="table-wrap"><table>
-        <thead><tr><th>名称</th><th>入口</th><th>出口</th><th>地区</th><th>端口</th></tr></thead>
-        <tbody><tr v-for="(row, index) in report.rows" :key="row.tag || index"><td>{{ row.label || '—' }}</td><td>{{ row.tag || '—' }}</td>
-          <td>{{ row.exit_ip || '—' }}</td><td>{{ row.country || '—' }}</td><td>{{ row.port ?? '—' }}</td></tr></tbody></table></div>
-      <div v-if="report.status === 'ready' && !waiting && report.apply_enabled" class="form-actions">
-        <p v-if="managementDescription">{{ managementDescription }}</p>
-        <button type="button" class="primary" :disabled="blocked" @click="apply">确认应用</button>
+  <section aria-labelledby="import-heading" class="fixed-proxies">
+    <div class="users-heading"><div><h2 id="import-heading">固定代理</h2><p>导入、编辑和管理 SOCKS5、HTTP、VMess 出口。</p></div>
+      <div class="heading-actions"><button type="button" @click="refresh">刷新</button><button type="button" class="primary" :disabled="locked" @click="startImport">导入代理</button></div></div>
+    <p v-if="report && !report.apply_enabled" class="preview-note">当前服务只能检测，无法应用变更。</p>
+    <p v-if="loading" class="table-message">正在读取代理列表…</p>
+    <p v-if="fetchFailure" class="message" role="alert">{{ fetchFailure }}</p><p v-if="failure" class="message" role="alert">{{ failure }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
+    <p v-if="report?.status === 'unavailable'" class="message" role="alert">代理检测服务暂时不可用，请稍后刷新重试。</p>
+    <p v-if="report?.status === 'failed' && !waiting" class="message" role="alert">{{ reason(report.reason) }}</p>
+    <p v-if="report?.status === 'expired' && !waiting" class="message" role="alert">检测结果已过期，请重新操作。</p>
+    <template v-if="!loading && report">
+      <div v-if="confirming" ref="confirmationElement" class="proxy-confirmation" role="region" aria-label="确认代理变更">
+        <div><h3>{{ previewTitle }}</h3><p v-if="current?.kind === 'delete'">删除后会移入回收站，可随时找回。应用时现有连接可能短暂中断。</p>
+          <p v-else-if="current?.kind === 'import'">请核对出口信息。确认导入后，代理会出现在下方列表中。</p>
+          <p v-else>变更尚未应用。应用时现有连接可能短暂中断。</p></div>
+        <ul v-if="report.rows?.length" class="proxy-preview-list"><li v-for="(row, index) in report.rows" :key="row.tag || index">
+          <strong>{{ row.label || row.tag || '代理' }}</strong><span>{{ [row.exit_ip, row.country].filter(Boolean).join(' · ') }}</span></li></ul>
+        <div class="proxy-actions"><button v-if="report.apply_enabled" type="button" class="primary" :disabled="blocked" @click="apply">{{ current ? `确认${actionName[current.kind]}` : '确认应用' }}</button>
+          <button type="button" :disabled="blocked" @click="cancelPreview">取消</button></div>
       </div>
-      <div v-if="report.items?.length" class="table-wrap"><table>
-        <thead><tr><th>已导入代理</th><th>地址</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="item in report.items" :key="item.tag"><td>{{ item.label }}<br><small>{{ item.tag }} · {{ item.country }}</small></td>
-          <td>{{ item.address }}:{{ item.port }}<br><small>{{ item.protocol }}</small></td>
-          <td>{{ item.deleted_at ? '回收站' : item.enabled ? '已启用' : '已停用' }}</td>
-          <td v-if="report.apply_enabled">
-            <button v-if="item.deleted_at" type="button" :disabled="blocked" @click="manage(item, 'restore')">找回</button>
-            <template v-else><button type="button" :disabled="blocked" @click="startEdit(item)">编辑</button>
-              <button type="button" :disabled="blocked" @click="manage(item, item.enabled ? 'disable' : 'enable')">{{ item.enabled ? '停用' : '启用' }}</button>
-              <button type="button" :disabled="blocked" @click="manage(item, 'delete')">删除</button></template>
-          </td><td v-else>—</td></tr></tbody></table></div>
-      <form v-if="editing" class="import-form" @submit.prevent="manage(editing, 'edit')">
-        <h3>编辑 {{ editing.label }}</h3>
-        <div class="editor-grid"><label>名称<input v-model="edit.label" maxlength="60" required></label>
-          <label>协议<select v-model="edit.protocol"><template v-if="editing.protocol === 'vmess'"><option value="vmess">VMess</option></template>
-            <template v-else><option value="socks">SOCKS5</option><option value="http">HTTP</option></template></select></label></div>
-        <div class="editor-grid"><label>代理地址<input v-model="edit.address" maxlength="253" required></label>
-          <label>端口<input v-model.number="edit.port" type="number" min="1" max="65535" required></label></div>
-        <template v-if="edit.protocol === 'vmess'">
-          <label>新 UUID<input v-model="edit.uuid" type="password" autocomplete="new-password" placeholder="留空保留原值"></label>
-          <div class="editor-grid"><label>传输<select v-model="edit.network"><option value="tcp">TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option></select></label>
-            <label>加密<select v-model="edit.security"><option>auto</option><option>aes-128-gcm</option><option>chacha20-poly1305</option><option>none</option><option>zero</option></select></label></div>
-          <label class="checkbox"><input v-model="edit.tls" type="checkbox">启用 TLS</label>
-          <div class="editor-grid"><label>TLS 服务名<input v-model="edit.server_name" maxlength="253"></label><label>Host<input v-model="edit.host" maxlength="253"></label></div>
-          <label>路径或 gRPC 服务名<input v-model="edit.path" maxlength="1024"></label>
-          <div class="editor-grid"><label>ALPN<input v-model="edit.alpn" maxlength="100"></label><label>TLS 指纹<input v-model="edit.fingerprint" maxlength="32"></label></div>
-        </template>
-        <div v-else class="editor-grid"><label>新账号<input v-model="edit.username" autocomplete="off" placeholder="留空保留原值"></label>
-          <label>新密码<input v-model="edit.password" type="password" autocomplete="new-password" placeholder="留空保留原值"></label></div>
-        <div><button type="submit" class="primary" :disabled="blocked">检测修改</button><button type="button" @click="clearEdit">取消</button></div>
-      </form>
-      <form class="import-form" @submit.prevent="submit">
-        <div class="editor-grid"><label>协议<select v-model="form.protocol"><option value="socks">SOCKS5</option><option value="http">HTTP</option><option value="vmess">VMess</option></select></label>
-          <label>名称前缀<input v-model="form.label" maxlength="30" required></label></div>
-        <label>{{ form.protocol === 'vmess' ? 'VMess 分享链接' : '代理列表（每行：IP:端口:账号:密码）' }}
-          <textarea v-model="form.text" rows="4" maxlength="12000" autocomplete="off" spellcheck="false" required></textarea></label>
-        <div><button class="primary" type="submit" :disabled="blocked || !form.label.trim() || !form.text.trim()">{{ busy ? '正在提交…' : '检测代理' }}</button></div>
-      </form>
+      <div class="proxy-workspace" :class="{ 'with-editor': panel }">
+        <div class="proxy-list-pane">
+          <div ref="listElement" class="proxy-list-heading"><div><h3>已导入的代理</h3><p>共 {{ counts.all }} 个 · 已启用 {{ counts.enabled }} 个</p></div></div>
+          <div class="proxy-filters"><label class="proxy-search"><span class="sr-only">搜索代理</span><input v-model="query" type="search" placeholder="搜索名称、地址或地区"></label>
+            <div class="proxy-tabs" aria-label="代理状态筛选"><button v-for="tab in ([['all','全部'],['enabled','已启用'],['disabled','已停用'],['trash','回收站']] as const)" :key="tab[0]"
+              type="button" :class="{ active: filter === tab[0] }" :aria-pressed="filter === tab[0]" @click="filter = tab[0]">{{ tab[1] }} <span>{{ counts[tab[0]] }}</span></button></div></div>
+          <div v-if="filter !== 'trash' && report.apply_enabled && visibleItems.length" class="proxy-bulk">
+            <label class="checkbox"><input type="checkbox" :checked="visibleSelected === visibleItems.length" :indeterminate="visibleSelected > 0 && visibleSelected < visibleItems.length" :disabled="locked" @change="toggleAll">全选当前结果</label>
+            <span>已选 {{ selected.length }} 个</span><button type="button" class="danger" :disabled="locked || !selected.length" @click="remove(selected)">删除已选</button>
+            <button v-if="selected.length" type="button" :disabled="locked" @click="selected = []">清除选择</button>
+          </div>
+          <p v-if="report.items == null" class="proxy-empty">无法读取已导入的代理，请刷新后重试。</p>
+          <p v-else-if="!visibleItems.length" class="proxy-empty">{{ query ? '没有找到匹配的代理。' : filter === 'trash' ? '回收站为空。' : filter === 'all' ? '还没有导入代理，点击右上角“导入代理”开始。' : '此状态下没有代理。' }}</p>
+          <ul v-else class="proxy-list"><li v-for="item in visibleItems" :key="item.tag" :class="{ recent: recent.includes(item.tag), selected: editing?.tag === item.tag }">
+            <label v-if="filter !== 'trash' && report.apply_enabled" class="proxy-select"><input v-model="selected" type="checkbox" :value="item.tag" :disabled="locked" :aria-label="`选择 ${item.label}`"></label>
+            <span v-else class="proxy-select" aria-hidden="true"></span>
+            <div class="proxy-identity"><div><strong>{{ item.label }}</strong><span v-if="recent.includes(item.tag)" class="proxy-new">新导入</span></div>
+              <small>{{ item.address }}:{{ item.port }} · {{ item.protocol.toUpperCase() }}</small><small>出口 {{ item.exit_ip || '—' }}<template v-if="item.country"> · {{ item.country }}</template></small></div>
+            <span class="status-badge" :class="{ active:item.enabled && !item.deleted_at }">{{ item.deleted_at ? '回收站' : item.enabled ? '已启用' : '已停用' }}</span>
+            <div v-if="report.apply_enabled" class="proxy-row-actions"><button v-if="item.deleted_at" type="button" :disabled="locked" @click="manage(item, 'restore')">找回</button>
+              <template v-else><button type="button" :disabled="locked" @click="startEdit(item)">编辑</button><button type="button" :disabled="locked" @click="manage(item, item.enabled ? 'disable' : 'enable')">{{ item.enabled ? '停用' : '启用' }}</button>
+                <button type="button" class="danger" :disabled="locked" @click="remove([item.tag])">删除</button></template></div>
+          </li></ul>
+          <p v-if="filter === 'trash' && counts.trash" class="proxy-hint">找回的代理默认处于停用状态，可在列表中重新启用。</p>
+        </div>
+        <aside v-if="panel" ref="panelElement" class="proxy-editor-pane" aria-label="代理操作">
+          <template v-if="panel === 'import'"><div class="proxy-editor-heading"><div><h3>导入代理</h3><p>填写信息 → 检测 → 确认导入</p></div><button type="button" :disabled="blocked" @click="closePanel">关闭</button></div>
+            <form class="import-form" @submit.prevent="submit"><label>协议<select v-model="form.protocol"><option value="socks">SOCKS5</option><option value="http">HTTP</option><option value="vmess">VMess</option></select></label>
+              <label>名称前缀<input v-model="form.label" maxlength="30" placeholder="例如：住宅代理" required></label>
+              <label>{{ form.protocol === 'vmess' ? 'VMess 分享链接（每行一个）' : '代理列表（每行：IP:端口:账号:密码）' }}
+                <textarea v-model="form.text" rows="6" maxlength="12000" autocomplete="off" spellcheck="false" required></textarea></label>
+              <p class="proxy-hint">检测通过后还需确认导入；导入成功后可在代理列表查看。</p><button class="primary" type="submit" :disabled="locked || !form.label.trim() || !form.text.trim()">检测代理</button></form></template>
+          <template v-else-if="editing"><div class="proxy-editor-heading"><div><h3>编辑代理</h3><p>{{ editing.label }}</p></div><button type="button" :disabled="blocked" @click="closePanel">关闭</button></div>
+            <form class="import-form" @submit.prevent="manage(editing, 'edit')"><div class="proxy-form-grid"><label>名称<input v-model="edit.label" maxlength="60" required></label>
+              <label>协议<select v-model="edit.protocol"><template v-if="editing.protocol === 'vmess'"><option value="vmess">VMess</option></template>
+                <template v-else><option value="socks">SOCKS5</option><option value="http">HTTP</option></template></select></label></div>
+              <div class="proxy-form-grid"><label>代理地址<input v-model="edit.address" maxlength="253" required></label><label>端口<input v-model.number="edit.port" type="number" min="1" max="65535" required></label></div>
+              <template v-if="edit.protocol === 'vmess'"><label>新 UUID<input v-model="edit.uuid" type="password" autocomplete="new-password" placeholder="留空保留原值"></label>
+                <div class="proxy-form-grid"><label>传输<select v-model="edit.network"><option value="tcp">TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option></select></label>
+                  <label>加密<select v-model="edit.security"><option>auto</option><option>aes-128-gcm</option><option>chacha20-poly1305</option><option>none</option><option>zero</option></select></label></div>
+                <label class="checkbox"><input v-model="edit.tls" type="checkbox">启用 TLS</label><div class="proxy-form-grid"><label>TLS 服务名<input v-model="edit.server_name" maxlength="253"></label><label>Host<input v-model="edit.host" maxlength="253"></label></div>
+                <label>路径或 gRPC 服务名<input v-model="edit.path" maxlength="1024"></label><div class="proxy-form-grid"><label>ALPN<input v-model="edit.alpn" maxlength="100"></label><label>TLS 指纹<input v-model="edit.fingerprint" maxlength="32"></label></div></template>
+              <div v-else class="proxy-form-grid"><label>新账号<input v-model="edit.username" autocomplete="off" placeholder="留空保留原值"></label><label>新密码<input v-model="edit.password" type="password" autocomplete="new-password" placeholder="留空保留原值"></label></div>
+              <p class="proxy-hint">修改需要先检测，通过后再确认保存。</p><button type="submit" class="primary" :disabled="locked || !report.apply_enabled">检测修改</button></form></template>
+        </aside>
+      </div>
     </template>
-    <p v-if="failure" class="message" role="alert">{{ failure }}</p><p v-if="notice" class="notice" aria-live="polite">{{ notice }}</p>
   </section>
 </template>

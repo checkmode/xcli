@@ -4,6 +4,7 @@
 use crate::vmess::{parse_links, SecretJson};
 use crate::{parse_fixed, ImportError};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use zeroize::Zeroizing;
 
 const CONTEXT: &[u8] = b"xcli:proxy-import:request:v1";
@@ -130,7 +131,10 @@ pub fn prepare(
             if !allowed.contains(&operation) {
                 return Err(invalid());
             }
-            let shape_ok = if operation == "edit" {
+            let bulk_delete = operation == "delete" && input.get("tags").is_some();
+            let shape_ok = if bulk_delete {
+                exact(input, &["action", "operation", "tags"])
+            } else if operation == "edit" {
                 exact(input, &["action", "operation", "tag", "changes"])
             } else {
                 exact(input, &["action", "operation", "tag"])
@@ -139,7 +143,26 @@ pub fn prepare(
                 return Err(invalid());
             }
             result.value_mut()["operation"] = json!(operation);
-            result.value_mut()["tag"] = json!(tag(&input["tag"])?);
+            if bulk_delete {
+                let tags = input["tags"]
+                    .as_array()
+                    .filter(|v| (1..=40).contains(&v.len()))
+                    .ok_or_else(invalid)?;
+                let mut seen = BTreeSet::new();
+                let tags = tags
+                    .iter()
+                    .map(|value| {
+                        let value = tag(value)?;
+                        if !seen.insert(value) {
+                            return Err(invalid());
+                        }
+                        Ok(value)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                result.value_mut()["tags"] = json!(tags);
+            } else {
+                result.value_mut()["tag"] = json!(tag(&input["tag"])?);
+            }
             if operation == "edit" {
                 let changes = input["changes"].as_object().ok_or_else(invalid)?;
                 let allowed = [
@@ -281,6 +304,26 @@ mod tests {
             "synthetic-user"
         );
         assert!(queue.claim(1000).unwrap().is_none());
+    }
+
+    #[test]
+    fn accepts_only_bounded_distinct_batch_delete_targets() {
+        let key = [7u8; 32];
+        let good = json!({"action":"manage","operation":"delete","tags":["residential-27","residential-28"]});
+        let prepared = prepare(&good, 100, &key, 0).unwrap();
+        let plain = open_xgb1(prepared.encrypted(), &key, CONTEXT).unwrap();
+        let payload: Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(payload["tags"], good["tags"]);
+        for bad in [
+            json!({"action":"manage","operation":"delete","tags":[]}),
+            json!({"action":"manage","operation":"delete","tags":["residential-27","residential-27"]}),
+            json!({"action":"manage","operation":"delete","tags":["residential-xx"]}),
+            json!({"action":"manage","operation":"delete","tags":["residential-27"],"tag":"residential-28"}),
+            json!({"action":"manage","operation":"disable","tags":["residential-27"]}),
+            json!({"action":"manage","operation":"delete","tags":(0..41).map(|n| format!("residential-{n:02}")).collect::<Vec<_>>() }),
+        ] {
+            assert!(prepare(&bad, 100, &key, 0).is_err());
+        }
     }
 
     #[test]

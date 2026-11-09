@@ -50,6 +50,14 @@ fn detail_allowed(detail: &str) -> bool {
     if ["请求检测固定代理", "确认应用代理变更"].contains(&detail) {
         return true;
     }
+    if let Some(count) = detail
+        .strip_prefix("请求批量删除固定代理 ")
+        .and_then(|v| v.strip_suffix(" 个"))
+    {
+        return count
+            .parse::<u8>()
+            .is_ok_and(|v| (1..=40).contains(&v) && v.to_string() == count);
+    }
     if let Some(rate) = detail
         .strip_prefix("请求调整 Brutal 速率至 ")
         .and_then(|v| v.strip_suffix(" Mbps"))
@@ -125,6 +133,48 @@ mod tests {
             Err(PublishError::Unavailable)
         }
     }
+    #[test]
+    fn batch_delete_is_audited_and_published_as_one_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = dir.path().join("inbox");
+        std::fs::create_dir(&inbox).unwrap();
+        std::fs::set_permissions(&inbox, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("gateway.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,ts INTEGER NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL);").unwrap();
+        let key = [42u8; 32];
+        let publisher = Publisher::open(&inbox, key).unwrap();
+        let mut audit = SqliteAuditor::open(&path).unwrap();
+        let prepared = crate::request::prepare(
+            &json!({"action":"manage","operation":"delete",
+            "tags":["residential-27","residential-28"]}),
+            1000,
+            &key,
+            0,
+        )
+        .unwrap();
+        publisher
+            .submit(
+                &prepared,
+                &json!({"status":"idle","updated":1000,"id":""}),
+                1000,
+                &mut audit,
+            )
+            .unwrap();
+        let detail: String = db
+            .query_row("SELECT detail FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(detail, "请求批量删除固定代理 2 个");
+        assert!(inbox.join("request.xgb").exists());
+        for detail in [
+            "请求批量删除固定代理 0 个",
+            "请求批量删除固定代理 41 个",
+            "请求批量删除固定代理 02 个",
+        ] {
+            assert!(!detail_allowed(detail));
+        }
+    }
+
     #[test]
     fn audit_failure_recovery_is_durable_and_idempotent() {
         let dir = tempfile::tempdir().unwrap();

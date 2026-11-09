@@ -156,6 +156,25 @@ impl Coordinator {
             Action::Manage => {
                 self.slot = None;
                 let operation = input["operation"].as_str().ok_or(PreviewError::Invalid)?;
+                if operation == "delete" && input.get("tags").is_some() {
+                    if !exact(
+                        input,
+                        &["id", "requested_at", "action", "operation", "tags"],
+                    ) || now <= 0
+                    {
+                        return Err(PreviewError::Invalid);
+                    }
+                    let tags = input["tags"]
+                        .as_array()
+                        .ok_or(PreviewError::Invalid)?
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_owned).ok_or(PreviewError::Invalid))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(self.remember(
+                        request.id(),
+                        preview::delete_many_cancellable(store, &tags, now as u64, stop)?,
+                    ));
+                }
                 let edit = operation == "edit";
                 let valid_shape = if edit {
                     exact(

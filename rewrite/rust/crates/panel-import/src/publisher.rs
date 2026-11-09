@@ -110,15 +110,37 @@ fn audit(value: &Value) -> Result<AuditRecord> {
                 .as_str()
                 .filter(|s| ["edit", "enable", "disable", "delete", "restore"].contains(s))
                 .ok_or(PublishError::Invalid)?;
-            let tag = value["tag"]
-                .as_str()
-                .filter(|s| {
-                    s.len() == 14
-                        && s.starts_with("residential-")
-                        && s[12..].bytes().all(|b| b.is_ascii_digit())
-                })
-                .ok_or(PublishError::Invalid)?;
-            format!("请求管理代理 {action} {tag}")
+            if action == "delete" && value.get("tags").is_some() {
+                let tags = value["tags"]
+                    .as_array()
+                    .filter(|v| (1..=40).contains(&v.len()))
+                    .ok_or(PublishError::Invalid)?;
+                let mut seen = std::collections::BTreeSet::new();
+                for tag in tags {
+                    let tag = tag
+                        .as_str()
+                        .filter(|s| {
+                            s.len() == 14
+                                && s.starts_with("residential-")
+                                && s[12..].bytes().all(|b| b.is_ascii_digit())
+                        })
+                        .ok_or(PublishError::Invalid)?;
+                    if !seen.insert(tag) {
+                        return Err(PublishError::Invalid);
+                    }
+                }
+                format!("请求批量删除固定代理 {} 个", tags.len())
+            } else {
+                let tag = value["tag"]
+                    .as_str()
+                    .filter(|s| {
+                        s.len() == 14
+                            && s.starts_with("residential-")
+                            && s[12..].bytes().all(|b| b.is_ascii_digit())
+                    })
+                    .ok_or(PublishError::Invalid)?;
+                format!("请求管理代理 {action} {tag}")
+            }
         }
         _ => return Err(PublishError::Invalid),
     };
