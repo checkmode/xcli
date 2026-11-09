@@ -32,6 +32,7 @@ fn quotes_names_and_preserves_generic_subscription_order() {
         .unwrap()
         .contains("#%E6%B5%8B%E8%AF%95%20/%20A%20%C2%B7%20REALITY"));
     assert!(links.get("websocket").unwrap().contains("@8.8.8.8:443?"));
+    assert!(links.get("residential-01-hy2").unwrap().ends_with("%E9%A6%99%E6%B8%AF%2001"));
     assert!(links.get("residential-02").is_none());
     let vmess = links
         .get("vmess")

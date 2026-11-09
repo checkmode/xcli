@@ -760,10 +760,16 @@ pub fn profile(
                 let old_label = format!("{} · {}", field(exit, "label")?, field(exit, "exit_ip")?);
                 let old_node = format!("{} · {old_label}", user.name);
                 legacy_names.insert(old_node.clone(), node.clone());
+                let (country, number) = label.rsplit_once(' ').ok_or_else(invalid)?;
+                let compact = format!("{country}{number}");
+                let compact_node = format!("{} · {compact}", user.name);
+                legacy_names.insert(compact_node.clone(), node.clone());
                 if flag(exit, "hysteria2", false)? {
                     legacy_names.insert(format!("{old_node} · HTTPS"), format!("{node} · HTTPS"));
                     legacy_names.insert(format!("XCLI-{old_label}"), format!("XCLI-{label}"));
                     legacy_names.insert(format!("XCLI-{old_label} · 自动"), format!("XCLI-{label}"));
+                    legacy_names.insert(format!("{compact_node} · HTTPS"), format!("{node} · HTTPS"));
+                    legacy_names.insert(format!("XCLI-{compact}"), format!("XCLI-{label}"));
                 }
             }
             if flag(exit, "hysteria2", false)? {

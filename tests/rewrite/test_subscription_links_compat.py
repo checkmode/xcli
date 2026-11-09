@@ -25,8 +25,8 @@ RUST_PANEL=os.environ.get('XCLI_PANEL_SERVICE','')
 class SubscriptionLinksCompatibility(unittest.TestCase):
     def compare_links(self, old, new):
         self.assertEqual(old.keys(),new.keys())
-        renamed={'residential-01':'香港01 · HTTPS','residential-01-hy2':'香港01',
-                 'residential-02':'美国01'}
+        renamed={'residential-01':'香港 01 · HTTPS','residential-01-hy2':'香港 01',
+                 'residential-02':'美国 01'}
         replacements={}
         for tag,original in old.items():
             if tag in renamed:

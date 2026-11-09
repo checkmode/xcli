@@ -111,7 +111,7 @@ pub fn names(settings: &Value) -> Result<BTreeMap<String, String>, ()> {
         let number = registry.get(country).and_then(|v| v.get(tag)).ok_or(())?;
         result.insert(
             tag.to_owned(),
-            format!("{}{:02}", country_label(country), number),
+            format!("{} {:02}", country_label(country), number),
         );
     }
     Ok(result)
@@ -183,5 +183,5 @@ pub fn reserved_name(settings: &Value, tag: &str, country: &str) -> Option<Strin
         .get(country)?
         .get(tag)?
         .as_u64()?;
-    Some(format!("{}{:02}", country_label(country), number))
+    Some(format!("{} {:02}", country_label(country), number))
 }

@@ -111,7 +111,7 @@ class ClashCompatibility(unittest.TestCase):
                     expected=yaml.safe_load(body);result=rust(payload);self.assertTrue(result['ok'])
                     actual=result['value']
                     self.assertEqual(actual.keys(),expected.keys())
-                    aliases={'住宅 HK · 8.8.8.8':'香港01','住宅 US · 1.1.1.1':'美国01'}
+                    aliases={'住宅 HK · 8.8.8.8':'香港 01','住宅 US · 1.1.1.1':'美国 01'}
                     def normalized_proxy(item):
                         item=dict(item)
                         for old_name,new_name in aliases.items():
@@ -126,13 +126,13 @@ class ClashCompatibility(unittest.TestCase):
                     old_groups={item['name']:item for item in expected['proxy-groups']}
                     for name in ('STUN','独立 · STUN','直连','故障转移','自动选择','GITHUB','MISSING'):
                         if name in old_groups:self.assertEqual(groups[name],old_groups[name],name)
-                    self.assertEqual(groups['香港01']['type'],'fallback')
-                    self.assertEqual(groups['香港01']['proxies'],['香港01 · Hysteria2','香港01 · HTTPS'])
-                    self.assertTrue(groups['香港01']['hidden'])
-                    self.assertTrue({'香港01','美国01'}.issubset(groups['PROXY']['proxies']))
+                    self.assertEqual(groups['香港 01']['type'],'fallback')
+                    self.assertEqual(groups['香港 01']['proxies'],['香港 01 · Hysteria2','香港 01 · HTTPS'])
+                    self.assertTrue(groups['香港 01']['hidden'])
+                    self.assertTrue({'香港 01','美国 01'}.issubset(groups['PROXY']['proxies']))
                     if '独立 · AI' in groups:
                         for name in ('独立 · AI','独立 · Google'):
-                            self.assertTrue({'香港01','美国01','DIRECT'}.issubset(groups[name]['proxies']))
+                            self.assertTrue({'香港 01','美国 01','DIRECT'}.issubset(groups[name]['proxies']))
                             self.assertFalse(any(node.startswith('住宅分组 · ') for node in groups[name]['proxies']))
                     self.assertEqual(yaml.safe_load(result['yaml']),actual)
                     setup_status,setup_body=request('/s/'+token+'/shadowrocket.json')
@@ -151,7 +151,7 @@ class ClashCompatibility(unittest.TestCase):
                         if old_setup['service_routing']:self.assertEqual(shadow['status'],profile_status)
                         self.assertEqual(shadow['status'],200)
                         if shadow['status']==200:
-                            self.assertIn('XCLI-香港01 = fallback,测试 / A · 香港01,测试 / A · 香港01 · HTTPS,',shadow['profile'])
+                            self.assertIn('XCLI-香港 01 = fallback,测试 / A · 香港 01,测试 / A · 香港 01 · HTTPS,',shadow['profile'])
                     if RUST_PANEL:
                         self.assertTrue(Path(RUST_PANEL).is_file())
                         with tempfile.TemporaryDirectory(dir=root,prefix='rust-state-') as folder:

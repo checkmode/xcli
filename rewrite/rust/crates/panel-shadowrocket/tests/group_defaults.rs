@@ -38,9 +38,9 @@ fn independent_group_defaults_are_reflected_in_shadowrocket_groups() {
     let policy = json!({"base":"independent","ai_outbound":"proxy","rules":factory_independent_rules(),"managed":true,
         "group_defaults":{"独立 · AI":"node:residential-41","独立 · Google":"node:reality"}});
     let config = profile(&settings(), &user(), &[], false, &policy).unwrap();
-    assert!(config.contains("XCLI-独立 · AI = select,XCLI-美国01,"));
+    assert!(config.contains("XCLI-独立 · AI = select,XCLI-美国 01,"));
     assert!(config.contains("XCLI-独立 · Google = select,test · REALITY,"));
-    assert!(config.contains("XCLI-美国01 = fallback,test · 美国01,test · 美国01 · HTTPS,interval=120,timeout=5,url=https://www.gstatic.com/generate_204,hidden=1"));
+    assert!(config.contains("XCLI-美国 01 = fallback,test · 美国 01,test · 美国 01 · HTTPS,interval=120,timeout=5,url=https://www.gstatic.com/generate_204,hidden=1"));
 }
 
 #[test]
@@ -62,14 +62,14 @@ fn each_independent_group_lists_the_same_country_exits_separately() {
     let config = profile(&settings, &user(), &[], false, &policy).unwrap();
     for name in ["XCLI-独立 · AI", "XCLI-独立 · Google", "XCLI-工作"] {
         let line = config.lines().find(|line| line.starts_with(&format!("{name} = select,"))).unwrap();
-        for node in ["XCLI-新加坡01", "XCLI-新加坡02", "test · 新加坡03"] {
+        for node in ["XCLI-新加坡 01", "XCLI-新加坡 02", "test · 新加坡 03"] {
             assert_eq!(line.split(',').filter(|part| *part == node).count(), 1, "{name}");
         }
     }
-    assert!(config.contains("XCLI-独立 · AI = select,XCLI-新加坡01,"));
-    assert!(config.contains("XCLI-独立 · Google = select,XCLI-新加坡02,"));
-    assert!(config.contains("XCLI-住宅分组 · 新加坡 = select,XCLI-新加坡01,XCLI-新加坡02,test · 新加坡03,hidden=1"));
-    for node in ["新加坡01", "新加坡02"] {
+    assert!(config.contains("XCLI-独立 · AI = select,XCLI-新加坡 01,"));
+    assert!(config.contains("XCLI-独立 · Google = select,XCLI-新加坡 02,"));
+    assert!(config.contains("XCLI-住宅分组 · 新加坡 = select,XCLI-新加坡 01,XCLI-新加坡 02,test · 新加坡 03,hidden=1"));
+    for node in ["新加坡 01", "新加坡 02"] {
         assert!(config.contains(&format!("XCLI-{node} = fallback,test · {node},test · {node} · HTTPS,")));
     }
     let subscription_user = xcli_panel_subscription::User {
@@ -89,14 +89,14 @@ fn each_independent_group_lists_the_same_country_exits_separately() {
         }
         String::from_utf8(output).unwrap()
     }
-    for (tag, label) in [("residential-41", "新加坡01"), ("residential-42", "新加坡02")] {
+    for (tag, label) in [("residential-41", "新加坡 01"), ("residential-42", "新加坡 02")] {
         assert_eq!(fragment(links.get(&format!("{tag}-hy2")).unwrap()), format!("test · {label}"));
         assert_eq!(fragment(links.get(tag).unwrap()), format!("test · {label} · HTTPS"));
     }
-    assert_eq!(fragment(links.get("residential-43").unwrap()), "test · 新加坡03");
+    assert_eq!(fragment(links.get("residential-43").unwrap()), "test · 新加坡 03");
     let stun = config.lines().find(|line| line.starts_with("XCLI-独立 · STUN = select,")).unwrap();
-    assert!(!stun.contains("新加坡01"));
-    assert!(!stun.contains("新加坡02"));
+    assert!(!stun.contains("新加坡 01"));
+    assert!(!stun.contains("新加坡 02"));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn legacy_standard_users_get_a_profile_when_fixed_failover_exists() {
     assert_eq!(setup(&values, &user(), &policy).unwrap()["service_routing"], true);
     let config = profile(&values, &user(), &[], false, &policy).unwrap();
     assert!(config.contains("DOMAIN,custom.example,DIRECT"));
-    assert!(config.contains("XCLI-美国01 = fallback,"));
+    assert!(config.contains("XCLI-美国 01 = fallback,"));
     values["residential_exits"][0]["hysteria2"] = json!(false);
     assert_eq!(setup(&values, &user(), &policy).unwrap()["service_routing"], false);
 }
@@ -119,16 +119,36 @@ fn existing_custom_base_references_follow_the_renamed_fixed_exit() {
         "[General]\ninclude = default.conf\n[Proxy Group]\n工作 = select,test · 住宅 US · 8.8.4.4,test · 住宅 US · 8.8.4.4 · HTTPS\n[Rule]\nDOMAIN,one.example,test · 住宅 US · 8.8.4.4 # keep\nDOMAIN,two.example,XCLI-住宅 US · 8.8.4.4\nFINAL,PROXY\n"});
     let policy = json!({"base":"standard","ai_outbound":"proxy","rules":"","managed":false});
     let config = profile(&values, &user(), &[], false, &policy).unwrap();
-    assert!(config.contains("工作 = select,test · 美国01,test · 美国01 · HTTPS\n"));
-    assert!(config.contains("DOMAIN,one.example,test · 美国01 # keep\n"));
-    assert!(config.contains("DOMAIN,two.example,XCLI-美国01\n"));
+    assert!(config.contains("工作 = select,test · 美国 01,test · 美国 01 · HTTPS\n"));
+    assert!(config.contains("DOMAIN,one.example,test · 美国 01 # keep\n"));
+    assert!(config.contains("DOMAIN,two.example,XCLI-美国 01\n"));
     assert!(!config.contains("test · 住宅 US · 8.8.4.4"));
 
     values["residential_exits"][0]["label"] = json!("住宅 #1");
     values["shadowrocket_base_profiles"] = json!({(user().id):
         "[General]\ninclude = default.conf\n[Rule]\nDOMAIN,one.example,test · 住宅 #1 · 8.8.4.4 # keep\nFINAL,PROXY\n"});
     let config = profile(&values, &user(), &[], false, &policy).unwrap();
-    assert!(config.contains("DOMAIN,one.example,test · 美国01 # keep\n"));
+    assert!(config.contains("DOMAIN,one.example,test · 美国 01 # keep\n"));
+}
+
+#[test]
+fn compact_fixed_exit_references_follow_the_spaced_name() {
+    let mut values = settings();
+    values["shadowrocket_base_profiles"] = json!({(user().id):
+        "[General]\ninclude = default.conf\n[Proxy Group]\n工作 = select,test · 美国01,test · 美国01 · HTTPS,XCLI-美国01\n[Rule]\nDOMAIN,one.example,test · 美国01 # keep\nDOMAIN,two.example,XCLI-美国01\nDOMAIN,three.example,test · 美国01 · HTTPS\nFINAL,PROXY\n"});
+    let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true});
+    let config = profile(&values, &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("工作 = select,test · 美国 01,test · 美国 01 · HTTPS,XCLI-美国 01\n"));
+    assert!(config.contains("DOMAIN,one.example,test · 美国 01 # keep\n"));
+    assert!(config.contains("DOMAIN,two.example,XCLI-美国 01\n"));
+    assert!(config.contains("DOMAIN,three.example,test · 美国 01 · HTTPS\n"));
+    assert!(!config.contains("美国01"));
+
+    values["residential_exits"][0]["hysteria2"] = json!(false);
+    values["shadowrocket_base_profiles"] = json!({(user().id):
+        "[General]\ninclude = default.conf\n[Rule]\nDOMAIN,one.example,test · 美国01\nFINAL,PROXY\n"});
+    let config = profile(&values, &user(), &[], false, &policy).unwrap();
+    assert!(config.contains("DOMAIN,one.example,test · 美国 01\n"));
 }
 
 #[test]

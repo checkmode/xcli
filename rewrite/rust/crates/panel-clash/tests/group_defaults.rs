@@ -43,7 +43,7 @@ fn published_factory_rules_and_custom_group_are_rendered_for_clash() {
     let mut policy = factory_spec("independent").unwrap();
     policy["managed"] = json!(true);
     let config = build(&settings(), &user(), &[], false, &policy).unwrap();
-    assert!(members(&config, "独立 · Stripe").contains(&json!("美国01")));
+    assert!(members(&config, "独立 · Stripe").contains(&json!("美国 01")));
     let rules = config["rules"].as_array().unwrap();
     assert!(rules.contains(&json!("DOMAIN-SUFFIX,stripe.com,独立 · Stripe")));
     assert!(rules.contains(&json!("DOMAIN-SUFFIX,aliyun.com,DIRECT")));
@@ -65,8 +65,8 @@ fn independent_and_custom_groups_can_select_distinct_exits_in_the_same_country()
         {"tag":"residential-43","label":"新加坡动态","exit_ip":"","country":"SG",
          "ws_path":"/connect/test/residential-43","dynamic":true}
     ]);
-    let a = "新加坡01";
-    let b = "新加坡02";
+    let a = "新加坡 01";
+    let b = "新加坡 02";
     let mut policy = json!({"base":"independent","ai_outbound":"proxy",
         "rules":factory_independent_rules(),"managed":true,
         "groups":[{"name":"工作","default":"PROXY"}]});
@@ -141,7 +141,7 @@ fn legacy_ai_is_preserved_and_per_group_defaults_only_reorder_requested_groups()
     let base = json!({"base":"independent","ai_outbound":"residential-41","rules":factory_independent_rules(),"managed":true,
         "groups":[{"name":"工作","default":"PROXY"}]});
     let old = build(&settings(), &user(), &[], false, &base).unwrap();
-    assert_eq!(first(&old, "独立 · AI"), "美国01");
+    assert_eq!(first(&old, "独立 · AI"), "美国 01");
     assert_eq!(first(&old, "独立 · Google"), "故障转移");
     let mut policy = base.clone();
     policy["group_defaults"] = json!({"独立 · AI":"node:reality","独立 · Google":"selector:自动选择",
@@ -150,7 +150,7 @@ fn legacy_ai_is_preserved_and_per_group_defaults_only_reorder_requested_groups()
     assert_eq!(first(&updated, "独立 · AI"), "REALITY");
     assert_eq!(first(&updated, "独立 · Google"), "自动选择");
     assert_eq!(first(&updated, "独立 · STUN"), "Hysteria 2");
-    assert_eq!(first(&updated, "工作"), "美国01");
+    assert_eq!(first(&updated, "工作"), "美国 01");
     assert_eq!(
         first(&updated, "独立 · Telegram"),
         first(&old, "独立 · Telegram")
@@ -167,9 +167,9 @@ fn fixed_exit_defaults_to_automatic_fallback_for_both_base_templates() {
         let policy = json!({"base":base,"ai_outbound":"proxy","rules":"","managed":true});
         let config = build(&settings(), &user(), &[], false, &policy).unwrap();
         let groups = config["proxy-groups"].as_array().unwrap();
-        let fallback = groups.iter().find(|g| g["name"] == "美国01").unwrap();
+        let fallback = groups.iter().find(|g| g["name"] == "美国 01").unwrap();
         assert_eq!(fallback["type"], "fallback");
-        assert_eq!(fallback["proxies"], json!(["美国01 · Hysteria2","美国01 · HTTPS"]));
+        assert_eq!(fallback["proxies"], json!(["美国 01 · Hysteria2","美国 01 · HTTPS"]));
         assert_eq!(fallback["hidden"], true);
         assert_eq!(fallback["lazy"], false);
         assert_eq!(fallback["expected-status"], "204");
@@ -182,12 +182,12 @@ fn compact_fallback_does_not_create_an_extra_group_and_preserves_dynamic_groups(
     let mut values = settings();
     values["residential_exits"][1]["hysteria2"] = json!(true);
     let policy = json!({"base":"independent","ai_outbound":"proxy","rules":"","managed":true,
-        "groups":[{"name":"美国01 · 自动","default":"PROXY"}]});
+        "groups":[{"name":"美国 01 · 自动","default":"PROXY"}]});
     let config = build(&values, &user(), &[], true, &policy).unwrap();
     let groups = config["proxy-groups"].as_array().unwrap();
-    let fixed = groups.iter().find(|g| g["name"] == "美国01").unwrap();
+    let fixed = groups.iter().find(|g| g["name"] == "美国 01").unwrap();
     assert_eq!(fixed["type"], "fallback");
-    assert!(groups.iter().any(|g| g["name"] == "美国01 · 自动" && g["type"] == "select"));
+    assert!(groups.iter().any(|g| g["name"] == "美国 01 · 自动" && g["type"] == "select"));
     let dynamic = groups.iter().find(|g| g["name"] == "动态 US").unwrap();
     assert_eq!(dynamic["type"], "select");
     assert_eq!(dynamic["proxies"], json!(["动态 US · HTTPS", "动态 US · Hysteria2"]));
