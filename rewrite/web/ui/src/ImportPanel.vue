@@ -5,18 +5,21 @@ type Row = { tag?: string; label?: string; exit_ip?: string; country?: string; p
 type ProxyItem = { tag: string; protocol: string; address: string; port: number; label: string; country: string; exit_ip: string; enabled: boolean; deleted_at: number;
   network?: string; security?: string; server_name?: string; host?: string; path?: string; alpn?: string; fingerprint?: string; tls?: boolean };
 type Report = { status: string; id?: string; updated?: number; expires?: number; rows?: Row[]; reason?: string; apply_enabled?: boolean; items?: ProxyItem[] | null };
-type Operation = 'import' | 'edit' | 'delete' | 'enable' | 'disable' | 'restore';
-type Current = { kind: Operation; name: string; tags: string[]; phase: 'preview' | 'apply' };
+type Operation = 'import' | 'edit' | 'delete' | 'enable' | 'disable' | 'restore' | 'other';
+type Current = { kind: Operation; name: string; tags: string[]; phase: 'preview' | 'apply' | 'done' };
 const props = defineProps<{ csrf: string }>();
 const emit = defineEmits<{ expired: [] }>();
 const report = ref<Report | null>(null); const loading = ref(true); const busy = ref(false);
 const failure = ref(''); const fetchFailure = ref(''); const pendingId = ref(''); const notice = ref('');
 const current = ref<Current | null>(null); const dismissedId = ref('');
+const previewRows = ref<Row[]>([]); const applyingRequest = ref(false); const applyUncertain = ref(false);
+const previewId = ref('');
 const panel = ref<'import' | 'edit' | null>(null); const panelElement = ref<HTMLElement | null>(null);
 const confirmationElement = ref<HTMLElement | null>(null);
 const listElement = ref<HTMLElement | null>(null);
 const query = ref(''); const filter = ref<'all' | 'enabled' | 'disabled' | 'trash'>('all');
 const selected = ref<string[]>([]); const recent = ref<string[]>([]);
+const inputCount = ref(0);
 const form = reactive({ protocol: 'socks', label: '', text: '' });
 const editing = ref<ProxyItem | null>(null);
 const edit = reactive({ label:'', address:'', port:0, protocol:'socks', username:'', password:'', uuid:'', network:'tcp',
@@ -41,9 +44,20 @@ const confirming = computed(() => report.value?.status === 'ready' && !waiting.v
 const blocked = computed(() => busy.value || waiting.value || !report.value ||
   ['unavailable', 'verifying', 'applying'].includes(report.value.status));
 const locked = computed(() => blocked.value || confirming.value);
-const actionName: Record<Operation, string> = { import:'导入', edit:'保存修改', delete:'删除', enable:'启用', disable:'停用', restore:'找回' };
+const actionName: Record<Operation, string> = { import:'导入', edit:'保存修改', delete:'删除', enable:'启用', disable:'停用', restore:'找回', other:'应用' };
+const applying = computed(() => applyingRequest.value || current.value?.phase === 'apply');
+const importStage = computed<'input' | 'detecting' | 'ready' | 'applying' | 'done'>(() => {
+  if (panel.value !== 'import' || current.value?.kind !== 'import') return 'input';
+  if (current.value.phase === 'done') return 'done';
+  if (applying.value) return 'applying';
+  return confirming.value ? 'ready' : 'detecting';
+});
+const showConfirmation = computed(() => (confirming.value || applying.value) && !(panel.value === 'import' && current.value?.kind === 'import'));
+const shownRows = computed(() => previewRows.value.length ? previewRows.value : report.value?.rows ?? []);
+const importListed = computed(() => !!current.value?.tags.length && current.value.tags.every(tag =>
+  report.value?.items?.some(item => item.tag === tag && !item.deleted_at)));
 const previewTitle = computed(() => {
-  if (!current.value) return '待确认的代理变更';
+  if (!current.value || current.value.kind === 'other') return '待确认的代理变更';
   if (current.value.kind === 'delete') return `确认删除 ${current.value.tags.length} 个代理？`;
   if (current.value.kind === 'import') return `检测完成，可以导入 ${report.value?.rows?.length ?? 0} 个代理`;
   return `确认${actionName[current.value.kind]}「${current.value.name}」？`;
@@ -71,23 +85,22 @@ function parse(value: unknown): Report {
 }
 function closePanel() { panel.value = null; editing.value = null; form.text = ''; edit.username = ''; edit.password = ''; edit.uuid = ''; }
 function scrollPanel() { void nextTick(() => { if (window.matchMedia('(max-width: 800px)').matches) panelElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }); }); }
-function finish(value: Report) {
+function finish() {
   const op = current.value;
-  if (!op) { notice.value = '代理变更已应用。'; return; }
+  applyUncertain.value = false; failure.value = '';
+  if (!op || op.kind === 'other') { notice.value = '代理变更已应用。'; current.value = null; previewRows.value = []; closePanel(); return; }
   if (op.kind === 'import') {
     recent.value = op.tags;
     filter.value = 'all'; query.value = '';
-    const shown = op.tags.filter(tag => value.items?.some(item => item.tag === tag && !item.deleted_at)).length;
-    notice.value = shown === op.tags.length && shown > 0 ? `已导入 ${shown} 个代理，已在列表顶部标出。` : '导入已完成，正在同步列表，请刷新查看。';
-    form.label = '';
-    void nextTick(() => listElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
+    form.text = ''; current.value = { ...op, phase:'done' }; notice.value = '';
+    return;
   } else if (op.kind === 'delete') {
     notice.value = `已将 ${op.tags.length} 个代理移入回收站，可在“回收站”中找回。`;
     selected.value = [];
   } else {
     notice.value = op.kind === 'restore' ? `已找回「${op.name}」，当前为停用状态，可在列表中启用。` : `已${actionName[op.kind]}「${op.name}」。`;
   }
-  current.value = null; closePanel();
+  current.value = null; previewRows.value = []; closePanel();
 }
 async function refresh() {
   try {
@@ -99,40 +112,51 @@ async function refresh() {
     if (pendingId.value && value.id === pendingId.value && ['ready', 'complete', 'failed', 'expired'].includes(value.status)) {
       pendingId.value = '';
       if (value.status === 'ready') {
-        if (current.value?.kind === 'import') current.value.tags = (value.rows ?? []).flatMap(row => row.tag ? [row.tag] : []);
-        notice.value = ''; void nextTick(() => confirmationElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
-      } else if (value.status === 'complete') finish(value);
-      else { notice.value = ''; current.value = null; }
+        previewRows.value = value.rows ?? [];
+        previewId.value = value.id ?? '';
+        if (current.value?.kind === 'import') current.value.tags = previewRows.value.flatMap(row => row.tag ? [row.tag] : []);
+        notice.value = '';
+        if (current.value?.kind !== 'import') void nextTick(() => confirmationElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
+      } else if (value.status === 'complete') finish();
+      else { notice.value = ''; failure.value = value.status === 'expired' ? '检测结果已过期，请重新操作。' : reason(value.reason); current.value = null; }
     }
+    if (!applyingRequest.value && current.value?.phase === 'preview' && previewId.value && value.id === previewId.value && ['failed', 'expired'].includes(value.status)) {
+      failure.value = value.status === 'expired' ? '检测结果已过期，请重新操作。' : reason(value.reason);
+      current.value = null; previewId.value = ''; previewRows.value = [];
+    }
+    if (applyUncertain.value && current.value?.kind === 'import' && current.value.tags.length &&
+        value.status === 'complete' && value.id !== previewId.value &&
+        current.value.tags.every(tag => value.items?.some(item => item.tag === tag && !item.deleted_at))) finish();
   } catch { fetchFailure.value = '暂时无法读取代理列表或处理状态，请刷新重试。'; }
   finally { loading.value = false; }
 }
 async function send(payload: object, op: Current) {
   if (locked.value) return;
-  busy.value = true; failure.value = ''; notice.value = '';
+  busy.value = true; failure.value = ''; notice.value = ''; current.value = op; applyUncertain.value = false; previewId.value = ''; previewRows.value = [];
   try {
     const response = await fetch('/api/proxy-import', { method:'POST', credentials:'same-origin', cache:'no-store',
       headers: { 'Content-Type':'application/json', 'X-CSRF-Token':props.csrf }, body:JSON.stringify(payload), signal:AbortSignal.timeout(15000) });
     if (response.status === 401) { emit('expired'); return; }
     if (!response.ok) {
       const body: unknown = await response.json().catch(() => null);
-      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '请求未完成。'; return;
+      failure.value = body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string' ? body.detail : '请求未完成。'; current.value = null; return;
     }
     const body: unknown = await response.json();
     if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string' || !/^[0-9a-f]{32}$/.test(body.id)) throw new Error('invalid response');
-    current.value = op; pendingId.value = body.id; dismissedId.value = ''; form.text = ''; edit.username = ''; edit.password = ''; edit.uuid = '';
-    notice.value = op.kind === 'import' || op.kind === 'edit' || op.kind === 'enable' ? '正在检测，请稍候。' : '正在准备变更，请稍候。';
+    pendingId.value = body.id; dismissedId.value = '';
+    notice.value = op.kind === 'import' ? '' : op.kind === 'edit' || op.kind === 'enable' ? '正在检测，请稍候。' : '正在准备变更，请稍候。';
     await refresh();
-  } catch { failure.value = '提交结果暂时未知，请刷新状态后重试。'; }
+  } catch { failure.value = '提交结果暂时未知，请刷新状态后重试。'; current.value = null; }
   finally { busy.value = false; }
 }
-function startImport() { closePanel(); panel.value = 'import'; notice.value = ''; scrollPanel(); }
+function startImport() { closePanel(); current.value = null; previewRows.value = []; panel.value = 'import'; notice.value = ''; failure.value = ''; scrollPanel(); }
 function submit() {
   if (!form.label.trim() || !form.text.trim()) return;
+  inputCount.value = form.text.split(/\r?\n/).filter(line => line.trim()).length;
   void send({ action:'preview', ...form }, { kind:'import', name:'', tags:[], phase:'preview' });
 }
 function startEdit(item: ProxyItem) {
-  closePanel(); panel.value = 'edit'; editing.value = item; notice.value = '';
+  closePanel(); current.value = null; previewRows.value = []; panel.value = 'edit'; editing.value = item; notice.value = '';
   Object.assign(edit, { label:item.label, address:item.address, port:item.port, protocol:item.protocol, username:'', password:'', uuid:'',
     network:item.network || 'tcp', security:item.security || 'auto', tls:item.tls || false, server_name:item.server_name || '',
     host:item.host || '', path:item.path || '', alpn:item.alpn || '', fingerprint:item.fingerprint || '' });
@@ -151,17 +175,38 @@ function manage(item: ProxyItem, operation: 'enable' | 'disable' | 'restore' | '
 }
 function remove(tags: string[]) {
   if (!report.value?.apply_enabled || !tags.length) return;
-  closePanel();
+  closePanel(); current.value = null; previewRows.value = [];
   void send({ action:'manage', operation:'delete', tags }, { kind:'delete', name:'', tags:[...tags], phase:'preview' });
 }
 function toggleAll() {
   const visible = visibleItems.value.map(i => i.tag);
   selected.value = visibleSelected.value === visible.length ? selected.value.filter(tag => !visible.includes(tag)) : [...new Set([...selected.value, ...visible])];
 }
-function cancelPreview() { dismissedId.value = report.value?.id ?? ''; current.value = null; notice.value = '已取消预览，变更未应用。'; }
+function cancelPreview() {
+  const wasImport = current.value?.kind === 'import';
+  dismissedId.value = report.value?.id ?? ''; current.value = null; previewId.value = ''; previewRows.value = []; failure.value = '';
+  notice.value = wasImport ? '' : '已取消预览，变更未应用。';
+}
+function closeEditor() {
+  if (current.value?.kind === 'import') {
+    if (confirming.value) cancelPreview();
+    if (report.value?.status === 'ready') dismissedId.value = report.value.id ?? '';
+    current.value = null; applyUncertain.value = false; previewRows.value = [];
+  }
+  closePanel();
+}
+function viewImported() { closeEditor(); void nextTick(() => listElement.value?.scrollIntoView({ behavior:'smooth', block:'start' })); }
+function importMore() { current.value = null; previewRows.value = []; failure.value = ''; notice.value = ''; }
+function leaveUncertain() {
+  if (report.value?.status === 'ready') dismissedId.value = report.value.id ?? '';
+  current.value = null; applyUncertain.value = false; previewRows.value = []; failure.value = '';
+  closePanel(); void nextTick(() => listElement.value?.scrollIntoView({ behavior:'smooth', block:'start' }));
+}
 async function apply() {
   if (blocked.value || !report.value?.apply_enabled || !confirming.value || !report.value.id) return;
-  busy.value = true; failure.value = ''; notice.value = '';
+  if (!current.value) current.value = { kind:'other', name:'', tags:[], phase:'preview' };
+  if (!previewRows.value.length) previewRows.value = report.value.rows ?? [];
+  applyingRequest.value = true; applyUncertain.value = false; busy.value = true; failure.value = ''; notice.value = '';
   try {
     const response = await fetch('/api/proxy-import', { method:'POST', credentials:'same-origin', cache:'no-store',
       headers: { 'Content-Type':'application/json', 'X-CSRF-Token':props.csrf },
@@ -173,9 +218,13 @@ async function apply() {
     }
     const body: unknown = await response.json();
     if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string' || !/^[0-9a-f]{32}$/.test(body.id)) throw new Error('invalid response');
-    pendingId.value = body.id; if (current.value) current.value.phase = 'apply'; notice.value = '正在应用变更，请稍候。'; await refresh();
-  } catch { failure.value = '应用结果暂时未知，请刷新状态后重试。'; }
-  finally { busy.value = false; }
+    pendingId.value = body.id; if (current.value) current.value.phase = 'apply'; await refresh();
+  } catch {
+    if (current.value) current.value.phase = 'apply';
+    applyUncertain.value = true; failure.value = '暂时无法确认提交结果，请刷新状态或查看代理列表。';
+    await refresh();
+  }
+  finally { applyingRequest.value = false; busy.value = false; }
 }
 function reason(value?: string): string {
   return ({ invalid:'输入或现有配置不符合要求。', probe:'代理连接或出口检测未通过。', conflict:'配置在检测期间发生变化，请重新操作。',
@@ -194,19 +243,23 @@ onUnmounted(() => { if (timer) clearInterval(timer); closePanel(); });
       <div class="heading-actions"><button type="button" @click="refresh">刷新</button><button type="button" class="primary" :disabled="locked" @click="startImport">导入代理</button></div></div>
     <p v-if="report && !report.apply_enabled" class="preview-note">当前服务只能检测，无法应用变更。</p>
     <p v-if="loading" class="table-message">正在读取代理列表…</p>
-    <p v-if="fetchFailure" class="message" role="alert">{{ fetchFailure }}</p><p v-if="failure" class="message" role="alert">{{ failure }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
+    <p v-if="fetchFailure" class="message" role="alert">{{ fetchFailure }}</p><p v-if="failure && panel !== 'import'" class="message" role="alert">{{ failure }}</p><p v-if="notice" class="notice" role="status">{{ notice }}</p>
     <p v-if="report?.status === 'unavailable'" class="message" role="alert">代理检测服务暂时不可用，请稍后刷新重试。</p>
-    <p v-if="report?.status === 'failed' && !waiting" class="message" role="alert">{{ reason(report.reason) }}</p>
-    <p v-if="report?.status === 'expired' && !waiting" class="message" role="alert">检测结果已过期，请重新操作。</p>
+    <p v-if="!current && report && ['verifying', 'applying'].includes(report.status)" class="notice" role="status">{{ report.status === 'verifying' ? '服务器正在检测代理。' : '服务器正在应用代理变更。' }}完成后会自动更新状态。</p>
+    <p v-if="report?.status === 'failed' && !waiting && !failure && panel !== 'import'" class="message" role="alert">{{ reason(report.reason) }}</p>
+    <p v-if="report?.status === 'expired' && !waiting && !failure && panel !== 'import'" class="message" role="alert">检测结果已过期，请重新操作。</p>
     <template v-if="!loading && report">
-      <div v-if="confirming" ref="confirmationElement" class="proxy-confirmation" role="region" aria-label="确认代理变更">
-        <div><h3>{{ previewTitle }}</h3><p v-if="current?.kind === 'delete'">删除后会移入回收站，可随时找回。应用时现有连接可能短暂中断。</p>
-          <p v-else-if="current?.kind === 'import'">请核对出口信息。确认导入后，代理会出现在下方列表中。</p>
+      <div v-if="showConfirmation" ref="confirmationElement" class="proxy-confirmation" role="region" aria-label="确认代理变更">
+        <div><h3>{{ applyUncertain ? '变更结果待确认' : applying ? '正在应用代理变更' : previewTitle }}</h3><p v-if="applying && !applyUncertain" role="status">正在应用，完成后会自动更新列表，请稍候。</p>
+          <p v-else-if="applyUncertain">请刷新状态，或返回列表查看当前结果。</p>
+          <p v-else-if="current?.kind === 'delete'">删除后会移入回收站，可随时找回。应用时现有连接可能短暂中断。</p>
           <p v-else>变更尚未应用。应用时现有连接可能短暂中断。</p></div>
-        <ul v-if="report.rows?.length" class="proxy-preview-list"><li v-for="(row, index) in report.rows" :key="row.tag || index">
+        <ul v-if="shownRows.length" class="proxy-preview-list"><li v-for="(row, index) in shownRows" :key="row.tag || index">
           <strong>{{ row.label || row.tag || '代理' }}</strong><span>{{ [row.exit_ip, row.country].filter(Boolean).join(' · ') }}</span></li></ul>
-        <div class="proxy-actions"><button v-if="report.apply_enabled" type="button" class="primary" :disabled="blocked" @click="apply">{{ current ? `确认${actionName[current.kind]}` : '确认应用' }}</button>
-          <button type="button" :disabled="blocked" @click="cancelPreview">取消</button></div>
+        <div class="proxy-actions"><template v-if="applyUncertain"><button type="button" @click="refresh">刷新状态</button><button type="button" @click="leaveUncertain">查看代理列表</button></template>
+          <button v-else-if="applying" type="button" class="primary" disabled>正在应用…</button>
+          <template v-else><button v-if="report.apply_enabled" type="button" class="primary" :disabled="blocked" @click="apply">{{ current ? `确认${actionName[current.kind]}` : '确认应用' }}</button>
+          <button type="button" :disabled="blocked" @click="cancelPreview">取消</button></template></div>
       </div>
       <div class="proxy-workspace" :class="{ 'with-editor': panel }">
         <div class="proxy-list-pane">
@@ -234,12 +287,32 @@ onUnmounted(() => { if (timer) clearInterval(timer); closePanel(); });
           <p v-if="filter === 'trash' && counts.trash" class="proxy-hint">找回的代理默认处于停用状态，可在列表中重新启用。</p>
         </div>
         <aside v-if="panel" ref="panelElement" class="proxy-editor-pane" aria-label="代理操作">
-          <template v-if="panel === 'import'"><div class="proxy-editor-heading"><div><h3>导入代理</h3><p>填写信息 → 检测 → 确认导入</p></div><button type="button" :disabled="blocked" @click="closePanel">关闭</button></div>
-            <form class="import-form" @submit.prevent="submit"><label>协议<select v-model="form.protocol"><option value="socks">SOCKS5</option><option value="http">HTTP</option><option value="vmess">VMess</option></select></label>
-              <label>名称前缀<input v-model="form.label" maxlength="30" placeholder="例如：住宅代理" required></label>
+          <template v-if="panel === 'import'"><div class="proxy-editor-heading"><div><h3>导入代理</h3><p>检测并确认后，代理将加入列表。</p></div><button type="button" :disabled="blocked" @click="closeEditor">关闭</button></div>
+            <ol class="proxy-steps" aria-label="导入步骤"><li :class="{ current: importStage === 'input', done: importStage !== 'input' }"><span>1</span>填写</li>
+              <li :class="{ current: importStage === 'detecting' || importStage === 'ready', done: importStage === 'applying' || importStage === 'done' }"><span>2</span>检测</li>
+              <li :class="{ current: importStage === 'applying', done: importStage === 'done' }"><span>3</span>导入</li></ol>
+            <p v-if="failure" class="message" role="alert">{{ failure }}</p>
+            <form v-if="importStage === 'input' || importStage === 'detecting'" class="import-form" :aria-busy="importStage === 'detecting'" @submit.prevent="submit">
+              <div v-if="importStage === 'detecting'" class="proxy-progress" role="status"><span class="proxy-spinner" aria-hidden="true"></span><div><strong>正在检测 {{ inputCount }} 条代理</strong><p>{{ form.text ? '输入已保留，检测完成后可在这里确认导入。' : '检测仍在继续，完成后可在这里确认导入。' }}</p></div></div>
+              <label>协议<select v-model="form.protocol" :disabled="importStage === 'detecting'"><option value="socks">SOCKS5</option><option value="http">HTTP</option><option value="vmess">VMess</option></select></label>
+              <label>名称前缀<input v-model="form.label" :readonly="importStage === 'detecting'" maxlength="30" placeholder="例如：住宅代理" required></label>
               <label>{{ form.protocol === 'vmess' ? 'VMess 分享链接（每行一个）' : '代理列表（每行：IP:端口:账号:密码）' }}
-                <textarea v-model="form.text" rows="6" maxlength="12000" autocomplete="off" spellcheck="false" required></textarea></label>
-              <p class="proxy-hint">检测通过后还需确认导入；导入成功后可在代理列表查看。</p><button class="primary" type="submit" :disabled="locked || !form.label.trim() || !form.text.trim()">检测代理</button></form></template>
+                <textarea v-model="form.text" :readonly="importStage === 'detecting'" rows="6" maxlength="12000" autocomplete="off" spellcheck="false" required></textarea></label>
+              <p v-if="importStage === 'input'" class="proxy-hint">检测通过后还需确认导入；导入成功后可在代理列表查看。</p>
+              <button class="primary" type="submit" :disabled="locked || !form.label.trim() || !form.text.trim()">{{ importStage === 'detecting' ? '正在检测…' : '检测代理' }}</button></form>
+            <div v-else class="proxy-import-result" :aria-busy="importStage === 'applying'">
+              <div v-if="importStage === 'applying'" class="proxy-progress" role="status"><span v-if="!applyUncertain" class="proxy-spinner" aria-hidden="true"></span><div><strong>{{ applyUncertain ? '导入结果待确认' : `正在导入 ${previewRows.length} 个代理` }}</strong><p>{{ applyUncertain ? '检测结果仍在这里，可以刷新状态或查看代理列表。' : '检测结果已保留，完成后会在这里显示。' }}</p></div></div>
+              <div v-else-if="importStage === 'done'" class="proxy-success" role="status"><strong>导入完成 · {{ previewRows.length }} 个代理</strong><p>{{ importListed ? '已加入代理列表，并在列表顶部标出。' : '导入已完成，代理列表正在同步。' }}</p></div>
+              <div v-else><h4>检测完成 · {{ previewRows.length }} 个代理</h4><p class="proxy-hint">核对出口信息后确认导入，应用时现有连接可能短暂中断。</p></div>
+              <ul v-if="previewRows.length" class="proxy-preview-list"><li v-for="(row, index) in previewRows" :key="row.tag || index">
+                <strong>{{ row.label || row.tag || '代理' }}</strong><span>{{ [row.exit_ip, row.country].filter(Boolean).join(' · ') }}</span></li></ul>
+              <details v-if="form.text && importStage !== 'done'" class="proxy-input-details"><summary>查看原始输入</summary><textarea :value="form.text" rows="4" readonly aria-label="原始代理输入" spellcheck="false"></textarea></details>
+              <div class="proxy-actions"><template v-if="importStage === 'ready'"><button v-if="report.apply_enabled" type="button" class="primary" :disabled="blocked" @click="apply">确认导入 {{ previewRows.length }} 个</button>
+                <button type="button" :disabled="blocked" @click="cancelPreview">修改输入</button></template>
+                <template v-else-if="importStage === 'applying'"><template v-if="applyUncertain"><button type="button" @click="refresh">刷新状态</button><button type="button" @click="leaveUncertain">查看代理列表</button></template>
+                  <button v-else type="button" class="primary" disabled>正在导入…</button></template>
+                <template v-else><button type="button" class="primary" @click="viewImported">查看代理列表</button><button type="button" @click="importMore">继续导入</button></template></div>
+            </div></template>
           <template v-else-if="editing"><div class="proxy-editor-heading"><div><h3>编辑代理</h3><p>{{ editing.label }}</p></div><button type="button" :disabled="blocked" @click="closePanel">关闭</button></div>
             <form class="import-form" @submit.prevent="manage(editing, 'edit')"><div class="proxy-form-grid"><label>名称<input v-model="edit.label" maxlength="60" required></label>
               <label>协议<select v-model="edit.protocol"><template v-if="editing.protocol === 'vmess'"><option value="vmess">VMess</option></template>
